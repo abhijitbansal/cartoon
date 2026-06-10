@@ -90,7 +90,8 @@ fn is_scalar(v: &Value) -> bool {
     !matches!(v, Value::Object(_) | Value::Array(_))
 }
 
-/// Same keys in same order, all values scalar → tabular form.
+/// All objects share the first object's key set and all values are scalar → tabular form.
+/// Rows render in first-object key order.
 fn tabular_fields(arr: &[Value]) -> Option<Vec<String>> {
     let first = arr.first()?.as_object()?;
     if first.is_empty() {
@@ -122,7 +123,7 @@ fn key_str(k: &str) -> String {
     }
 }
 
-pub(crate) fn scalar(v: &Value) -> String {
+fn scalar(v: &Value) -> String {
     match v {
         Value::Null => "null".into(),
         Value::Bool(b) => b.to_string(),
@@ -147,7 +148,7 @@ fn needs_quotes(s: &str) -> bool {
         || s.starts_with(['-', '[', ']', '{', '}', '#'])
 }
 
-pub(crate) fn quote(s: &str) -> String {
+fn quote(s: &str) -> String {
     let escaped = s
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
@@ -231,5 +232,17 @@ mod tests {
     fn root_array() {
         let v = json!([{"id": 1}, {"id": 2}]);
         assert_eq!(encode(&v), "[2]{id}:\n  1\n  2");
+    }
+
+    #[test]
+    fn tabular_header_quotes_field_names_when_needed() {
+        let v = json!({"rows": [{"first name": "Alice"}, {"first name": "Bob"}]});
+        assert_eq!(encode(&v), "rows[2]{\"first name\"}:\n  Alice\n  Bob");
+    }
+
+    #[test]
+    fn carriage_return_and_tab_escapes() {
+        assert_eq!(encode(&json!("a\rb")), "\"a\\rb\"");
+        assert_eq!(encode(&json!("a\tb")), "\"a\\tb\"");
     }
 }
