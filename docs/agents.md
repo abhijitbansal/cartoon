@@ -1,18 +1,12 @@
 # Using cartoon with coding agents
 
-cartoon's whole point is agents, so the skills that teach an agent to use
-it live in this repo under [`skills/`](../skills/) and install with one
+cartoon's whole point is agents, so the skill that teaches an agent to use
+it lives in this repo under [`skills/`](../skills/) and installs with one
 command into every major tool.
 
-Two skills ship today:
-
-| Skill | Saves | What it does |
-|---|---|---|
-| [`cartoon`](../skills/cartoon/SKILL.md) | input tokens | Teaches the agent to prefix `cartoon` onto test runs and JSON CLIs, and to install the binary if missing |
-| [`caveman`](../skills/caveman/SKILL.md) | output tokens | Terse-reply mode: answer first, no narration, no restated code. "caveman off" disables |
-
-They're complementary: cartoon compresses what the agent reads, caveman
-compresses what it writes.
+The [`cartoon` skill](../skills/cartoon/SKILL.md) teaches the agent to
+prefix `cartoon` onto test runs and JSON CLIs, to install the binary if
+missing, and when not to wrap.
 
 ## Claude Code (plugin — recommended)
 
@@ -23,12 +17,11 @@ This repo is a Claude Code plugin marketplace. Inside Claude Code:
 /plugin install cartoon@cartoon
 ```
 
-You get both skills, model-invoked (Claude wraps your test runs without
-being asked) and as slash commands:
+The skill is model-invoked (Claude wraps your test runs without being
+asked) and available as a slash command:
 
 ```
 /cartoon:cartoon    # load the usage/install guidance explicitly
-/cartoon:caveman    # terse output mode for the rest of the session
 ```
 
 Update later with `/plugin marketplace update cartoon`.
@@ -39,8 +32,8 @@ The [skills.sh](https://skills.sh) CLI installs skills from any GitHub
 repo into 40+ agents, auto-detecting which ones you have:
 
 ```bash
-npx skills add abhijitbansal/cartoon              # interactive: pick skills + agents
-npx skills add abhijitbansal/cartoon --all        # both skills, all detected agents
+npx skills add abhijitbansal/cartoon              # interactive: pick agents
+npx skills add abhijitbansal/cartoon --all        # all detected agents
 npx skills add abhijitbansal/cartoon --skill cartoon -a codex -a cursor
 npx skills list                                   # see what's installed where
 ```
@@ -71,10 +64,10 @@ Skills are just directories with a `SKILL.md`. Copy them straight in:
 
 ```bash
 # Claude Code (project-level)
-cp -r skills/cartoon skills/caveman .claude/skills/
+cp -r skills/cartoon .claude/skills/
 
 # Codex
-cp -r skills/cartoon skills/caveman ~/.codex/skills/
+cp -r skills/cartoon ~/.codex/skills/
 ```
 
 ## For maintainers: how the distribution works

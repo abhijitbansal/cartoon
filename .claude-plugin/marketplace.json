@@ -11,7 +11,7 @@
     {
       "name": "cartoon",
       "source": "./",
-      "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens, plus a caveman mode for terse, output-token-saving replies"
+      "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens"
     }
   ]
 }

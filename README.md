@@ -28,7 +28,7 @@ Teach your agent to use cartoon automatically — and to install it when
 missing — with the skills shipped in this repo:
 
 ```text
-# Claude Code (plugin: skills + /cartoon:caveman terse-output mode)
+# Claude Code (plugin)
 /plugin marketplace add abhijitbansal/cartoon
 /plugin install cartoon@cartoon
 ```
