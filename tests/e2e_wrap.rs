@@ -40,3 +40,17 @@ fn missing_command_exits_127() {
         .assert()
         .code(127);
 }
+
+#[test]
+fn heuristic_flag_compresses_repeats() {
+    cartoon()
+        .args([
+            "--heuristic",
+            "sh",
+            "-c",
+            "for i in 1 2 3 4 5; do echo tick; done",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("(x5)"));
+}
