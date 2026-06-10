@@ -139,10 +139,11 @@ mod tests {
 
     #[test]
     fn other_adapters_have_no_fast_args() {
-        for a in registry() {
-            if a.name() != "pytest" {
-                assert!(a.fast_args().is_empty(), "{} should be a no-op", a.name());
-            }
-        }
+        let fast: Vec<&str> = registry()
+            .iter()
+            .filter(|a| !a.fast_args().is_empty())
+            .map(|a| a.name())
+            .collect();
+        assert_eq!(fast, vec!["pytest"]);
     }
 }
