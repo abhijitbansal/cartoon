@@ -49,7 +49,7 @@ failures[2]{id,loc,msg}:
   "tests/test_auth.py::test_expiry","tests/test_auth.py:42",assert exp < now
   "tests/test_user.py::test_create","tests/test_user.py:88","KeyError: 'email'"
 traces:
-  "tests/test_auth.py::test_expiry"[2]: tests/test_auth.py:42 in test_expiry,assert token.exp < now()
+  "tests/test_auth.py::test_expiry"[2]: "tests/test_auth.py:42 in test_expiry",assert token.exp < now()
 ```
 
 ## Guarantees

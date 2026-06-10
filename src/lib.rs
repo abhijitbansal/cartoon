@@ -1,5 +1,3 @@
-// modules are added task by task
-
 pub mod adapters;
 pub mod app;
 pub mod cli;
