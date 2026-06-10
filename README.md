@@ -33,6 +33,9 @@ cartoon --heuristic make       # lossy compression for plain text (opt-in)
 cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon adapters               # list built-in adapters
+cartoon --tag api pytest       # tag the archived run
+cartoon logs                   # list archived raw logs
+cartoon logs --last --stdout   # full raw output of the newest run
 ```
 
 Failing test run, before (pytest, ~4800 tokens) vs after (~300 tokens):
@@ -60,6 +63,17 @@ traces:
   warning on stderr). Information is never silently lost.
 - Heuristic (lossy) mode is off unless you ask for it.
 
+## Raw log archive
+
+Every wrapped run keeps its full raw output under
+`~/.local/state/cartoon/runs/<run-id>/` (`stdout.log`, `stderr.log`,
+`meta.json`). Transformed output ends with a `raw_log:` line pointing at the
+archive — if the TOON summary dropped something you need, fetch the original
+with `cat` or `cartoon logs <id>` instead of rerunning. Passthrough and
+`--raw` output stay byte-identical (no footer) but are still archived.
+Retention is capped (`keep_runs`, default 50; `max_archive_mb`, default 50);
+`keep_runs = 0` disables archiving.
+
 ## Config
 
 `~/.config/cartoon/config.toml`:
@@ -68,6 +82,8 @@ traces:
 heuristic = false    # default for lossy fallback
 tokenizer = "o200k"  # or "approx" (bytes/4) for zero-cost estimates
 trace_lines = 20     # per-failure traceback cap
+keep_runs = 50       # archived raw logs to keep (0 disables)
+max_archive_mb = 50  # max total archive size
 ```
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
