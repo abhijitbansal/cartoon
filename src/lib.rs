@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod fallback;
 pub mod heuristic;
+pub mod logs_cmd;
 pub mod paths;
 pub mod runner;
 pub mod stats;
