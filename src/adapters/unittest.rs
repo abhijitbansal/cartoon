@@ -60,7 +60,8 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
     // tail counts: "FAILED (failures=1, errors=2, skipped=1)" or "OK (skipped=1)"
     let tail = re(&TAIL, r"(?m)^(OK|FAILED)\s*(?:\(([^)]*)\))?");
     let (mut n_fail, mut n_err, mut n_skip) = (0u64, 0u64, 0u64);
-    if let Some(t) = tail.captures(stderr) {
+    let tail_str = &stderr[caps.get(0).map(|m| m.end()).unwrap_or(0)..];
+    if let Some(t) = tail.captures(tail_str) {
         if let Some(details) = t.get(2) {
             for part in details.as_str().split(',') {
                 let part = part.trim();
@@ -155,5 +156,12 @@ mod tests {
     #[test]
     fn unrecognized_text_is_error() {
         assert!(parse_text("random program output").is_err());
+    }
+
+    #[test]
+    fn stray_ok_line_in_traceback_does_not_zero_counts() {
+        let stderr = "F\n======================================================================\nFAIL: test_x (m.T.test_x)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/proj/t.py\", line 2, in test_x\nOK was not the expected value\nAssertionError: nope\n\n----------------------------------------------------------------------\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n";
+        let r = parse_text(stderr).unwrap();
+        assert_eq!((r.total, r.failed, r.passed), (1, 1, 0));
     }
 }

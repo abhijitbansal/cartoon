@@ -26,6 +26,7 @@ impl Adapter for Pytest {
             .ok();
         if let Some(f) = &artifact {
             argv.push(format!("--junit-xml={}", f.path().display()));
+            argv.push("--override-ini=junit_family=legacy".into());
         }
         Prepared { argv, artifact }
     }
@@ -131,6 +132,7 @@ mod tests {
         assert_eq!(p.argv[0], "pytest");
         assert_eq!(p.argv[1], "-q");
         assert!(p.argv[2].starts_with("--junit-xml="));
+        assert_eq!(p.argv[3], "--override-ini=junit_family=legacy");
         assert!(p.artifact.is_some());
     }
 
