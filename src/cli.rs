@@ -5,7 +5,7 @@ use clap::Parser;
     name = "cartoon",
     version,
     about = "Token-optimized TOON output wrapper for any CLI",
-    after_help = "Subcommands `stats` and `adapters` are reserved words; \
+    after_help = "Subcommands `stats`, `adapters`, and `logs` are reserved words; \
 to wrap a binary literally named `stats`, use: cartoon env stats"
 )]
 pub struct Cli {
@@ -19,6 +19,10 @@ pub struct Cli {
     #[arg(long)]
     pub raw: bool,
 
+    /// Tag this run in the raw-log archive (repeatable)
+    #[arg(long = "tag", value_name = "TAG")]
+    pub tags: Vec<String>,
+
     /// Command to wrap plus its args (or: stats | adapters)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
@@ -30,11 +34,32 @@ pub enum Mode {
         argv: Vec<String>,
         heuristic: bool,
         raw: bool,
+        tags: Vec<String>,
     },
     Stats {
         since: Option<String>,
     },
     Adapters,
+    Logs(LogsQuery),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LogsQuery {
+    List { tag: Option<String> },
+    Show { sel: RunSel, stream: StreamSel },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RunSel {
+    Id(String),
+    Last,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum StreamSel {
+    Both,
+    Stdout,
+    Stderr,
 }
 
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
@@ -46,10 +71,12 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             since: parse_since(&cli.command[1..])?,
         }),
         "adapters" => Ok(Mode::Adapters),
+        "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
             heuristic: cli.heuristic,
             raw: cli.raw,
+            tags: cli.tags,
         }),
     }
 }
@@ -59,6 +86,33 @@ fn parse_since(args: &[String]) -> anyhow::Result<Option<String>> {
         [] => Ok(None),
         [flag, value] if flag == "--since" => Ok(Some(value.clone())),
         _ => anyhow::bail!("usage: cartoon stats [--since <e.g. 7d|24h|30m>]"),
+    }
+}
+
+fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
+    const USAGE: &str =
+        "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr]";
+    let mut sel: Option<RunSel> = None;
+    let mut stream = StreamSel::Both;
+    let mut tag: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--last" if sel.is_none() => sel = Some(RunSel::Last),
+            "--stdout" if stream == StreamSel::Both => stream = StreamSel::Stdout,
+            "--stderr" if stream == StreamSel::Both => stream = StreamSel::Stderr,
+            "--tag" => {
+                let v = it.next().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+                tag = Some(v.clone());
+            }
+            s if !s.starts_with('-') && sel.is_none() => sel = Some(RunSel::Id(s.to_string())),
+            _ => anyhow::bail!(USAGE),
+        }
+    }
+    match (sel, tag) {
+        (None, t) if stream == StreamSel::Both => Ok(LogsQuery::List { tag: t }),
+        (Some(sel), None) => Ok(LogsQuery::Show { sel, stream }),
+        _ => anyhow::bail!(USAGE),
     }
 }
 
@@ -79,7 +133,8 @@ mod tests {
             Mode::Wrap {
                 argv: vec!["pytest".into(), "-q".into(), "--maxfail=1".into()],
                 heuristic: false,
-                raw: false
+                raw: false,
+                tags: vec![]
             }
         );
     }
@@ -126,5 +181,65 @@ mod tests {
     #[test]
     fn stats_bare_gives_none() {
         assert_eq!(mode(&["cartoon", "stats"]), Mode::Stats { since: None });
+    }
+
+    #[test]
+    fn tag_flags_collect_into_wrap_mode() {
+        let m = mode(&["cartoon", "--tag", "api", "--tag", "ci", "pytest"]);
+        assert_eq!(
+            m,
+            Mode::Wrap {
+                argv: vec!["pytest".into()],
+                heuristic: false,
+                raw: false,
+                tags: vec!["api".into(), "ci".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn logs_bare_lists() {
+        assert_eq!(
+            mode(&["cartoon", "logs"]),
+            Mode::Logs(LogsQuery::List { tag: None })
+        );
+    }
+
+    #[test]
+    fn logs_tag_filter() {
+        assert_eq!(
+            mode(&["cartoon", "logs", "--tag", "api"]),
+            Mode::Logs(LogsQuery::List {
+                tag: Some("api".into())
+            })
+        );
+    }
+
+    #[test]
+    fn logs_by_id_with_stream() {
+        assert_eq!(
+            mode(&["cartoon", "logs", "20260610-051203-ab12", "--stdout"]),
+            Mode::Logs(LogsQuery::Show {
+                sel: RunSel::Id("20260610-051203-ab12".into()),
+                stream: StreamSel::Stdout
+            })
+        );
+    }
+
+    #[test]
+    fn logs_last_both_streams() {
+        assert_eq!(
+            mode(&["cartoon", "logs", "--last"]),
+            Mode::Logs(LogsQuery::Show {
+                sel: RunSel::Last,
+                stream: StreamSel::Both
+            })
+        );
+    }
+
+    #[test]
+    fn logs_bad_args_error() {
+        assert!(parse_mode(Cli::parse_from(["cartoon", "logs", "--nope"])).is_err());
+        assert!(parse_mode(Cli::parse_from(["cartoon", "logs", "id1", "id2"])).is_err());
     }
 }

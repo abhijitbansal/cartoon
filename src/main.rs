@@ -7,6 +7,7 @@ fn main() {
             argv,
             heuristic,
             raw,
+            tags: _tags,
         }) => {
             let cfg = cartoon::config::load();
             let heuristic_on = heuristic || cfg.heuristic;
@@ -29,6 +30,10 @@ fn main() {
             for a in cartoon::adapters::registry() {
                 println!("{}: {}", a.name(), a.matches());
             }
+            0
+        }
+        Ok(cartoon::cli::Mode::Logs(_)) => {
+            println!("(logs not wired yet)");
             0
         }
         Err(e) => {
