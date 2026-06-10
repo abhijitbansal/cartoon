@@ -7,11 +7,11 @@ fn main() {
             argv,
             heuristic,
             raw,
-            tags: _tags,
+            tags,
         }) => {
             let cfg = cartoon::config::load();
             let heuristic_on = heuristic || cfg.heuristic;
-            cartoon::app::run_wrap(&argv, heuristic_on, raw, &cfg).unwrap_or_else(|e| {
+            cartoon::app::run_wrap(&argv, heuristic_on, raw, &tags, &cfg).unwrap_or_else(|e| {
                 eprintln!("cartoon: {e}");
                 2
             })
@@ -32,10 +32,10 @@ fn main() {
             }
             0
         }
-        Ok(cartoon::cli::Mode::Logs(_)) => {
-            println!("(logs not wired yet)");
-            0
-        }
+        Ok(cartoon::cli::Mode::Logs(query)) => cartoon::logs_cmd::run(query).unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Err(e) => {
             eprintln!("cartoon: {e}");
             2

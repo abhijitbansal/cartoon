@@ -12,6 +12,8 @@ pub struct StatRecord {
     pub tokens_out: usize,
     pub saved: i64,
     pub exit: i32,
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 pub fn estimate_tokens(text: &str, tokenizer: &str) -> usize {
@@ -35,6 +37,7 @@ pub fn record_call(
     emitted: &str,
     exit: i32,
     tokenizer: &str,
+    run_id: Option<&str>,
 ) {
     let tokens_in = estimate_tokens(original, tokenizer);
     let tokens_out = estimate_tokens(emitted, tokenizer);
@@ -46,6 +49,7 @@ pub fn record_call(
         tokens_out,
         saved: tokens_in as i64 - tokens_out as i64,
         exit,
+        run_id: run_id.map(String::from),
     };
     let Some(path) = crate::paths::stats_file() else {
         return;
@@ -165,6 +169,7 @@ mod tests {
                 tokens_out: 10,
                 saved: 90,
                 exit: 0,
+                run_id: None,
             },
             StatRecord {
                 ts: "2026-06-09T11:00:00Z".into(),
@@ -174,6 +179,7 @@ mod tests {
                 tokens_out: 5,
                 saved: 0,
                 exit: 0,
+                run_id: None,
             },
         ];
         let v = aggregate(&recs);

@@ -1,12 +1,19 @@
 use crate::adapters::{self, ParseOutcome};
-use crate::{config::Config, fallback, heuristic, runner, stats, toon};
+use crate::{archive, config::Config, fallback, heuristic, runner, stats, toon};
 use anyhow::Result;
+use serde_json::json;
 
-pub fn run_wrap(argv: &[String], heuristic_on: bool, raw: bool, cfg: &Config) -> Result<i32> {
+pub fn run_wrap(
+    argv: &[String],
+    heuristic_on: bool,
+    raw: bool,
+    tags: &[String],
+    cfg: &Config,
+) -> Result<i32> {
     // Adapter path: detect first, because prepare() must extend argv.
     if !raw {
         if let Some(adapter) = adapters::find_adapter(argv) {
-            return run_with_adapter(adapter.as_ref(), argv, cfg);
+            return run_with_adapter(adapter.as_ref(), argv, tags, cfg);
         }
     }
     let captured = match runner::run(argv) {
@@ -15,32 +22,63 @@ pub fn run_wrap(argv: &[String], heuristic_on: bool, raw: bool, cfg: &Config) ->
     };
     let code = runner::exit_code(&captured.status);
     if raw {
+        // Escape hatch: byte-identical output, no footer, no stats — but archived.
+        archive::record(argv, "raw", &captured, code, tags, cfg);
         print!("{}", captured.stdout);
         eprint!("{}", captured.stderr);
         return Ok(code);
     }
-    let (out, mode) = transform(&captured.stdout, heuristic_on);
+    let (mut out, mode) = transform(&captured.stdout, heuristic_on);
+    let run = archive::record(argv, mode, &captured, code, tags, cfg);
+    if mode != "passthrough" {
+        if let Some(r) = &run {
+            out.push_str(&format!(
+                "\n{}",
+                toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
+            ));
+        }
+    }
     emit(&out, &captured.stderr);
     let original = format!("{}{}", captured.stdout, captured.stderr);
     let emitted = format!("{}{}", out, captured.stderr);
-    stats::record_call(argv, mode, &original, &emitted, code, &cfg.tokenizer);
+    stats::record_call(
+        argv,
+        mode,
+        &original,
+        &emitted,
+        code,
+        &cfg.tokenizer,
+        run.as_ref().map(|r| r.id.as_str()),
+    );
     Ok(code)
 }
 
-fn run_with_adapter(adapter: &dyn adapters::Adapter, argv: &[String], cfg: &Config) -> Result<i32> {
+fn run_with_adapter(
+    adapter: &dyn adapters::Adapter,
+    argv: &[String],
+    tags: &[String],
+    cfg: &Config,
+) -> Result<i32> {
     let prepared = adapter.prepare(argv.to_vec());
     let captured = match runner::run(&prepared.argv) {
         Ok(c) => c,
         Err(e) => return not_found_or_err(e, argv),
     };
     let code = runner::exit_code(&captured.status);
+    let run = archive::record(argv, adapter.name(), &captured, code, tags, cfg);
     match adapter.parse(&captured, &prepared) {
         Ok(ParseOutcome {
             report,
             passthrough_stdout,
             passthrough_stderr,
         }) => {
-            let out = adapters::report::render(&report, cfg.trace_lines);
+            let mut out = adapters::report::render(&report, cfg.trace_lines);
+            if let Some(r) = &run {
+                out.push_str(&format!(
+                    "\n{}",
+                    toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
+                ));
+            }
             let extra_out = passthrough_stdout.unwrap_or_default();
             let extra_err = passthrough_stderr.unwrap_or_default();
             emit(&out, "");
@@ -57,11 +95,12 @@ fn run_with_adapter(adapter: &dyn adapters::Adapter, argv: &[String], cfg: &Conf
                 &emitted,
                 code,
                 &cfg.tokenizer,
+                run.as_ref().map(|r| r.id.as_str()),
             );
             Ok(code)
         }
         Err(e) => {
-            // Safety rule: never lose information. Emit original output.
+            // Safety rule: never lose information. Emit original output, NO footer.
             eprintln!(
                 "cartoon: {} adapter failed to parse ({e}); passing through",
                 adapter.name()
