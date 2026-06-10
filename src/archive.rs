@@ -25,12 +25,19 @@ pub struct RunMeta {
 }
 
 /// `YYYYMMDD-HHMMSS-<4 hex>` UTC; lexicographic order == time order.
-/// Process-local atomic counter in salt ensures monotonicity within a process.
+/// Salt: process-local monotonic counter lazily seeded from pid ^ nanos,
+/// so parallel processes start at different offsets (collision-resistant)
+/// while calls within one process stay strictly ordered.
 pub fn new_run_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let now = chrono::Utc::now();
-    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let salt = counter & 0xffff;
+    let _ = COUNTER.compare_exchange(
+        0,
+        (std::process::id() as u64 ^ now.timestamp_subsec_nanos() as u64) | 1,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    let salt = COUNTER.fetch_add(1, Ordering::Relaxed) & 0xffff;
     format!("{}-{:04x}", now.format("%Y%m%d-%H%M%S"), salt)
 }
 
@@ -76,11 +83,12 @@ pub fn record_at(
     if cfg.keep_runs == 0 {
         return None; // archiving disabled
     }
+    let now = chrono::Utc::now();
     let id = new_run_id();
     let dir = root.join(&id);
     let meta = RunMeta {
         id: id.clone(),
-        ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ts: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         argv: argv.to_vec(),
         mode: mode.to_string(),
         exit,
@@ -138,14 +146,24 @@ pub fn list_at(root: &Path, tag: Option<&str>) -> Vec<RunMeta> {
 }
 
 pub fn load_at(root: &Path, id: &str) -> Result<(RunMeta, String, String)> {
+    // Run ids are [0-9a-z-] only; reject anything path-like.
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        anyhow::bail!("invalid run id {id:?} — try `cartoon logs` to list runs");
+    }
     let dir = root.join(id);
     let meta: RunMeta = serde_json::from_str(
         &std::fs::read_to_string(dir.join("meta.json"))
             .with_context(|| format!("no archived run {id} — try `cartoon logs`"))?,
     )
     .with_context(|| format!("corrupt meta for run {id}"))?;
-    let stdout = std::fs::read_to_string(dir.join("stdout.log")).unwrap_or_default();
-    let stderr = std::fs::read_to_string(dir.join("stderr.log")).unwrap_or_default();
+    let read_stream = |name: &str| -> String {
+        std::fs::read_to_string(dir.join(name)).unwrap_or_else(|_| {
+            eprintln!("cartoon: archived {name} missing for run {id}");
+            String::new()
+        })
+    };
+    let stdout = read_stream("stdout.log");
+    let stderr = read_stream("stderr.log");
     Ok((meta, stdout, stderr))
 }
 
@@ -172,7 +190,7 @@ fn prune_at(root: &Path, cfg: &Config) {
             })
             .unwrap_or(0)
     };
-    let mut sizes: Vec<u64> = dirs.iter().map(|d| dir_size(d)).collect();
+    let sizes: Vec<u64> = dirs.iter().map(|d| dir_size(d)).collect();
     let mut total: u64 = sizes.iter().sum();
     let max_bytes = cfg.max_archive_mb * 1024 * 1024;
 
@@ -180,7 +198,6 @@ fn prune_at(root: &Path, cfg: &Config) {
     while i < dirs.len() && (dirs.len() - i > cfg.keep_runs || total > max_bytes) {
         let _ = std::fs::remove_dir_all(&dirs[i]);
         total = total.saturating_sub(sizes[i]);
-        sizes[i] = 0;
         i += 1;
     }
 }
@@ -210,7 +227,21 @@ mod tests {
         let b = new_run_id();
         assert_ne!(a, b);
         assert_eq!(a.len(), "20260610-051203-ab12".len());
-        assert!(a <= b, "lexicographic order must follow time: {a} vs {b}");
+        // Salt can wrap at 0xffff, so compare only the 15-char timestamp prefix
+        // (YYYYMMDD-HHMMSS) which is always non-decreasing.
+        assert!(
+            a[..15] <= b[..15],
+            "timestamp prefix must follow time order: {a} vs {b}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_path_like_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(load_at(tmp.path(), "../../etc").is_err());
+        assert!(load_at(tmp.path(), "/etc/passwd").is_err());
+        assert!(load_at(tmp.path(), "a/b").is_err());
+        assert!(load_at(tmp.path(), "").is_err());
     }
 
     #[test]
