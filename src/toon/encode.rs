@@ -10,8 +10,48 @@ pub fn encode(value: &Value) -> String {
     lines.join("\n")
 }
 
-fn container_lines(_value: &Value, _lines: &mut Vec<String>) {
-    unimplemented!("Tasks 5 and 6")
+fn container_lines(value: &Value, lines: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => object_lines(map, 0, lines),
+        Value::Array(arr) => array_lines(None, arr, 0, lines),
+        _ => unreachable!(),
+    }
+}
+
+fn indent(depth: usize) -> String {
+    "  ".repeat(depth)
+}
+
+fn object_lines(map: &serde_json::Map<String, Value>, depth: usize, lines: &mut Vec<String>) {
+    for (k, v) in map {
+        let key = key_str(k);
+        match v {
+            Value::Object(m) if m.is_empty() => {
+                lines.push(format!("{}{}: {{}}", indent(depth), key))
+            }
+            Value::Object(m) => {
+                lines.push(format!("{}{}:", indent(depth), key));
+                object_lines(m, depth + 1, lines);
+            }
+            Value::Array(arr) => array_lines(Some(&key), arr, depth, lines),
+            v => lines.push(format!("{}{}: {}", indent(depth), key, scalar(v))),
+        }
+    }
+}
+
+fn array_lines(_key: Option<&str>, _arr: &[Value], _depth: usize, _lines: &mut Vec<String>) {
+    unimplemented!("Task 6")
+}
+
+fn key_str(k: &str) -> String {
+    let plain = !k.is_empty()
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if plain {
+        k.to_string()
+    } else {
+        quote(k)
+    }
 }
 
 pub(crate) fn scalar(v: &Value) -> String {
@@ -73,5 +113,27 @@ mod tests {
         assert_eq!(encode(&json!(" padded")), "\" padded\"");
         assert_eq!(encode(&json!("line\nbreak")), "\"line\\nbreak\"");
         assert_eq!(encode(&json!("say \"hi\"")), "\"say \\\"hi\\\"\"");
+    }
+
+    #[test]
+    fn flat_object() {
+        let v = json!({"a": 1, "b": "hi", "c": true, "d": null});
+        assert_eq!(encode(&v), "a: 1\nb: hi\nc: true\nd: null");
+    }
+
+    #[test]
+    fn nested_objects_indent_two_spaces() {
+        let v = json!({"outer": {"inner": {"k": "v"}}, "next": 1});
+        assert_eq!(encode(&v), "outer:\n  inner:\n    k: v\nnext: 1");
+    }
+
+    #[test]
+    fn empty_object_value() {
+        assert_eq!(encode(&json!({"e": {}})), "e: {}");
+    }
+
+    #[test]
+    fn keys_with_special_chars_are_quoted() {
+        assert_eq!(encode(&json!({"a key": 1})), "\"a key\": 1");
     }
 }
