@@ -20,10 +20,14 @@ pub struct Failure {
 }
 
 /// Asymmetric rendering: passes cost one summary block; failures keep
-/// id/loc/msg rows plus trimmed traces.
-pub fn render(report: &TestReport, trace_lines: usize) -> String {
+/// id/loc/msg rows plus trimmed traces. `fast_note` discloses injected
+/// acceleration args (e.g. "-n auto") right after the runner line.
+pub fn render(report: &TestReport, trace_lines: usize, fast_note: Option<&str>) -> String {
     let mut root = Map::new();
     root.insert("runner".into(), json!(report.runner));
+    if let Some(f) = fast_note {
+        root.insert("fast".into(), json!(f));
+    }
     root.insert(
         "summary".into(),
         json!({
@@ -125,7 +129,7 @@ mod tests {
 
     #[test]
     fn renders_summary_and_failures() {
-        let out = render(&sample(), 20);
+        let out = render(&sample(), 20, None);
         assert!(out.contains("runner: pytest"), "got:\n{out}");
         assert!(out.contains("total: 48"));
         assert!(out.contains("failed: 2"));
@@ -135,7 +139,7 @@ mod tests {
 
     #[test]
     fn empty_trace_gets_no_traces_entry() {
-        let out = render(&sample(), 20);
+        let out = render(&sample(), 20, None);
         // traces section exists (first failure has a trace) but only one key
         let traces_idx = out.find("traces:").expect("traces section");
         let tail = &out[traces_idx..];
@@ -149,7 +153,7 @@ mod tests {
         r.failures.clear();
         r.failed = 0;
         r.passed = 47;
-        let out = render(&r, 20);
+        let out = render(&r, 20, None);
         assert!(!out.contains("failures"));
         assert!(!out.contains("traces"));
     }
@@ -158,7 +162,7 @@ mod tests {
     fn trace_capped_at_limit() {
         let mut r = sample();
         r.failures[0].trace = (0..50).map(|i| format!("line {i}")).collect();
-        let out = render(&r, 5);
+        let out = render(&r, 5, None);
         assert!(out.contains("line 4"));
         assert!(!out.contains("line 5"));
     }
@@ -175,7 +179,7 @@ mod tests {
 
     #[test]
     fn zero_trace_lines_omits_traces_section() {
-        let out = render(&sample(), 0);
+        let out = render(&sample(), 0, None);
         assert!(!out.contains("traces"));
     }
 
@@ -185,5 +189,25 @@ mod tests {
         let t = trim_trace(raw).join("\n");
         assert!(t.contains("auth.test.js"));
         assert!(!t.contains("node:internal"));
+    }
+
+    #[test]
+    fn fast_note_renders_after_runner() {
+        let out = render(&sample(), 20, Some("-n auto"));
+        let runner_idx = out.find("runner: pytest").unwrap();
+        // TOON quotes strings starting with '-' to avoid ambiguity, so the
+        // value "-n auto" is rendered as: fast: "-n auto"
+        let fast_idx = out.find("fast: \"-n auto\"").expect("fast line present");
+        let summary_idx = out.find("summary:").unwrap();
+        assert!(
+            runner_idx < fast_idx && fast_idx < summary_idx,
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn no_fast_note_no_fast_line() {
+        let out = render(&sample(), 20, None);
+        assert!(!out.contains("fast:"), "got:\n{out}");
     }
 }

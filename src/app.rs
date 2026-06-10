@@ -64,15 +64,42 @@ fn run_with_adapter(
     adapter: &dyn adapters::Adapter,
     argv: &[String],
     tags: &[String],
-    _fast: bool,
+    fast: bool,
     cfg: &Config,
 ) -> Result<i32> {
     let prepared = adapter.prepare(argv.to_vec());
-    let captured = match runner::run(&prepared.argv) {
+    let fast_args = if fast {
+        adapter.fast_args()
+    } else {
+        Vec::new()
+    };
+    let mut argv_run = prepared.argv.clone();
+    argv_run.extend(fast_args.iter().cloned());
+    let mut fast_note = (!fast_args.is_empty()).then(|| fast_args.join(" "));
+    let mut captured = match runner::run(&argv_run) {
         Ok(c) => c,
         Err(e) => return not_found_or_err(e, argv),
     };
-    let code = runner::exit_code(&captured.status);
+    let mut code = runner::exit_code(&captured.status);
+    // Bounded fallback: pytest exits 4 (usage error) when xdist is missing.
+    // Nothing executed, so one serial retry is safe. Only on the exact
+    // signature mentioning an arg WE injected — a user's own typo'd args
+    // won't match and pass through normally.
+    if fast_note.is_some()
+        && code == 4
+        && captured.stderr.contains("unrecognized arguments")
+        && fast_args
+            .iter()
+            .any(|a| captured.stderr.contains(a.as_str()))
+    {
+        eprintln!("cartoon: --fast unavailable (pytest-xdist not installed?); reran serially");
+        fast_note = None;
+        captured = match runner::run(&prepared.argv) {
+            Ok(c) => c,
+            Err(e) => return not_found_or_err(e, argv),
+        };
+        code = runner::exit_code(&captured.status);
+    }
     let run = archive::record(argv, adapter.name(), &captured, code, tags, cfg);
     match adapter.parse(&captured, &prepared) {
         Ok(ParseOutcome {
@@ -80,7 +107,7 @@ fn run_with_adapter(
             passthrough_stdout,
             passthrough_stderr,
         }) => {
-            let mut out = adapters::report::render(&report, cfg.trace_lines);
+            let mut out = adapters::report::render(&report, cfg.trace_lines, fast_note.as_deref());
             if let Some(r) = &run {
                 out.push_str(&format!(
                     "\n{}",
