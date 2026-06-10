@@ -103,4 +103,20 @@ mod tests {
         );
         assert!(find_adapter(&argv(&["ls", "-la"])).is_none());
     }
+
+    #[test]
+    fn python_versioned_binary_detected() {
+        assert!(is_python_module(
+            &argv(&["python3.12", "-m", "pytest"]),
+            "pytest"
+        ));
+    }
+
+    #[test]
+    fn npx_path_to_jest_detected() {
+        assert_eq!(
+            find_adapter(&argv(&["npx", "./node_modules/.bin/jest"])).map(|a| a.name()),
+            Some("jest")
+        );
+    }
 }

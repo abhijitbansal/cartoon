@@ -9,13 +9,14 @@ impl Adapter for Jest {
         "jest"
     }
     fn matches(&self) -> &'static str {
-        "jest | npx jest"
+        "jest | npx jest | bunx jest"
     }
     fn detect(&self, argv: &[String]) -> bool {
         match argv {
             [first, ..] if basename(first) == "jest" => true,
             [first, second, ..]
-                if matches!(basename(first), "npx" | "bunx") && second == "jest" =>
+                if matches!(basename(first), "npx" | "bunx")
+                    && super::basename(second) == "jest" =>
             {
                 true
             }

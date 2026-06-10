@@ -48,10 +48,13 @@ pub fn render(report: &TestReport, trace_lines: usize) -> String {
         let traces: Map<String, Value> = report
             .failures
             .iter()
-            .filter(|f| !f.trace.is_empty())
-            .map(|f| {
+            .filter_map(|f| {
                 let capped: Vec<&String> = f.trace.iter().take(trace_lines).collect();
-                (f.id.clone(), json!(capped))
+                if capped.is_empty() {
+                    None
+                } else {
+                    Some((f.id.clone(), json!(capped)))
+                }
             })
             .collect();
         if !traces.is_empty() {
@@ -168,5 +171,19 @@ mod tests {
         assert!(joined.contains("tests/test_auth.py"), "got: {joined}");
         assert!(!joined.contains("site-packages"));
         assert!(joined.contains("AssertionError"));
+    }
+
+    #[test]
+    fn zero_trace_lines_omits_traces_section() {
+        let out = render(&sample(), 0);
+        assert!(!out.contains("traces"));
+    }
+
+    #[test]
+    fn trim_trace_drops_js_noise_frames() {
+        let raw = "Error: expect(received).toBe(expected)\n    at Object.<anonymous> (/proj/src/auth.test.js:43:29)\n    at processTicksAndRejections (node:internal/process/task_queues/95:5)";
+        let t = trim_trace(raw).join("\n");
+        assert!(t.contains("auth.test.js"));
+        assert!(!t.contains("node:internal"));
     }
 }
