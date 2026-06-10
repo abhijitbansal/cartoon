@@ -1,0 +1,13 @@
+.F.s
+======================================================================
+FAIL: test_expiry (tests.test_auth.AuthTest.test_expiry)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/user/proj/tests/test_auth.py", line 42, in test_expiry
+    self.assertLess(token.exp, now())
+AssertionError: 1717000000 not less than 1716000000
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.012s
+
+FAILED (failures=1, skipped=1)
