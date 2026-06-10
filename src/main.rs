@@ -7,14 +7,24 @@ fn main() {
             argv,
             heuristic,
             raw,
-        }) => cartoon::app::run_wrap(&argv, heuristic, raw).unwrap_or_else(|e| {
-            eprintln!("cartoon: {e}");
-            2
-        }),
-        Ok(cartoon::cli::Mode::Stats { .. }) => {
-            println!("(stats not implemented yet)");
-            0
+        }) => {
+            let cfg = cartoon::config::load();
+            let heuristic_on = heuristic || cfg.heuristic;
+            cartoon::app::run_wrap(&argv, heuristic_on, raw, &cfg).unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            })
         }
+        Ok(cartoon::cli::Mode::Stats { since }) => match cartoon::stats::report(since.as_deref()) {
+            Ok(s) => {
+                println!("{s}");
+                0
+            }
+            Err(e) => {
+                eprintln!("cartoon: {e}");
+                2
+            }
+        },
         Ok(cartoon::cli::Mode::Adapters) => {
             println!("(no adapters yet)");
             0

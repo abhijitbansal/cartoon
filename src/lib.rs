@@ -2,7 +2,10 @@
 
 pub mod app;
 pub mod cli;
+pub mod config;
 pub mod fallback;
 pub mod heuristic;
+pub mod paths;
 pub mod runner;
+pub mod stats;
 pub mod toon;

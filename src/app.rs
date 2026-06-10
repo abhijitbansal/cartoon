@@ -1,8 +1,8 @@
-use crate::{fallback, heuristic, runner, toon};
+use crate::{config::Config, fallback, heuristic, runner, stats, toon};
 use anyhow::Result;
 
 /// Run the wrapped command, transform stdout, mirror the exit code.
-pub fn run_wrap(argv: &[String], heuristic_on: bool, raw: bool) -> Result<i32> {
+pub fn run_wrap(argv: &[String], heuristic_on: bool, raw: bool, cfg: &Config) -> Result<i32> {
     let captured = match runner::run(argv) {
         Ok(c) => c,
         Err(e) => {
@@ -23,12 +23,15 @@ pub fn run_wrap(argv: &[String], heuristic_on: bool, raw: bool) -> Result<i32> {
         eprint!("{}", captured.stderr);
         return Ok(code);
     }
-    let (out, _mode) = transform(&captured.stdout, heuristic_on);
+    let (out, mode) = transform(&captured.stdout, heuristic_on);
     print!("{out}");
     if !out.is_empty() && !out.ends_with('\n') {
         println!();
     }
     eprint!("{}", captured.stderr);
+    let original = format!("{}{}", captured.stdout, captured.stderr);
+    let emitted = format!("{}{}", out, captured.stderr);
+    stats::record_call(argv, mode, &original, &emitted, code, &cfg.tokenizer);
     Ok(code)
 }
 

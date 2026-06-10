@@ -54,3 +54,20 @@ fn heuristic_flag_compresses_repeats() {
         .success()
         .stdout(contains("(x5)"));
 }
+
+#[test]
+fn stats_records_and_reports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().to_str().unwrap();
+    cartoon()
+        .env("XDG_STATE_HOME", state)
+        .args(["sh", "-c", r#"echo '{"a": 1}'"#])
+        .assert()
+        .success();
+    cartoon()
+        .env("XDG_STATE_HOME", state)
+        .args(["stats"])
+        .assert()
+        .success()
+        .stdout(contains("calls: 1"));
+}
