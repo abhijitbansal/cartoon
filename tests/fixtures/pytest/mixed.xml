@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="1" skipped="1" tests="3" time="0.123">
+    <testcase classname="tests.test_auth" name="test_ok" file="tests/test_auth.py" line="9" time="0.001"/>
+    <testcase classname="tests.test_auth" name="test_expiry" file="tests/test_auth.py" line="41" time="0.002">
+      <failure message="AssertionError: assert exp &lt; now">def test_expiry():
+    token = make_token()
+&gt;   assert token.exp &lt; now()
+E   AssertionError: assert exp &lt; now
+
+tests/test_auth.py:42: AssertionError</failure>
+    </testcase>
+    <testcase classname="tests.test_auth" name="test_later" file="tests/test_auth.py" line="50" time="0.000">
+      <skipped message="not ready"/>
+    </testcase>
+  </testsuite>
+</testsuites>
