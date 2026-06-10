@@ -55,4 +55,9 @@ mod tests {
     fn bare_scalar_json_is_none() {
         assert!(detect_json("42").is_none());
     }
+
+    #[test]
+    fn malformed_single_line_is_none() {
+        assert!(detect_json("{not json").is_none());
+    }
 }

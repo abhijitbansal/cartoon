@@ -31,6 +31,8 @@ pub fn compress(text: &str) -> String {
             repeat = 0;
         }
         out.push(line.clone());
+        // NB: blank lines update `prev` too, so identical lines separated by a
+        // blank are intentionally NOT collapsed across the gap.
         prev = Some(line);
     }
     if repeat > 0 {

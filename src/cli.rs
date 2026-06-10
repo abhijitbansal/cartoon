@@ -13,7 +13,9 @@ pub struct Cli {
     #[arg(long)]
     pub heuristic: bool,
 
-    /// Bypass cartoon entirely; run the command untouched
+    /// Bypass cartoon entirely; run the command untouched.
+    /// (v1 limitation: output is still UTF-8-lossy converted, so non-UTF-8
+    /// bytes become U+FFFD even in raw mode.)
     #[arg(long)]
     pub raw: bool,
 
