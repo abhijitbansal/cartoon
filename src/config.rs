@@ -6,6 +6,8 @@ pub struct Config {
     pub heuristic: bool,
     pub tokenizer: String,
     pub trace_lines: usize,
+    pub keep_runs: usize,
+    pub max_archive_mb: u64,
 }
 
 impl Default for Config {
@@ -14,6 +16,8 @@ impl Default for Config {
             heuristic: false,
             tokenizer: "o200k".into(),
             trace_lines: 20,
+            keep_runs: 50,
+            max_archive_mb: 50,
         }
     }
 }
@@ -58,5 +62,20 @@ mod tests {
     fn bad_toml_falls_back_to_defaults() {
         let c = parse_or_default("not [ valid toml", "/tmp/x");
         assert!(!c.heuristic);
+    }
+
+    #[test]
+    fn archive_defaults() {
+        let c = Config::default();
+        assert_eq!(c.keep_runs, 50);
+        assert_eq!(c.max_archive_mb, 50);
+    }
+
+    #[test]
+    fn archive_keys_override() {
+        let c: Config = toml::from_str("keep_runs = 5\nmax_archive_mb = 10").unwrap();
+        assert_eq!(c.keep_runs, 5);
+        assert_eq!(c.max_archive_mb, 10);
+        assert_eq!(c.tokenizer, "o200k"); // other defaults intact
     }
 }
