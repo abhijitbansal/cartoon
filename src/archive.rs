@@ -149,8 +149,40 @@ pub fn load_at(root: &Path, id: &str) -> Result<(RunMeta, String, String)> {
     Ok((meta, stdout, stderr))
 }
 
-fn prune_at(_root: &Path, _cfg: &Config) {
-    // implemented in the pruning task
+/// Delete oldest runs while count > keep_runs OR total bytes > max_archive_mb.
+/// Errors ignored: deletion is idempotent and retried implicitly next run.
+fn prune_at(root: &Path, cfg: &Config) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort(); // run-ids sort oldest-first lexicographically
+
+    let dir_size = |d: &Path| -> u64 {
+        std::fs::read_dir(d)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
+    };
+    let mut sizes: Vec<u64> = dirs.iter().map(|d| dir_size(d)).collect();
+    let mut total: u64 = sizes.iter().sum();
+    let max_bytes = cfg.max_archive_mb * 1024 * 1024;
+
+    let mut i = 0;
+    while i < dirs.len() && (dirs.len() - i > cfg.keep_runs || total > max_bytes) {
+        let _ = std::fs::remove_dir_all(&dirs[i]);
+        total = total.saturating_sub(sizes[i]);
+        sizes[i] = 0;
+        i += 1;
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +284,62 @@ mod tests {
         std::fs::write(bad.join("meta.json"), "not json").unwrap();
         let all = list_at(tmp.path(), None);
         assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn prunes_beyond_keep_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cap = captured("x", "");
+        let mut small = cfg();
+        small.keep_runs = 2;
+        for name in ["a", "b", "c"] {
+            record_at(
+                tmp.path(),
+                &[name.to_string()],
+                "json",
+                &cap,
+                0,
+                &[],
+                &small,
+            )
+            .unwrap();
+        }
+        let all = list_at(tmp.path(), None);
+        assert_eq!(all.len(), 2, "oldest pruned");
+        assert_eq!(all[1].argv[0], "b", "a was deleted");
+    }
+
+    #[test]
+    fn prunes_beyond_max_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = "x".repeat(1024 * 1024); // 1 MiB stdout per run
+        let cap = captured(&big, "");
+        let mut small = cfg();
+        small.keep_runs = 100;
+        small.max_archive_mb = 2;
+        for name in ["a", "b", "c"] {
+            record_at(
+                tmp.path(),
+                &[name.to_string()],
+                "json",
+                &cap,
+                0,
+                &[],
+                &small,
+            )
+            .unwrap();
+        }
+        let all = list_at(tmp.path(), None);
+        assert!(all.len() <= 2, "size cap enforced, got {}", all.len());
+    }
+
+    #[test]
+    fn keep_runs_zero_disables_archiving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cap = captured("x", "");
+        let mut off = cfg();
+        off.keep_runs = 0;
+        assert!(record_at(tmp.path(), &["a".into()], "json", &cap, 0, &[], &off).is_none());
+        assert!(list_at(tmp.path(), None).is_empty());
     }
 }
