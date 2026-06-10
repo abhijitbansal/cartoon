@@ -120,3 +120,14 @@ fn e2e_pytest_footer_points_at_original_report() {
         "human report detail present: {raw}"
     );
 }
+
+#[test]
+fn passthrough_without_trailing_newline_is_byte_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["sh", "-c", "printf plain"])
+        .assert()
+        .success()
+        .stdout("plain"); // exact bytes — no newline added
+}

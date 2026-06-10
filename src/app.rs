@@ -38,7 +38,13 @@ pub fn run_wrap(
             ));
         }
     }
-    emit(&out, &captured.stderr);
+    if mode == "passthrough" {
+        // Byte-identical guarantee: no trailing-newline normalization.
+        print!("{out}");
+        eprint!("{}", captured.stderr);
+    } else {
+        emit(&out, &captured.stderr);
+    }
     let original = format!("{}{}", captured.stdout, captured.stderr);
     let emitted = format!("{}{}", out, captured.stderr);
     stats::record_call(
