@@ -24,8 +24,14 @@ pub struct Cli {
 
 #[derive(Debug, PartialEq)]
 pub enum Mode {
-    Wrap { argv: Vec<String>, heuristic: bool, raw: bool },
-    Stats { since: Option<String> },
+    Wrap {
+        argv: Vec<String>,
+        heuristic: bool,
+        raw: bool,
+    },
+    Stats {
+        since: Option<String>,
+    },
     Adapters,
 }
 
@@ -34,9 +40,15 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         anyhow::bail!("no command given. usage: cartoon <cmd> [args...]");
     }
     match cli.command[0].as_str() {
-        "stats" => Ok(Mode::Stats { since: parse_since(&cli.command[1..])? }),
+        "stats" => Ok(Mode::Stats {
+            since: parse_since(&cli.command[1..])?,
+        }),
         "adapters" => Ok(Mode::Adapters),
-        _ => Ok(Mode::Wrap { argv: cli.command, heuristic: cli.heuristic, raw: cli.raw }),
+        _ => Ok(Mode::Wrap {
+            argv: cli.command,
+            heuristic: cli.heuristic,
+            raw: cli.raw,
+        }),
     }
 }
 
@@ -73,13 +85,24 @@ mod tests {
     #[test]
     fn heuristic_flag_before_command() {
         let m = mode(&["cartoon", "--heuristic", "ls", "-la"]);
-        assert!(matches!(m, Mode::Wrap { heuristic: true, .. }));
+        assert!(matches!(
+            m,
+            Mode::Wrap {
+                heuristic: true,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn stats_subcommand_with_since() {
         let m = mode(&["cartoon", "stats", "--since", "7d"]);
-        assert_eq!(m, Mode::Stats { since: Some("7d".into()) });
+        assert_eq!(
+            m,
+            Mode::Stats {
+                since: Some("7d".into())
+            }
+        );
     }
 
     #[test]
@@ -90,5 +113,16 @@ mod tests {
     #[test]
     fn no_command_is_error() {
         assert!(parse_mode(Cli::parse_from(["cartoon"])).is_err());
+    }
+
+    #[test]
+    fn raw_flag_before_command() {
+        let m = mode(&["cartoon", "--raw", "pytest"]);
+        assert!(matches!(m, Mode::Wrap { raw: true, .. }));
+    }
+
+    #[test]
+    fn stats_bare_gives_none() {
+        assert_eq!(mode(&["cartoon", "stats"]), Mode::Stats { since: None });
     }
 }

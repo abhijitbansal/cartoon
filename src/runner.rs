@@ -23,6 +23,7 @@ pub fn run(argv: &[String]) -> Result<Captured> {
     let mut err_pipe = child.stderr.take().expect("stderr piped");
     let err_thread = std::thread::spawn(move || {
         let mut buf = Vec::new();
+        // intentionally ignored — a read error here means the child's pipe closed unexpectedly
         let _ = err_pipe.read_to_end(&mut buf);
         buf
     });
@@ -85,5 +86,12 @@ mod tests {
         let err = run(&["definitely-not-a-real-binary-xyz".to_string()]).unwrap_err();
         let io = err.downcast_ref::<std::io::Error>().unwrap();
         assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_death_maps_to_128_plus_n() {
+        let c = sh("kill -TERM $$");
+        assert_eq!(exit_code(&c.status), 143);
     }
 }
