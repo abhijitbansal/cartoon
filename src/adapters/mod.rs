@@ -36,6 +36,11 @@ pub trait Adapter {
     /// Append machine-output flags. Must never remove or reorder user args.
     fn prepare(&self, argv: Vec<String>) -> Prepared;
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome>;
+    /// Extra args that accelerate this runner, appended after prepare()'s
+    /// injection when --fast is active. Default: none (silent no-op).
+    fn fast_args(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub fn registry() -> Vec<Box<dyn Adapter>> {
@@ -118,5 +123,26 @@ mod tests {
             find_adapter(&argv(&["npx", "./node_modules/.bin/jest"])).map(|a| a.name()),
             Some("jest")
         );
+    }
+
+    #[test]
+    fn pytest_fast_args_inject_xdist() {
+        let pytest = registry()
+            .into_iter()
+            .find(|a| a.name() == "pytest")
+            .unwrap();
+        assert_eq!(
+            pytest.fast_args(),
+            vec!["-n".to_string(), "auto".to_string()]
+        );
+    }
+
+    #[test]
+    fn other_adapters_have_no_fast_args() {
+        for a in registry() {
+            if a.name() != "pytest" {
+                assert!(a.fast_args().is_empty(), "{} should be a no-op", a.name());
+            }
+        }
     }
 }

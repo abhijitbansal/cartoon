@@ -44,6 +44,9 @@ impl Adapter for Pytest {
             passthrough_stderr: (!captured.stderr.is_empty()).then(|| captured.stderr.clone()),
         })
     }
+    fn fast_args(&self) -> Vec<String> {
+        vec!["-n".into(), "auto".into()]
+    }
 }
 
 pub fn parse_junit(xml: &str) -> Result<TestReport> {
