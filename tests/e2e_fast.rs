@@ -3,6 +3,13 @@ use predicates::prelude::*;
 
 /// Fake pytest that exits 4 on `-n` (xdist missing) and succeeds without it,
 /// writing minimal junit xml to the --junit-xml path cartoon injected.
+///
+/// The stderr line `pytest: error: unrecognized arguments: -n auto` is
+/// load-bearing: it is the exact signature src/app.rs's fallback matches
+/// (exit 4 + "unrecognized arguments" + the joined fast args). If real
+/// pytest ever changes this wording, update both the fallback and this
+/// fixture.
+#[cfg(unix)]
 const FAKE_PYTEST: &str = r#"#!/bin/sh
 junit=""
 saw_n=0
@@ -28,17 +35,16 @@ echo "2 passed"
 exit 0
 "#;
 
+#[cfg(unix)]
 fn setup_fake_pytest(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("pytest");
     std::fs::write(&bin, FAKE_PYTEST).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
 }
 
+#[cfg(unix)]
 #[test]
 fn fast_falls_back_serially_when_xdist_missing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -56,6 +62,7 @@ fn fast_falls_back_serially_when_xdist_missing() {
         .stderr(predicate::str::contains("--fast unavailable"));
 }
 
+#[cfg(unix)]
 #[test]
 fn without_fast_flag_fake_pytest_never_sees_dash_n() {
     let tmp = tempfile::tempdir().unwrap();
@@ -84,6 +91,9 @@ fn xdist_available() -> bool {
 #[test]
 fn real_pytest_fast_discloses_and_counts_match() {
     if !xdist_available() {
+        if std::env::var("CI").is_ok() {
+            panic!("pytest-xdist must be installed in CI (ci.yml pip install step)");
+        }
         eprintln!("skipping: pytest-xdist not importable");
         return;
     }
