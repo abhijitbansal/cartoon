@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "cartoon"
+description = "Token-optimized TOON output wrapper for any CLI"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "bin"
