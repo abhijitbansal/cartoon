@@ -75,7 +75,8 @@ fn run_with_adapter(
     };
     let mut argv_run = prepared.argv.clone();
     argv_run.extend(fast_args.iter().cloned());
-    let mut fast_note = (!fast_args.is_empty()).then(|| fast_args.join(" "));
+    let joined_fast = fast_args.join(" ");
+    let mut fast_note = (!fast_args.is_empty()).then(|| joined_fast.clone());
     let mut captured = match runner::run(&argv_run) {
         Ok(c) => c,
         Err(e) => return not_found_or_err(e, argv),
@@ -83,14 +84,14 @@ fn run_with_adapter(
     let mut code = runner::exit_code(&captured.status);
     // Bounded fallback: pytest exits 4 (usage error) when xdist is missing.
     // Nothing executed, so one serial retry is safe. Only on the exact
-    // signature mentioning an arg WE injected — a user's own typo'd args
-    // won't match and pass through normally.
+    // signature mentioning the full joined args WE injected ("-n auto") —
+    // short per-arg substrings like "-n" could falsely match user paths
+    // echoed in stderr, so we require the whole string.
     if fast_note.is_some()
         && code == 4
         && captured.stderr.contains("unrecognized arguments")
-        && fast_args
-            .iter()
-            .any(|a| captured.stderr.contains(a.as_str()))
+        && !joined_fast.is_empty()
+        && captured.stderr.contains(&joined_fast)
     {
         eprintln!("cartoon: --fast unavailable (pytest-xdist not installed?); reran serially");
         fast_note = None;
