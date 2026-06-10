@@ -67,15 +67,17 @@ pub fn record_call(
 }
 
 pub fn parse_since(s: &str) -> Result<Duration> {
-    let (num, unit) = s.split_at(s.len().saturating_sub(1));
-    let n: i64 = num
-        .parse()
-        .context("--since wants <number><d|h|m>, e.g. 7d")?;
-    match unit {
-        "d" => Ok(Duration::days(n)),
-        "h" => Ok(Duration::hours(n)),
-        "m" => Ok(Duration::minutes(n)),
-        _ => anyhow::bail!("--since wants <number><d|h|m>, e.g. 7d"),
+    const USAGE: &str = "--since wants <number><d|h|m>, e.g. 7d";
+    let (idx, unit_char) = s.char_indices().next_back().context(USAGE)?;
+    let n: i64 = s[..idx].parse().context(USAGE)?;
+    if n <= 0 {
+        anyhow::bail!(USAGE);
+    }
+    match unit_char {
+        'd' => Ok(Duration::days(n)),
+        'h' => Ok(Duration::hours(n)),
+        'm' => Ok(Duration::minutes(n)),
+        _ => anyhow::bail!(USAGE),
     }
 }
 
@@ -87,8 +89,8 @@ pub fn aggregate(recs: &[StatRecord]) -> Value {
         let entry = by_adapter
             .entry(r.adapter.clone())
             .or_insert_with(|| json!({"calls": 0, "saved": 0}));
-        entry["calls"] = json!(entry["calls"].as_i64().unwrap() + 1);
-        entry["saved"] = json!(entry["saved"].as_i64().unwrap() + r.saved);
+        entry["calls"] = json!(entry["calls"].as_i64().unwrap_or(0) + 1);
+        entry["saved"] = json!(entry["saved"].as_i64().unwrap_or(0) + r.saved);
     }
     json!({
         "calls": recs.len(),
@@ -141,6 +143,15 @@ mod tests {
         assert_eq!(parse_since("24h").unwrap(), chrono::Duration::hours(24));
         assert_eq!(parse_since("30m").unwrap(), chrono::Duration::minutes(30));
         assert!(parse_since("7x").is_err());
+    }
+
+    #[test]
+    fn since_rejects_multibyte_and_nonpositive() {
+        assert!(parse_since("7é").is_err());
+        assert!(parse_since("é").is_err());
+        assert!(parse_since("-1d").is_err());
+        assert!(parse_since("0d").is_err());
+        assert!(parse_since("").is_err());
     }
 
     #[test]

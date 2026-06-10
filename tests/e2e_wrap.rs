@@ -71,3 +71,24 @@ fn stats_records_and_reports() {
         .success()
         .stdout(contains("calls: 1"));
 }
+
+#[test]
+fn bad_since_exits_2_not_panic() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["stats", "--since", "7é"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn raw_mode_writes_no_stats() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["--raw", "sh", "-c", "echo hi"])
+        .assert()
+        .success();
+    assert!(!tmp.path().join("cartoon/stats.jsonl").exists());
+}
