@@ -26,7 +26,9 @@ fn main() {
             }
         },
         Ok(cartoon::cli::Mode::Adapters) => {
-            println!("(no adapters yet)");
+            for a in cartoon::adapters::registry() {
+                println!("{}: {}", a.name(), a.matches());
+            }
             0
         }
         Err(e) => {

@@ -1,0 +1,7 @@
+{
+  "name": "cartoon-e2e-jsproj",
+  "private": true,
+  "jest": {
+    "testEnvironment": "node"
+  }
+}
