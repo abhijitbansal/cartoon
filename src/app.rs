@@ -75,8 +75,7 @@ fn run_with_adapter(
     };
     let mut argv_run = prepared.argv.clone();
     argv_run.extend(fast_args.iter().cloned());
-    let joined_fast = fast_args.join(" ");
-    let mut fast_note = (!fast_args.is_empty()).then(|| joined_fast.clone());
+    let mut fast_note = (!fast_args.is_empty()).then(|| fast_args.join(" "));
     let mut captured = match runner::run(&argv_run) {
         Ok(c) => c,
         Err(e) => return not_found_or_err(e, argv),
@@ -84,15 +83,9 @@ fn run_with_adapter(
     let mut code = runner::exit_code(&captured.status);
     // Bounded fallback: pytest exits 4 (usage error) when xdist is missing.
     // Nothing executed, so one serial retry is safe. Only on the exact
-    // signature mentioning the full joined args WE injected ("-n auto") —
-    // short per-arg substrings like "-n" could falsely match user paths
-    // echoed in stderr, so we require the whole string.
-    if fast_note.is_some()
-        && code == 4
-        && captured.stderr.contains("unrecognized arguments")
-        && !joined_fast.is_empty()
-        && captured.stderr.contains(&joined_fast)
-    {
+    // signature naming an arg WE injected in the unrecognized-arguments
+    // list — a user's own typo'd args won't match and pass through.
+    if fast_note.is_some() && code == 4 && fast_args_rejected(&captured.stderr, &fast_args) {
         eprintln!("cartoon: --fast unavailable (pytest-xdist not installed?); reran serially");
         fast_note = None;
         captured = match runner::run(&prepared.argv) {
@@ -148,6 +141,22 @@ fn run_with_adapter(
     }
 }
 
+/// True when the runner's usage error names one of the args WE injected.
+/// pytest prints `unrecognized arguments: <tok> [<tok>...]` but may list only
+/// the first offending token (e.g. `-n` without `auto`), so match exact
+/// whitespace-separated tokens, not the joined string.
+fn fast_args_rejected(stderr: &str, fast_args: &[String]) -> bool {
+    stderr.lines().any(|line| {
+        line.split("unrecognized arguments:")
+            .nth(1)
+            .map(|rest| {
+                rest.split_whitespace()
+                    .any(|tok| fast_args.iter().any(|a| a == tok))
+            })
+            .unwrap_or(false)
+    })
+}
+
 fn not_found_or_err(e: anyhow::Error, argv: &[String]) -> Result<i32> {
     let not_found = e
         .downcast_ref::<std::io::Error>()
@@ -176,4 +185,40 @@ pub fn transform(stdout: &str, heuristic_on: bool) -> (String, &'static str) {
         return (heuristic::compress(stdout), "heuristic");
     }
     (stdout.to_string(), "passthrough")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rejected_when_only_first_token_listed() {
+        let stderr = "ERROR: usage: pytest [options]\npytest: error: unrecognized arguments: -n\n  inifile: /x/pyproject.toml\n";
+        assert!(fast_args_rejected(stderr, &args(&["-n", "auto"])));
+    }
+
+    #[test]
+    fn rejected_when_both_tokens_listed() {
+        let stderr = "pytest: error: unrecognized arguments: -n auto\n";
+        assert!(fast_args_rejected(stderr, &args(&["-n", "auto"])));
+    }
+
+    #[test]
+    fn not_rejected_by_dash_n_inside_a_path() {
+        let stderr =
+            "pytest: error: unrecognized arguments: --bogus\nhint: see tests/test-n-gram.py\n";
+        assert!(!fast_args_rejected(stderr, &args(&["-n", "auto"])));
+    }
+
+    #[test]
+    fn not_rejected_without_marker() {
+        assert!(!fast_args_rejected(
+            "some other exit-4 error",
+            &args(&["-n", "auto"])
+        ));
+    }
 }

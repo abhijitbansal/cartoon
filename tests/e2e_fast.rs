@@ -4,11 +4,12 @@ use predicates::prelude::*;
 /// Fake pytest that exits 4 on `-n` (xdist missing) and succeeds without it,
 /// writing minimal junit xml to the --junit-xml path cartoon injected.
 ///
-/// The stderr line `pytest: error: unrecognized arguments: -n auto` is
+/// The stderr line `pytest: error: unrecognized arguments: -n` is
 /// load-bearing: it is the exact signature src/app.rs's fallback matches
-/// (exit 4 + "unrecognized arguments" + the joined fast args). If real
-/// pytest ever changes this wording, update both the fallback and this
-/// fixture.
+/// (exit 4 + a line listing an injected token after "unrecognized
+/// arguments:"). Real pytest lists only the first offending token (`auto`
+/// is treated as a positional). If real pytest ever changes this wording,
+/// update both the fallback and this fixture.
 #[cfg(unix)]
 const FAKE_PYTEST: &str = r#"#!/bin/sh
 junit=""
@@ -21,7 +22,7 @@ for a in "$@"; do
 done
 if [ "$saw_n" = "1" ]; then
   echo "usage: pytest [options] [file_or_dir] [...]" >&2
-  echo "pytest: error: unrecognized arguments: -n auto" >&2
+  echo "pytest: error: unrecognized arguments: -n" >&2
   exit 4
 fi
 cat > "$junit" <<'XML'
