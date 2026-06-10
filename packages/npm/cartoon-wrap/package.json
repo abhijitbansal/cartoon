@@ -1,0 +1,15 @@
+{
+  "name": "cartoon-wrap",
+  "version": "0.0.0",
+  "description": "Token-optimized TOON output wrapper for any CLI (installs the `cartoon` binary)",
+  "license": "MIT",
+  "repository": "github:abhijitbansal/cartoon",
+  "bin": { "cartoon": "bin/cartoon.js" },
+  "optionalDependencies": {
+    "cartoon-wrap-darwin-arm64": "0.0.0",
+    "cartoon-wrap-darwin-x64": "0.0.0",
+    "cartoon-wrap-linux-arm64": "0.0.0",
+    "cartoon-wrap-linux-x64": "0.0.0",
+    "cartoon-wrap-win32-x64": "0.0.0"
+  }
+}

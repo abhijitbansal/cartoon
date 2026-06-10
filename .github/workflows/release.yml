@@ -101,3 +101,39 @@ jobs:
           args: --non-interactive --skip-existing wheels/*
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  npm-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cartoon-bin-*
+          path: bins
+      - name: publish platform packages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/npm-platform-packages.mjs "$VERSION" bins npm-out
+          for d in npm-out/*/; do
+            (cd "$d" && npm publish --access public)
+          done
+      - name: publish parent package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap
+          (cd packages/npm/cartoon-wrap && npm publish --access public)
+
+  crates-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --token ${{ secrets.CRATES_TOKEN }}
