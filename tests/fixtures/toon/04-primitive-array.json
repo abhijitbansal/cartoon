@@ -1,0 +1,1 @@
+{"input": {"tags": ["a", "b", "c"]}, "expected": "tags[3]: a,b,c"}

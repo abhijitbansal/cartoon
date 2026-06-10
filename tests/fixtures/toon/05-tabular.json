@@ -1,0 +1,1 @@
+{"input": {"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}, "expected": "users[2]{id,name}:\n  1,Alice\n  2,Bob"}

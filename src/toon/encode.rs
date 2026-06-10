@@ -39,8 +39,76 @@ fn object_lines(map: &serde_json::Map<String, Value>, depth: usize, lines: &mut 
     }
 }
 
-fn array_lines(_key: Option<&str>, _arr: &[Value], _depth: usize, _lines: &mut Vec<String>) {
-    unimplemented!("Task 6")
+fn array_lines(key: Option<&str>, arr: &[Value], depth: usize, lines: &mut Vec<String>) {
+    let head = |suffix: &str| match key {
+        Some(k) => format!("{}{}{}", indent(depth), k, suffix),
+        None => format!("{}{}", indent(depth), suffix),
+    };
+    if arr.is_empty() {
+        lines.push(head("[0]:"));
+        return;
+    }
+    if arr.iter().all(is_scalar) {
+        let row = arr.iter().map(scalar).collect::<Vec<_>>().join(",");
+        lines.push(format!("{} {}", head(&format!("[{}]:", arr.len())), row));
+        return;
+    }
+    if let Some(fields) = tabular_fields(arr) {
+        let header = fields
+            .iter()
+            .map(|f| key_str(f))
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(head(&format!("[{}]{{{}}}:", arr.len(), header)));
+        for item in arr {
+            let obj = item.as_object().expect("tabular item is object");
+            let row = fields
+                .iter()
+                .map(|f| scalar(&obj[f]))
+                .collect::<Vec<_>>()
+                .join(",");
+            lines.push(format!("{}{}", indent(depth + 1), row));
+        }
+        return;
+    }
+    lines.push(head(&format!("[{}]:", arr.len())));
+    for item in arr {
+        let mut item_lines: Vec<String> = Vec::new();
+        match item {
+            Value::Object(m) => object_lines(m, 0, &mut item_lines),
+            Value::Array(a) => array_lines(None, a, 0, &mut item_lines),
+            v => item_lines.push(scalar(v)),
+        }
+        for (i, l) in item_lines.iter().enumerate() {
+            let bullet = if i == 0 { "- " } else { "  " };
+            lines.push(format!("{}{}{}", indent(depth + 1), bullet, l));
+        }
+    }
+}
+
+fn is_scalar(v: &Value) -> bool {
+    !matches!(v, Value::Object(_) | Value::Array(_))
+}
+
+/// Same keys in same order, all values scalar → tabular form.
+fn tabular_fields(arr: &[Value]) -> Option<Vec<String>> {
+    let first = arr.first()?.as_object()?;
+    if first.is_empty() {
+        return None;
+    }
+    let fields: Vec<String> = first.keys().cloned().collect();
+    for item in arr {
+        let obj = item.as_object()?;
+        if obj.len() != fields.len() {
+            return None;
+        }
+        for f in &fields {
+            if !obj.get(f).map(is_scalar).unwrap_or(false) {
+                return None;
+            }
+        }
+    }
+    Some(fields)
 }
 
 fn key_str(k: &str) -> String {
@@ -135,5 +203,33 @@ mod tests {
     #[test]
     fn keys_with_special_chars_are_quoted() {
         assert_eq!(encode(&json!({"a key": 1})), "\"a key\": 1");
+    }
+
+    #[test]
+    fn primitive_array_inline() {
+        assert_eq!(encode(&json!({"tags": ["a", "b", "c"]})), "tags[3]: a,b,c");
+    }
+
+    #[test]
+    fn empty_array() {
+        assert_eq!(encode(&json!({"xs": []})), "xs[0]:");
+    }
+
+    #[test]
+    fn uniform_object_array_is_tabular() {
+        let v = json!({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]});
+        assert_eq!(encode(&v), "users[2]{id,name}:\n  1,Alice\n  2,Bob");
+    }
+
+    #[test]
+    fn mixed_array_is_list() {
+        let v = json!({"items": [1, {"a": 2}, [3]]});
+        assert_eq!(encode(&v), "items[3]:\n  - 1\n  - a: 2\n  - [1]: 3");
+    }
+
+    #[test]
+    fn root_array() {
+        let v = json!([{"id": 1}, {"id": 2}]);
+        assert_eq!(encode(&v), "[2]{id}:\n  1\n  2");
     }
 }

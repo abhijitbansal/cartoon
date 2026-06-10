@@ -1,0 +1,1 @@
+{"input": {"s": "hello, world", "n": "42", "e": "", "pad": " x"}, "expected": "s: \"hello, world\"\nn: \"42\"\ne: \"\"\npad: \" x\""}

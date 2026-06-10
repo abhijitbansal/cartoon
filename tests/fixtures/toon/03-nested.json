@@ -1,0 +1,1 @@
+{"input": {"outer": {"inner": {"k": "v"}}}, "expected": "outer:\n  inner:\n    k: v"}
