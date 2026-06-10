@@ -8,12 +8,13 @@ pub fn run_wrap(
     heuristic_on: bool,
     raw: bool,
     tags: &[String],
+    fast: bool,
     cfg: &Config,
 ) -> Result<i32> {
     // Adapter path: detect first, because prepare() must extend argv.
     if !raw {
         if let Some(adapter) = adapters::find_adapter(argv) {
-            return run_with_adapter(adapter.as_ref(), argv, tags, cfg);
+            return run_with_adapter(adapter.as_ref(), argv, tags, fast, cfg);
         }
     }
     let captured = match runner::run(argv) {
@@ -63,6 +64,7 @@ fn run_with_adapter(
     adapter: &dyn adapters::Adapter,
     argv: &[String],
     tags: &[String],
+    _fast: bool,
     cfg: &Config,
 ) -> Result<i32> {
     let prepared = adapter.prepare(argv.to_vec());

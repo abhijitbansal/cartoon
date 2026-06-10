@@ -8,13 +8,16 @@ fn main() {
             heuristic,
             raw,
             tags,
+            fast,
         }) => {
             let cfg = cartoon::config::load();
             let heuristic_on = heuristic || cfg.heuristic;
-            cartoon::app::run_wrap(&argv, heuristic_on, raw, &tags, &cfg).unwrap_or_else(|e| {
-                eprintln!("cartoon: {e}");
-                2
-            })
+            cartoon::app::run_wrap(&argv, heuristic_on, raw, &tags, fast, &cfg).unwrap_or_else(
+                |e| {
+                    eprintln!("cartoon: {e}");
+                    2
+                },
+            )
         }
         Ok(cartoon::cli::Mode::Stats { since }) => match cartoon::stats::report(since.as_deref()) {
             Ok(s) => {

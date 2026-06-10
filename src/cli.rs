@@ -23,6 +23,11 @@ pub struct Cli {
     #[arg(long = "tag", value_name = "TAG")]
     pub tags: Vec<String>,
 
+    /// Opt-in acceleration: inject parallelization args for runners that
+    /// support it (pytest: -n auto via pytest-xdist). Disclosed in output.
+    #[arg(long)]
+    pub fast: bool,
+
     /// Command to wrap plus its args (or: stats | adapters)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
@@ -35,6 +40,7 @@ pub enum Mode {
         heuristic: bool,
         raw: bool,
         tags: Vec<String>,
+        fast: bool,
     },
     Stats {
         since: Option<String>,
@@ -77,6 +83,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             heuristic: cli.heuristic,
             raw: cli.raw,
             tags: cli.tags,
+            fast: cli.fast,
         }),
     }
 }
@@ -134,7 +141,8 @@ mod tests {
                 argv: vec!["pytest".into(), "-q".into(), "--maxfail=1".into()],
                 heuristic: false,
                 raw: false,
-                tags: vec![]
+                tags: vec![],
+                fast: false
             }
         );
     }
@@ -192,7 +200,8 @@ mod tests {
                 argv: vec!["pytest".into()],
                 heuristic: false,
                 raw: false,
-                tags: vec!["api".into(), "ci".into()]
+                tags: vec!["api".into(), "ci".into()],
+                fast: false
             }
         );
     }
@@ -241,5 +250,30 @@ mod tests {
     fn logs_bad_args_error() {
         assert!(parse_mode(Cli::parse_from(["cartoon", "logs", "--nope"])).is_err());
         assert!(parse_mode(Cli::parse_from(["cartoon", "logs", "id1", "id2"])).is_err());
+    }
+
+    #[test]
+    fn fast_flag_before_command() {
+        let m = mode(&["cartoon", "--fast", "pytest", "-q"]);
+        assert!(matches!(m, Mode::Wrap { fast: true, .. }));
+    }
+
+    #[test]
+    fn fast_composes_with_tag_and_heuristic() {
+        let m = mode(&["cartoon", "--fast", "--tag", "ci", "--heuristic", "make"]);
+        assert!(matches!(
+            m,
+            Mode::Wrap {
+                fast: true,
+                heuristic: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fast_defaults_off() {
+        let m = mode(&["cartoon", "pytest"]);
+        assert!(matches!(m, Mode::Wrap { fast: false, .. }));
     }
 }
