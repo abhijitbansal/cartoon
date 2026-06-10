@@ -39,7 +39,7 @@ fixtures instantiate per worker. Therefore:
 | jest / unittest / cargo | `--fast` is a silent no-op (jest already parallel by default; unittest has no parallel runner; no cargo adapter). Adapter trait gains the hook so future adapters can opt in. |
 | Disclosure | Transformed output gains one line after `runner:`: `fast: -n auto`. Only when injection actually happened (not on no-op runners, not on fallback). |
 | `--lf` (failed-first) | **Out of scope.** Auto-injecting `--lf` silently shrinks the test selection on reruns; an agent reading `total: 5` could believe a 700-test suite is green. The agent can pass `--lf` itself (user args pass through untouched). |
-| Stats / archive | Unchanged. `mode` stays the adapter name; fast-ness visible in archived argv (meta.json already records final argv). |
+| Stats / archive | Unchanged. Disclosure happens via the TOON 'fast:' line only; meta.json keeps recording the user argv. |
 
 ## Fallback: xdist missing
 
@@ -99,13 +99,13 @@ cartoon --fast npx jest                # accepted, no-op (jest already parallel)
 ```
 
 `--fast` joins `--heuristic`/`--raw`/`--tag` as a pre-command global flag.
-Not valid for `stats`/`logs`/`adapters` subcommands (same as other wrap flags).
+Ignored by the `stats`/`logs`/`adapters` subcommands (same as the other wrap flags).
 
 ## Output example
 
 ```
 runner: pytest
-fast: -n auto
+fast: "-n auto"
 summary:
   total: 723
   ...
@@ -122,7 +122,7 @@ install hint.
 | xdist missing | one bounded serial retry + stderr note (see Fallback) |
 | Tests fail under --fast | normal failure report; `fast: -n auto` line is the agent's signal to rerun serially before debugging |
 | `--fast` with no adapter match | ignored; normal json/heuristic/passthrough path |
-| `--fast stats` / `--fast logs` | clap error (flag belongs to wrap mode) |
+| `--fast stats` / `--fast logs` | silently ignored (consistent with --heuristic/--raw/--tag on subcommands) |
 
 ## Testing strategy (TDD)
 

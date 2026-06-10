@@ -36,6 +36,7 @@ cartoon adapters               # list built-in adapters
 cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
+cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 ```
 
 Failing test run, before (pytest, ~4800 tokens) vs after (~300 tokens):
@@ -73,6 +74,19 @@ with `cat` or `cartoon logs <id>` instead of rerunning. Passthrough and
 `--raw` output stay byte-identical (no footer) but are still archived.
 Retention is capped (`keep_runs`, default 50; `max_archive_mb`, default 50);
 `keep_runs = 0` disables archiving.
+
+## Fast mode
+
+`cartoon --fast pytest` appends `-n auto` so [pytest-xdist] runs the suite in
+parallel. Strictly opt-in — parallel execution is NOT "same behavior" (test
+order changes; shared-state tests can flake), so cartoon never enables it on
+its own and always discloses it with a `fast: "-n auto"` line in the report.
+Failures under `--fast`? Rerun without it before debugging. If pytest-xdist
+isn't installed, cartoon retries serially once and notes it on stderr.
+Other runners: no-op (jest is already parallel; unittest has no parallel
+runner).
+
+[pytest-xdist]: https://pypi.org/project/pytest-xdist/
 
 ## Config
 
