@@ -10,12 +10,19 @@ use clap::Parser;
   adapters                                   list built-in adapters
   logs [--tag <t>]                           list archived raw runs
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
+  logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
+  learn [--since <7d|24h|30m>]               config suggestions from your runs
 
 Every wrapped run archives its complete raw stdout/stderr and prints the
-location as a `raw_log:` footer — read that instead of rerunning unwrapped.
+location as a `raw_log:` footer — `cartoon logs grep` that instead of
+rerunning unwrapped.
 
-`stats`, `adapters`, and `logs` are reserved words; to wrap a binary \
-literally named `stats`, use: cartoon env stats"
+Non-adapter output compresses through the safe tier by default (ANSI,
+progress, duplicate and blank collapse — non-lossy in practice);
+--compress=aggressive adds lossy rules with the raw log as escape hatch.
+
+`stats`, `adapters`, `logs`, and `learn` are reserved words; to wrap a \
+binary literally named `stats`, use: cartoon env stats"
 )]
 pub struct Cli {
     /// Compression level for non-adapter output: safe (default) | aggressive

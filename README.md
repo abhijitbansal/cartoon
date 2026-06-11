@@ -46,15 +46,23 @@ integration matrix: [docs/agents.md](docs/agents.md).
 ```bash
 cartoon pytest                 # asymmetric test report in TOON
 cartoon jest src/              # same for jest
+cartoon vitest run             # same for vitest (watch mode passes through)
 cartoon python -m unittest     # same for unittest
+cartoon ruff check .           # lint diagnostics as a compact TOON table
+cartoon npx eslint src/        # same for eslint
+cartoon npx tsc --noEmit       # same for tsc type errors
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
-cartoon --heuristic make       # lossy compression for plain text (opt-in)
+cartoon make                   # safe tier auto-on: ANSI/progress/dupe collapse
+cartoon --compress=aggressive make   # opt-in lossy: level filter, diag tables, windowing
+cartoon -c 'cd app && make -j4'      # wrap a shell command string
 cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
+cartoon learn                  # mine your own runs for config suggestions
 cartoon adapters               # list built-in adapters
 cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
+cartoon logs grep ERROR --last # search a raw log instead of re-reading it
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 ```
 
@@ -80,11 +88,12 @@ traces:
 - Exit codes always mirrored — `cartoon pytest && deploy` behaves like
   `pytest && deploy`.
 - If parsing fails, the original output passes through untouched (one
-  warning on stderr). Information is never silently lost.
+  warning on stderr). The safe tier preserves all non-redundant text;
+  lossy tiers are opt-in and always leave a `raw_log` pointer to the
+  unmodified output.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
   byte-identically. Savings are never negative.
-- Heuristic (lossy) mode is off unless you ask for it.
 
 ## Raw log archive
 
@@ -115,12 +124,21 @@ runner).
 `~/.config/cartoon/config.toml`:
 
 ```toml
-heuristic = false    # default for lossy fallback
 tokenizer = "o200k"  # or "approx" (bytes/4) for zero-cost estimates
 trace_lines = 20     # per-failure traceback cap
 keep_runs = 50       # archived raw logs to keep (0 disables)
 max_archive_mb = 50  # max total archive size
+
+[compress]
+level = "safe"       # default for non-adapter output: safe | aggressive
+
+[command.docker]
+level = "aggressive" # per-command pin; CLI --compress wins over config
 ```
+
+Compression precedence: `--compress` flag > `--heuristic` (deprecated alias
+for aggressive) > `[command.<name>]` > `[compress]` > legacy `heuristic`
+key > safe.
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
 
@@ -131,11 +149,18 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 | pytest | `pytest`, `python -m pytest` | injected `--junit-xml` |
 | unittest | `python -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
+| vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
+| ruff | `ruff check` | injected `--output-format json` |
+| eslint | `eslint`, `npx eslint` | injected `--format json` |
+| tsc | `tsc`, `npx tsc` (not `--watch`) | injected `--pretty false` |
 
-No adapter match → JSON auto-detection → optional heuristic → passthrough.
+No adapter match → JSON auto-detection → compression ladder (safe tier by
+default, aggressive opt-in) → passthrough when nothing pays for itself.
 
-Want another runner (cargo test, go test, vitest, rspec)? See
+Want another runner (cargo test, go test, rspec)? See
 [CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.
+The roadmap lives in
+[docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md](docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md).
 
 ## Support
 
