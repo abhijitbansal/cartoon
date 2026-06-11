@@ -22,6 +22,25 @@ npm install -g cartoon-wrap    # installs the `cartoon` binary
 cargo install cartoon
 ```
 
+## For agents (Claude Code, Codex, Copilot, Cursor, …)
+
+Teach your agent to use cartoon automatically — and to install it when
+missing — with the skills shipped in this repo:
+
+```text
+# Claude Code (plugin)
+/plugin marketplace add abhijitbansal/cartoon
+/plugin install cartoon@cartoon
+```
+
+```bash
+# Everything else (skills.sh CLI auto-detects 40+ agents)
+npx skills add abhijitbansal/cartoon
+```
+
+Copy-paste blocks for AGENTS.md / copilot-instructions.md and the full
+integration matrix: [docs/agents.md](docs/agents.md).
+
 ## Use
 
 ```bash

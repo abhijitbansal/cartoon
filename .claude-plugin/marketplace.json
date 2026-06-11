@@ -1,0 +1,17 @@
+{
+  "name": "cartoon",
+  "owner": {
+    "name": "Abhijit Bansal",
+    "email": "contact@abhijitbansal.com"
+  },
+  "metadata": {
+    "description": "Skills and commands that teach coding agents to use cartoon: token-optimized TOON output for test runs and JSON CLIs"
+  },
+  "plugins": [
+    {
+      "name": "cartoon",
+      "source": "./",
+      "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens"
+    }
+  ]
+}
