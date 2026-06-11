@@ -55,11 +55,9 @@ pub fn compress(text: &str, level: CompressLevel) -> String {
     let safe = collapse_repeats(&collapse_blanks(&collapse_progress(&strip_ansi(text))));
     match level {
         CompressLevel::Safe => safe,
-        CompressLevel::Aggressive => {
-            window_errors(&extract_diagnostics(&collapse_near_dups(&filter_levels(
-                &safe,
-            ))))
-        }
+        CompressLevel::Aggressive => window_errors(&extract_diagnostics(&collapse_near_dups(
+            &filter_levels(&safe),
+        ))),
     }
 }
 

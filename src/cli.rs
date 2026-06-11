@@ -41,6 +41,12 @@ pub struct Cli {
     #[arg(long)]
     pub fast: bool,
 
+    /// Wrap a shell command string (like sh -c). Simple commands are
+    /// adapter-detected; strings with shell operators run via the shell
+    /// and compress through the generic ladder.
+    #[arg(short = 'c', long = "shell", value_name = "STRING")]
+    pub shell: Option<String>,
+
     /// Command to wrap plus its args (or: stats | adapters)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
@@ -61,12 +67,26 @@ pub enum Mode {
     },
     Adapters,
     Logs(LogsQuery),
+    Learn {
+        since: Option<String>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
 pub enum LogsQuery {
-    List { tag: Option<String> },
-    Show { sel: RunSel, stream: StreamSel },
+    List {
+        tag: Option<String>,
+    },
+    Show {
+        sel: RunSel,
+        stream: StreamSel,
+    },
+    /// Search a run's raw output instead of re-reading all of it.
+    Grep {
+        sel: RunSel,
+        pattern: String,
+        context: usize,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -82,7 +102,64 @@ pub enum StreamSel {
     Stderr,
 }
 
+/// Shell metacharacters that force `sh -c` execution; a string without
+/// any of these is split into argv so adapters can detect the command.
+fn needs_shell(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '|' | '&'
+                | ';'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '$'
+                | '`'
+                | '\\'
+                | '"'
+                | '\''
+                | '*'
+                | '?'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '~'
+                | '\n'
+                | '='
+        )
+    })
+}
+
+pub fn shell_argv(s: &str) -> Vec<String> {
+    if needs_shell(s) {
+        let sh = if cfg!(windows) { "cmd" } else { "sh" };
+        let flag = if cfg!(windows) { "/C" } else { "-c" };
+        vec![sh.to_string(), flag.to_string(), s.to_string()]
+    } else {
+        s.split_whitespace().map(String::from).collect()
+    }
+}
+
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
+    if let Some(s) = cli.shell {
+        if !cli.command.is_empty() {
+            anyhow::bail!("-c/--shell takes the whole command as one string; drop the extra args");
+        }
+        let argv = shell_argv(&s);
+        if argv.is_empty() {
+            anyhow::bail!("-c/--shell got an empty command string");
+        }
+        return Ok(Mode::Wrap {
+            argv,
+            compress: cli.compress,
+            heuristic: cli.heuristic,
+            raw: cli.raw,
+            tags: cli.tags,
+            fast: cli.fast,
+        });
+    }
     if cli.command.is_empty() {
         anyhow::bail!("no command given. usage: cartoon <cmd> [args...]");
     }
@@ -92,6 +169,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         }),
         "adapters" => Ok(Mode::Adapters),
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
+        "learn" => Ok(Mode::Learn {
+            since: parse_since(&cli.command[1..])?,
+        }),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
             compress: cli.compress,
@@ -112,8 +192,10 @@ fn parse_since(args: &[String]) -> anyhow::Result<Option<String>> {
 }
 
 fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
-    const USAGE: &str =
-        "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr]";
+    const USAGE: &str = "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr] | cartoon logs grep <pattern> [<id> | --last] [-C <lines>]";
+    if args.first().map(String::as_str) == Some("grep") {
+        return parse_logs_grep(&args[1..], USAGE);
+    }
     let mut sel: Option<RunSel> = None;
     let mut stream = StreamSel::Both;
     let mut tag: Option<String> = None;
@@ -136,6 +218,33 @@ fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
         (Some(sel), None) => Ok(LogsQuery::Show { sel, stream }),
         _ => anyhow::bail!(USAGE),
     }
+}
+
+fn parse_logs_grep(args: &[String], usage: &str) -> anyhow::Result<LogsQuery> {
+    let mut pattern: Option<String> = None;
+    let mut sel: Option<RunSel> = None;
+    let mut context = 2usize;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--last" if sel.is_none() => sel = Some(RunSel::Last),
+            "-C" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!(usage.to_string()))?;
+                context = v.parse().map_err(|_| anyhow::anyhow!(usage.to_string()))?;
+            }
+            s if pattern.is_none() => pattern = Some(s.to_string()),
+            s if sel.is_none() && !s.starts_with('-') => sel = Some(RunSel::Id(s.to_string())),
+            _ => anyhow::bail!(usage.to_string()),
+        }
+    }
+    let pattern = pattern.ok_or_else(|| anyhow::anyhow!(usage.to_string()))?;
+    Ok(LogsQuery::Grep {
+        sel: sel.unwrap_or(RunSel::Last),
+        pattern,
+        context,
+    })
 }
 
 #[cfg(test)]

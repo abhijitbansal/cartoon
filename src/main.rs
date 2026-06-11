@@ -44,6 +44,11 @@ fn main() {
             eprintln!("cartoon: {e}");
             2
         }),
+        Ok(cartoon::cli::Mode::Learn { since }) => cartoon::learn::run(since.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
         Err(e) => {
             eprintln!("cartoon: {e}");
             2

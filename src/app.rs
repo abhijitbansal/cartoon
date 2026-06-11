@@ -121,7 +121,7 @@ fn run_with_adapter(
             passthrough_stdout,
             passthrough_stderr,
         }) => {
-            let mut out = adapters::report::render(&report, cfg.trace_lines, fast_note.as_deref());
+            let mut out = report.render(cfg.trace_lines, fast_note.as_deref());
             if let Some(r) = &run {
                 out.push_str(&format!(
                     "\n{}",

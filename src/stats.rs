@@ -103,17 +103,17 @@ pub fn aggregate(recs: &[StatRecord]) -> Value {
     })
 }
 
-/// The `cartoon stats` report — output is itself TOON (dogfooding).
-pub fn report(since: Option<&str>) -> Result<String> {
+/// Read stat records, optionally filtered by a `--since` window.
+pub fn read_records(since: Option<&str>) -> Result<Vec<StatRecord>> {
     let cutoff: Option<DateTime<Utc>> = match since {
         Some(s) => Some(Utc::now() - parse_since(s)?),
         None => None,
     };
     let Some(path) = crate::paths::stats_file() else {
-        return Ok("calls: 0".into());
+        return Ok(Vec::new());
     };
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let recs: Vec<StatRecord> = text
+    Ok(text
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .filter(|r: &StatRecord| match cutoff {
@@ -122,7 +122,12 @@ pub fn report(since: Option<&str>) -> Result<String> {
                 .map(|t| t.with_timezone(&Utc) >= c)
                 .unwrap_or(false),
         })
-        .collect();
+        .collect())
+}
+
+/// The `cartoon stats` report — output is itself TOON (dogfooding).
+pub fn report(since: Option<&str>) -> Result<String> {
+    let recs = read_records(since)?;
     Ok(crate::toon::encode(&aggregate(&recs)))
 }
 

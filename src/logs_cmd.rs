@@ -11,17 +11,80 @@ pub fn run(query: LogsQuery) -> Result<i32> {
             Ok(0)
         }
         LogsQuery::Show { sel, stream } => {
-            let id = match sel {
-                RunSel::Id(id) => id,
-                RunSel::Last => {
-                    archive::last_id().ok_or_else(|| anyhow::anyhow!("no archived runs yet"))?
-                }
-            };
+            let id = resolve_sel(sel)?;
             let (meta, stdout, stderr) = archive::load(&id)?;
             println!("{}", render_show(&meta, &stdout, &stderr, &stream));
             Ok(0)
         }
+        LogsQuery::Grep {
+            sel,
+            pattern,
+            context,
+        } => {
+            let id = resolve_sel(sel)?;
+            let (_, stdout, stderr) = archive::load(&id)?;
+            let re =
+                regex::Regex::new(&pattern).map_err(|e| anyhow::anyhow!("invalid pattern: {e}"))?;
+            print!("{}", render_grep(&id, &stdout, &stderr, &re, context));
+            Ok(0)
+        }
     }
+}
+
+fn resolve_sel(sel: RunSel) -> Result<String> {
+    match sel {
+        RunSel::Id(id) => Ok(id),
+        RunSel::Last => archive::last_id().ok_or_else(|| anyhow::anyhow!("no archived runs yet")),
+    }
+}
+
+/// Cap on emitted match blocks: grep exists to AVOID re-reading a huge log.
+const MAX_MATCHES: usize = 50;
+
+pub fn render_grep(
+    id: &str,
+    stdout: &str,
+    stderr: &str,
+    re: &regex::Regex,
+    context: usize,
+) -> String {
+    let mut out = String::new();
+    let mut total = 0usize;
+    for (stream, text) in [("stdout", stdout), ("stderr", stderr)] {
+        let lines: Vec<&str> = text.lines().collect();
+        let hits: Vec<usize> = (0..lines.len())
+            .filter(|&i| re.is_match(lines[i]))
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("--- {stream} ({} matches) ---\n", hits.len()));
+        let mut last_end: Option<usize> = None;
+        for &i in hits.iter().take(MAX_MATCHES.saturating_sub(total)) {
+            let lo = i.saturating_sub(context);
+            let hi = (i + context).min(lines.len() - 1);
+            if let Some(le) = last_end {
+                if lo > le + 1 {
+                    out.push_str("...\n");
+                }
+            }
+            let start = last_end.map_or(lo, |le| lo.max(le + 1));
+            for (j, line) in lines.iter().enumerate().take(hi + 1).skip(start) {
+                out.push_str(&format!("{}:{}\n", j + 1, line));
+            }
+            last_end = Some(hi);
+        }
+        total += hits.len();
+        if hits.len() > MAX_MATCHES {
+            out.push_str(&format!(
+                "  (capped at {MAX_MATCHES} matches; cartoon logs {id} for the full log)\n"
+            ));
+        }
+    }
+    if out.is_empty() {
+        out = format!("no matches in run {id}\n");
+    }
+    out
 }
 
 pub fn render_list(metas: &[RunMeta]) -> String {

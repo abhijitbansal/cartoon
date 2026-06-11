@@ -71,7 +71,8 @@ mod tests {
 
     #[test]
     fn hex_ids_normalize() {
-        let input = "pulled layer a1b2c3d4e5f6\npulled layer 998877665544\npulled layer deadbeef0123\nok";
+        let input =
+            "pulled layer a1b2c3d4e5f6\npulled layer 998877665544\npulled layer deadbeef0123\nok";
         assert_eq!(
             collapse_near_dups(input),
             "pulled layer a1b2c3d4e5f6\n  (x3 similar)\nok"

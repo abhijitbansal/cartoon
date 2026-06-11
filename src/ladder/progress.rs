@@ -5,9 +5,8 @@ use std::sync::OnceLock;
 /// bar segment (====>, ----, ###) alongside a number.
 fn is_progress_line(line: &str) -> bool {
     static PAT: OnceLock<Regex> = OnceLock::new();
-    let pat = PAT.get_or_init(|| {
-        Regex::new(r"(\d{1,3}\s*%)|(\[[=\-#>\s]{4,}\])|([=#]{4,}>)").unwrap()
-    });
+    let pat =
+        PAT.get_or_init(|| Regex::new(r"(\d{1,3}\s*%)|(\[[=\-#>\s]{4,}\])|([=#]{4,}>)").unwrap());
     pat.is_match(line)
 }
 
