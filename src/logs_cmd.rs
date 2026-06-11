@@ -58,9 +58,11 @@ pub fn render_grep(
         if hits.is_empty() {
             continue;
         }
+        let quota = MAX_MATCHES.saturating_sub(total);
+        let emitted = hits.len().min(quota);
         out.push_str(&format!("--- {stream} ({} matches) ---\n", hits.len()));
         let mut last_end: Option<usize> = None;
-        for &i in hits.iter().take(MAX_MATCHES.saturating_sub(total)) {
+        for &i in hits.iter().take(quota) {
             let lo = i.saturating_sub(context);
             let hi = (i + context).min(lines.len() - 1);
             if let Some(le) = last_end {
@@ -74,10 +76,12 @@ pub fn render_grep(
             }
             last_end = Some(hi);
         }
-        total += hits.len();
-        if hits.len() > MAX_MATCHES {
+        total += emitted;
+        // Never truncate silently: disclose whenever the quota cut matches.
+        if emitted < hits.len() {
             out.push_str(&format!(
-                "  (capped at {MAX_MATCHES} matches; cartoon logs {id} for the full log)\n"
+                "  (showing {emitted} of {} matches; cartoon logs {id} for the full log)\n",
+                hits.len()
             ));
         }
     }
@@ -179,5 +183,37 @@ mod tests {
             &crate::cli::StreamSel::Stdout,
         );
         assert_eq!(out, "RAW OUT");
+    }
+
+    #[test]
+    fn grep_finds_matches_with_context() {
+        let re = regex::Regex::new("ERROR").unwrap();
+        let out = render_grep("id1", "a\nb\nERROR boom\nd\ne", "", &re, 1);
+        assert!(out.contains("--- stdout (1 matches) ---"));
+        assert!(out.contains("2:b\n3:ERROR boom\n4:d"));
+        assert!(!out.contains("1:a"), "context capped: {out}");
+    }
+
+    #[test]
+    fn grep_no_matches_says_so() {
+        let re = regex::Regex::new("nope").unwrap();
+        assert!(render_grep("id1", "a\nb", "c", &re, 2).contains("no matches in run id1"));
+    }
+
+    #[test]
+    fn grep_cap_spans_streams_and_discloses_truncation() {
+        let re = regex::Regex::new("hit").unwrap();
+        let stdout: String = (0..60)
+            .map(|i| format!("hit {i}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+        let stderr = "hit err one\nhit err two\n";
+        let out = render_grep("id1", &stdout, stderr, &re, 0);
+        assert!(out.contains("--- stdout (60 matches) ---"));
+        assert!(out.contains("(showing 50 of 60 matches"), "got:\n{out}");
+        // stderr quota exhausted: header + disclosure, no silent truncation
+        assert!(out.contains("--- stderr (2 matches) ---"));
+        assert!(out.contains("(showing 0 of 2 matches"), "got:\n{out}");
+        assert!(!out.contains("hit err one"));
     }
 }
