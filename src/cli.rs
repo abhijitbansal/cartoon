@@ -12,6 +12,7 @@ use clap::Parser;
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
   learn [--since <7d|24h|30m>]               config suggestions from your runs
+  hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
 
 Every wrapped run archives its complete raw stdout/stderr and prints the
 location as a `raw_log:` footer — `cartoon logs grep` that instead of
@@ -76,6 +77,9 @@ pub enum Mode {
     Logs(LogsQuery),
     Learn {
         since: Option<String>,
+    },
+    Hook {
+        args: Vec<String>,
     },
 }
 
@@ -178,6 +182,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
         "learn" => Ok(Mode::Learn {
             since: parse_since(&cli.command[1..])?,
+        }),
+        "hook" => Ok(Mode::Hook {
+            args: cli.command[1..].to_vec(),
         }),
         _ => Ok(Mode::Wrap {
             argv: cli.command,

@@ -49,6 +49,10 @@ fn main() {
                 eprintln!("cartoon: {e}");
                 2
             }),
+        Ok(cartoon::cli::Mode::Hook { args }) => cartoon::hook::run(&args).unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Err(e) => {
             eprintln!("cartoon: {e}");
             2

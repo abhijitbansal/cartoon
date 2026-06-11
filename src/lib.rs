@@ -4,6 +4,7 @@ pub mod archive;
 pub mod cli;
 pub mod config;
 pub mod fallback;
+pub mod hook;
 pub mod ladder;
 pub mod learn;
 pub mod logs_cmd;

@@ -41,6 +41,29 @@ npx skills add abhijitbansal/cartoon
 Copy-paste blocks for AGENTS.md / copilot-instructions.md and the full
 integration matrix: [docs/agents.md](docs/agents.md).
 
+### Auto-wrap hook (Claude Code)
+
+The plugin ships a `PreToolUse` hook that rewrites noisy Bash commands to
+run under cartoon automatically — no skill recall needed. Standalone
+install (without the plugin):
+
+```bash
+cartoon hook install     # adds the hook to ~/.claude/settings.json
+cartoon hook status      # check where it's active
+cartoon hook uninstall   # remove it
+```
+
+What it wraps: dev-loop commands only — test runners, linters,
+typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
+`mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
+`npm test|ci`, …). Because a rewrite auto-approves the call, the allowlist
+is deliberately conservative: infra CLIs (docker, kubectl, terraform, gh,
+aws) and mutating subcommands (`cargo publish`, `npm install`) are never
+wrapped, commands that change shell state (`cd`, `export`, `source`) pass
+through untouched, and anything unrecognized is left alone (fail-open).
+The net-savings guard still applies — worst case the output is
+byte-identical.
+
 ## Use
 
 ```bash

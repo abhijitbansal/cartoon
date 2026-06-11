@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite || exit 0",
+            "timeout": 10,
+            "statusMessage": "cartoon: checking for auto-wrap"
+          }
+        ]
+      }
+    ]
+  }
+}
