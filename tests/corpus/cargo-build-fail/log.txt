@@ -1,0 +1,46 @@
+   Compiling cartoon-fixture-proj v0.1.0 (/work/myproj)
+error[E0425]: cannot find value `c` in this scope
+ --> src/lib.rs:2:9
+  |
+2 |     a + c
+  |         ^
+  |
+help: a local variable with a similar name exists
+  |
+2 -     a + c
+2 +     a + a
+  |
+
+error[E0308]: mismatched types
+  --> src/lib.rs:10:5
+   |
+ 9 | pub fn bad_type() -> u8 {
+   |                      -- expected `u8` because of return type
+10 |     "not a number"
+   |     ^^^^^^^^^^^^^^ expected `u8`, found `&str`
+
+error[E0382]: borrow of moved value: `s`
+ --> src/lib.rs:6:5
+  |
+4 | pub fn take(s: String) -> usize {
+  |             - move occurs because `s` has type `String`, which does not implement the `Copy` trait
+5 |     consume(s);
+  |             - value moved here
+6 |     s.len()
+  |     ^ value borrowed here after move
+  |
+note: consider changing this parameter type in function `consume` to borrow instead if owning the value isn't necessary
+ --> src/lib.rs:8:16
+  |
+8 | fn consume(_s: String) {}
+  |    -------     ^^^^^^ this parameter takes ownership of the value
+  |    |
+  |    in this function
+help: consider cloning the value if the performance cost is acceptable
+  |
+5 |     consume(s.clone());
+  |              ++++++++
+
+Some errors have detailed explanations: E0308, E0382, E0425.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `cartoon-fixture-proj` (lib) due to 3 previous errors
