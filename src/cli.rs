@@ -5,8 +5,17 @@ use clap::Parser;
     name = "cartoon",
     version,
     about = "Token-optimized TOON output wrapper for any CLI",
-    after_help = "Subcommands `stats`, `adapters`, and `logs` are reserved words; \
-to wrap a binary literally named `stats`, use: cartoon env stats"
+    after_help = "Subcommands:
+  stats [--since <7d|24h|30m>]               tokens saved, per adapter
+  adapters                                   list built-in adapters
+  logs [--tag <t>]                           list archived raw runs
+  logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
+
+Every wrapped run archives its complete raw stdout/stderr and prints the
+location as a `raw_log:` footer — read that instead of rerunning unwrapped.
+
+`stats`, `adapters`, and `logs` are reserved words; to wrap a binary \
+literally named `stats`, use: cartoon env stats"
 )]
 pub struct Cli {
     /// Enable the lossy heuristic fallback for this call

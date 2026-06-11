@@ -25,7 +25,7 @@ uv tool install cartoon        # preferred when uv exists
 pipx install cartoon           # Python fallback
 npm install -g cartoon-wrap    # Node (installs the `cartoon` binary)
 cargo install cartoon          # Rust
-cartoon adapters               # verify: lists pytest, unittest, jest
+cartoon adapters               # verify: lists the test-runner adapters
 ```
 
 If no toolchain is available or installs need permission you don't have,
@@ -37,23 +37,21 @@ Prefix only — all flags and args of the wrapped command stay verbatim:
 
 ```bash
 cartoon pytest                          # instead of: pytest
-cartoon python -m pytest tests/ -x      # any pytest invocation
-cartoon npx jest src/                   # jest
-cartoon python -m unittest              # unittest
+cartoon npx jest src/                   # any supported runner
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
-cartoon --heuristic make                # lossy compression for plain text
-cartoon --tag api pytest                # tag the archived run for later lookup
-cartoon stats --since 7d                # report tokens saved
 ```
 
 Read the result like a test report: `summary` has the counts; if
 `failed > 0`, the `failures[...]` rows and `traces` section contain
 everything needed to fix the code without rerunning unwrapped.
 
-Only when the user asks for faster test runs: `cartoon --fast pytest`
-appends `-n auto` (pytest-xdist) and discloses it with a `fast:` line.
-Parallel execution can change test behavior — don't enable it on your own,
-and rerun without `--fast` before debugging any failure seen with it.
+This file covers only the stable contract. For the current full set of
+flags, subcommands (stats, logs, …), and adapters, trust the binary over
+this document:
+
+```bash
+cartoon --help
+```
 
 ## Need the full output? Never rerun — read the archive
 
@@ -65,22 +63,16 @@ raw_log: ~/.local/state/cartoon/runs/20260611-051415-342d
 ```
 
 If the TOON summary dropped something you need (full tracebacks, warnings,
-print output), fetch the original instead of rerunning the command:
-
-```bash
-cat <raw_log path>/stdout.log           # full original stdout (stderr.log too)
-cartoon logs --last --stdout            # same, for the newest run
-cartoon logs                            # list archived runs
-cartoon logs --tag api                  # filter by tag
-cartoon logs <run-id> --stderr          # specific run, one stream
-```
+print output), read `<raw_log path>/stdout.log` (or `stderr.log`) instead
+of rerunning the command.
 
 ## Why wrapping is safe
 
 - Exit code is always mirrored: `cartoon pytest && deploy` behaves exactly
   like `pytest && deploy`. Check exit codes as usual.
-- If parsing fails, the original output passes through untouched with one
-  stderr warning. Information is never silently lost.
+- If parsing fails — or the compressed form wouldn't actually save tokens —
+  the original output passes through untouched. Information is never
+  silently lost.
 - User-provided args are never removed or reordered.
 
 ## When NOT to wrap
@@ -89,6 +81,9 @@ cartoon logs <run-id> --stderr          # specific run, one stream
 - When the user explicitly asks to see the full raw output.
 - Short commands (`git status`, `ls`) — no savings to be had.
 - Need the raw output just once? `cartoon --raw <cmd>` or drop the prefix.
+- Acceleration flags like `--fast` change how tests execute — only use them
+  when the user explicitly asks for faster runs, and rerun without them
+  before debugging any failure.
 
 ## Tell the user about savings
 
