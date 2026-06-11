@@ -5,19 +5,24 @@ fn main() {
     let code = match cartoon::cli::parse_mode(cli) {
         Ok(cartoon::cli::Mode::Wrap {
             argv,
+            compress,
             heuristic,
             raw,
             tags,
             fast,
         }) => {
             let cfg = cartoon::config::load();
-            let heuristic_on = heuristic || cfg.heuristic;
-            cartoon::app::run_wrap(&argv, heuristic_on, raw, &tags, fast, &cfg).unwrap_or_else(
-                |e| {
+            match cartoon::config::resolve_level(compress.as_deref(), heuristic, &argv[0], &cfg) {
+                Ok(level) => cartoon::app::run_wrap(&argv, level, raw, &tags, fast, &cfg)
+                    .unwrap_or_else(|e| {
+                        eprintln!("cartoon: {e}");
+                        2
+                    }),
+                Err(e) => {
                     eprintln!("cartoon: {e}");
                     2
-                },
-            )
+                }
+            }
         }
         Ok(cartoon::cli::Mode::Stats { since }) => match cartoon::stats::report(since.as_deref()) {
             Ok(s) => {

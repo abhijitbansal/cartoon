@@ -1,11 +1,12 @@
 use crate::adapters::{self, ParseOutcome};
-use crate::{archive, config::Config, fallback, heuristic, runner, stats, toon};
+use crate::ladder::CompressLevel;
+use crate::{archive, config::Config, fallback, runner, stats, toon};
 use anyhow::Result;
 use serde_json::json;
 
 pub fn run_wrap(
     argv: &[String],
-    heuristic_on: bool,
+    level: CompressLevel,
     raw: bool,
     tags: &[String],
     fast: bool,
@@ -32,7 +33,7 @@ pub fn run_wrap(
     // Reserve the archive slot first so the raw_log footer (part of the
     // emitted output) can be counted in the net-savings guard below.
     let reserved = archive::reserve(cfg);
-    let (candidate, tmode) = transform(&captured.stdout, heuristic_on);
+    let (candidate, tmode) = transform(&captured.stdout, level);
     let (out, mode) = if tmode == "passthrough" {
         (candidate, tmode)
     } else {
@@ -196,14 +197,16 @@ fn emit(out: &str, err: &str) {
     eprint!("{err}");
 }
 
-pub fn transform(stdout: &str, heuristic_on: bool) -> (String, &'static str) {
+pub fn transform(stdout: &str, level: CompressLevel) -> (String, &'static str) {
     if let Some(json) = fallback::detect_json(stdout) {
         return (toon::encode(&json), "json");
     }
-    if heuristic_on {
-        return (heuristic::compress(stdout), "heuristic");
+    let compressed = crate::ladder::compress(stdout, level);
+    // The ladder's line-join drops a trailing newline; treat that as unchanged.
+    if compressed == stdout || format!("{compressed}\n") == stdout {
+        return (stdout.to_string(), "passthrough");
     }
-    (stdout.to_string(), "passthrough")
+    (compressed, level.as_str())
 }
 
 #[cfg(test)]
@@ -239,5 +242,25 @@ mod tests {
             "some other exit-4 error",
             &args(&["-n", "auto"])
         ));
+    }
+
+    #[test]
+    fn transform_safe_passthrough_when_no_rule_fires() {
+        let (out, mode) = transform("plain prose line", CompressLevel::Safe);
+        assert_eq!(out, "plain prose line");
+        assert_eq!(mode, "passthrough");
+    }
+
+    #[test]
+    fn transform_safe_reports_safe_mode_when_rules_fire() {
+        let (out, mode) = transform("\x1b[32mok\x1b[0m\n\n\n\nend", CompressLevel::Safe);
+        assert_eq!(mode, "safe");
+        assert!(out.contains("ok"));
+    }
+
+    #[test]
+    fn transform_json_still_wins() {
+        let (_, mode) = transform("{\"a\": 1}", CompressLevel::Safe);
+        assert_eq!(mode, "json");
     }
 }

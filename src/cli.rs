@@ -18,7 +18,11 @@ location as a `raw_log:` footer — read that instead of rerunning unwrapped.
 literally named `stats`, use: cartoon env stats"
 )]
 pub struct Cli {
-    /// Enable the lossy heuristic fallback for this call
+    /// Compression level for non-adapter output: safe (default) | aggressive
+    #[arg(long, value_name = "LEVEL")]
+    pub compress: Option<String>,
+
+    /// Deprecated alias for --compress=aggressive
     #[arg(long)]
     pub heuristic: bool,
 
@@ -46,6 +50,7 @@ pub struct Cli {
 pub enum Mode {
     Wrap {
         argv: Vec<String>,
+        compress: Option<String>,
         heuristic: bool,
         raw: bool,
         tags: Vec<String>,
@@ -89,6 +94,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
+            compress: cli.compress,
             heuristic: cli.heuristic,
             raw: cli.raw,
             tags: cli.tags,
@@ -148,6 +154,7 @@ mod tests {
             m,
             Mode::Wrap {
                 argv: vec!["pytest".into(), "-q".into(), "--maxfail=1".into()],
+                compress: None,
                 heuristic: false,
                 raw: false,
                 tags: vec![],
@@ -207,6 +214,7 @@ mod tests {
             m,
             Mode::Wrap {
                 argv: vec!["pytest".into()],
+                compress: None,
                 heuristic: false,
                 raw: false,
                 tags: vec!["api".into(), "ci".into()],
@@ -284,5 +292,11 @@ mod tests {
     fn fast_defaults_off() {
         let m = mode(&["cartoon", "pytest"]);
         assert!(matches!(m, Mode::Wrap { fast: false, .. }));
+    }
+
+    #[test]
+    fn compress_flag_parses() {
+        let cli = Cli::parse_from(["cartoon", "--compress", "aggressive", "make"]);
+        assert_eq!(cli.compress.as_deref(), Some("aggressive"));
     }
 }
