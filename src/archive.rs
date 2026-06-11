@@ -54,6 +54,33 @@ pub fn record(
     record_at(&root, argv, mode, captured, exit, tags, cfg)
 }
 
+/// Reserve a run slot (id + dir) without writing anything, so callers can
+/// know the final `raw_log` path before committing to a transform. None when
+/// archiving is disabled or no state dir exists.
+pub fn reserve(cfg: &Config) -> Option<RunRef> {
+    if cfg.keep_runs == 0 {
+        return None;
+    }
+    let root = crate::paths::runs_dir()?;
+    let id = new_run_id();
+    let dir = root.join(&id);
+    Some(RunRef { id, dir })
+}
+
+/// Write a previously reserved run. Failures swallowed → None.
+pub fn write_reserved(
+    run: RunRef,
+    argv: &[String],
+    mode: &str,
+    captured: &Captured,
+    exit: i32,
+    tags: &[String],
+    cfg: &Config,
+) -> Option<RunRef> {
+    let root = run.dir.parent()?.to_path_buf();
+    write_at(&root, run, argv, mode, captured, exit, tags, cfg)
+}
+
 pub fn list(tag: Option<&str>) -> Vec<RunMeta> {
     match crate::paths::runs_dir() {
         Some(root) => list_at(&root, tag),
@@ -83,9 +110,36 @@ pub fn record_at(
     if cfg.keep_runs == 0 {
         return None; // archiving disabled
     }
-    let now = chrono::Utc::now();
     let id = new_run_id();
     let dir = root.join(&id);
+    write_at(
+        root,
+        RunRef { id, dir },
+        argv,
+        mode,
+        captured,
+        exit,
+        tags,
+        cfg,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_at(
+    root: &Path,
+    run: RunRef,
+    argv: &[String],
+    mode: &str,
+    captured: &Captured,
+    exit: i32,
+    tags: &[String],
+    cfg: &Config,
+) -> Option<RunRef> {
+    if cfg.keep_runs == 0 {
+        return None; // archiving disabled
+    }
+    let now = chrono::Utc::now();
+    let RunRef { id, dir } = run;
     let meta = RunMeta {
         id: id.clone(),
         ts: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),

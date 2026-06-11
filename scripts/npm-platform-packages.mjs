@@ -38,13 +38,17 @@ for (const [target, t] of Object.entries(TARGETS)) {
         version,
         description: `cartoon binary for ${t.key}`,
         license: "MIT",
-        repository: "github:abhijitbansal/cartoon",
+        repository: { type: "git", url: "git+https://github.com/abhijitbansal/cartoon.git" },
         os: [t.os],
         cpu: [t.cpu],
       },
       null,
       2
     ) + "\n"
+  );
+  fs.writeFileSync(
+    path.join(outDir, name, "README.md"),
+    `# ${name}\n\nPrebuilt \`cartoon\` binary for **${t.key}**. Don't install this directly —\ninstall [cartoon-wrap](https://www.npmjs.com/package/cartoon-wrap), which\npicks the right platform package automatically:\n\n\`\`\`bash\nnpm install -g cartoon-wrap\n\`\`\`\n\ncartoon is a token-optimized TOON output wrapper for any CLI, built for\nLLM coding agents. Docs: https://github.com/abhijitbansal/cartoon\n\nMIT\n`
   );
   made++;
 }

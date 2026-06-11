@@ -29,16 +29,35 @@ pub fn run_wrap(
         eprint!("{}", captured.stderr);
         return Ok(code);
     }
-    let (mut out, mode) = transform(&captured.stdout, heuristic_on);
-    let run = archive::record(argv, mode, &captured, code, tags, cfg);
-    if mode != "passthrough" {
-        if let Some(r) = &run {
-            out.push_str(&format!(
-                "\n{}",
-                toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
-            ));
+    // Reserve the archive slot first so the raw_log footer (part of the
+    // emitted output) can be counted in the net-savings guard below.
+    let reserved = archive::reserve(cfg);
+    let (candidate, tmode) = transform(&captured.stdout, heuristic_on);
+    let (out, mode) = if tmode == "passthrough" {
+        (candidate, tmode)
+    } else {
+        let footer = reserved
+            .as_ref()
+            .map(|r| {
+                format!(
+                    "\n{}",
+                    toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
+                )
+            })
+            .unwrap_or_default();
+        let with_footer = format!("{candidate}{footer}");
+        // Net-savings guard: a transform must pay for itself, footer
+        // included — otherwise emit the original untouched (still archived).
+        if stats::estimate_tokens(&with_footer, &cfg.tokenizer)
+            >= stats::estimate_tokens(&captured.stdout, &cfg.tokenizer)
+        {
+            (captured.stdout.clone(), "passthrough")
+        } else {
+            (with_footer, tmode)
         }
-    }
+    };
+    let run =
+        reserved.and_then(|r| archive::write_reserved(r, argv, mode, &captured, code, tags, cfg));
     if mode == "passthrough" {
         // Byte-identical guarantee: no trailing-newline normalization.
         print!("{out}");

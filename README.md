@@ -81,6 +81,9 @@ traces:
   `pytest && deploy`.
 - If parsing fails, the original output passes through untouched (one
   warning on stderr). Information is never silently lost.
+- A transform must pay for itself: if the TOON rendering (footer included)
+  wouldn't beat the original token count, the original is emitted
+  byte-identically. Savings are never negative.
 - Heuristic (lossy) mode is off unless you ask for it.
 
 ## Raw log archive
@@ -133,6 +136,11 @@ No adapter match → JSON auto-detection → optional heuristic → passthrough.
 
 Want another runner (cargo test, go test, vitest, rspec)? See
 [CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.
+
+## Support
+
+If cartoon saves you tokens, a ⭐ on this repo helps other agent users find
+it — and `cartoon stats` will tell you exactly how much it earned one.
 
 ## License
 

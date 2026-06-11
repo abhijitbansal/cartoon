@@ -7,12 +7,18 @@ fn cartoon() -> Command {
 
 #[test]
 fn json_output_becomes_toon() {
+    // Output must be large enough that TOON + the raw_log footer beats the
+    // original, or the net-savings guard rightly falls back to passthrough.
     cartoon()
-        .args(["sh", "-c", r#"echo '{"a": 1, "tags": ["x", "y"]}'"#])
+        .args([
+            "python3",
+            "-c",
+            r#"import json; print(json.dumps([{"name": "instance-%d" % i, "state": "running", "zone": "us-east-1a"} for i in range(30)]))"#,
+        ])
         .assert()
         .success()
-        .stdout(contains("a: 1"))
-        .stdout(contains("tags[2]: x,y"));
+        .stdout(contains("{name,state,zone}"))
+        .stdout(contains("instance-0,running,us-east-1a"));
 }
 
 #[test]
@@ -43,16 +49,17 @@ fn missing_command_exits_127() {
 
 #[test]
 fn heuristic_flag_compresses_repeats() {
+    // 200 repeats so the dedupe + raw_log footer clears the savings guard.
     cartoon()
         .args([
             "--heuristic",
             "sh",
             "-c",
-            "for i in 1 2 3 4 5; do echo tick; done",
+            "i=0; while [ $i -lt 200 ]; do echo tick tock tick; i=$((i+1)); done",
         ])
         .assert()
         .success()
-        .stdout(contains("(x5)"));
+        .stdout(contains("(x200)"));
 }
 
 #[test]

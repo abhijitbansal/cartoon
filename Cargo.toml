@@ -5,6 +5,9 @@ edition = "2021"
 description = "Token-optimized TOON output wrapper for any CLI"
 license = "MIT"
 repository = "https://github.com/abhijitbansal/cartoon"
+readme = "README.md"
+keywords = ["llm", "agents", "tokens", "cli", "testing"]
+categories = ["command-line-utilities", "development-tools::testing"]
 
 [dependencies]
 anyhow = "1"

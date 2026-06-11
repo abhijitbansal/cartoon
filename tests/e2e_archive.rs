@@ -5,12 +5,16 @@ fn cartoon() -> Command {
     Command::cargo_bin("cartoon").unwrap()
 }
 
+/// JSON big enough that TOON encoding + the raw_log footer still beats the
+/// original (the net-savings guard would otherwise fall back to passthrough).
+const BIG_JSON_CMD: &str = r#"python3 -c 'import json; print(json.dumps([{"name": "instance-%d" % i, "state": "running", "zone": "us-east-1a"} for i in range(30)]))'"#;
+
 #[test]
 fn transformed_run_gets_footer_and_archive() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
-        .args(["--tag", "e2e", "sh", "-c", r#"echo '{"a": 1}'"#])
+        .args(["--tag", "e2e", "sh", "-c", BIG_JSON_CMD])
         .assert()
         .success()
         .stdout(contains("raw_log:"));
@@ -22,9 +26,31 @@ fn transformed_run_gets_footer_and_archive() {
         .map(|(_, p)| p.trim().trim_matches('"').to_string())
         .expect("footer path");
     let raw = std::fs::read_to_string(format!("{path}/stdout.log")).unwrap();
-    assert_eq!(raw, "{\"a\": 1}\n", "archived stdout is the ORIGINAL json");
+    assert!(
+        raw.starts_with("[{\"name\": \"instance-0\""),
+        "archived stdout is the ORIGINAL json, got: {raw}"
+    );
     let meta = std::fs::read_to_string(format!("{path}/meta.json")).unwrap();
     assert!(meta.contains("\"e2e\""), "tag recorded");
+}
+
+#[test]
+fn tiny_json_passes_through_when_transform_does_not_pay() {
+    // TOON of a 8-byte object + raw_log footer > original → guard emits the
+    // original byte-identically and records the run as passthrough.
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["sh", "-c", r#"echo '{"a": 1}'"#])
+        .assert()
+        .success()
+        .stdout("{\"a\": 1}\n"); // exact: no footer, no TOON
+    cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["logs"])
+        .assert()
+        .success()
+        .stdout(contains("passthrough"));
 }
 
 #[test]

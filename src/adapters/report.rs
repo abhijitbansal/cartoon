@@ -72,23 +72,39 @@ const NOISE: &[&str] = &[
     "site-packages",
     "/_pytest/",
     "/unittest/case.py",
+    "/importlib/",
     "node_modules",
     "/jest-",
     "node:internal",
 ];
 
-/// Keep user-code frames, drop framework internals, drop blank lines.
+/// pytest "short" trace style frame header: `path/file.py:126: in import_module`
+fn is_short_frame_header(t: &str) -> bool {
+    let mut parts = t.splitn(3, ':');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(p), Some(n), Some(rest))
+            if !p.is_empty()
+                && n.trim().parse::<u64>().is_ok()
+                && rest.trim_start().starts_with("in ")
+    )
+}
+
+/// Keep user-code frames, drop framework internals, drop blank lines and
+/// caret-only marker lines (^^^^) that point into dropped source context.
 pub fn trim_trace(raw: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut skip_frame = false;
     for line in raw.lines() {
         let l = line.trim_end();
         let t = l.trim_start();
-        let is_frame_header = t.starts_with("File \"") || t.starts_with("at ");
+        let is_frame_header =
+            t.starts_with("File \"") || t.starts_with("at ") || is_short_frame_header(t);
         if is_frame_header {
             skip_frame = NOISE.iter().any(|n| l.contains(n));
         }
-        if !skip_frame && !t.is_empty() {
+        let is_caret_line = !t.is_empty() && t.chars().all(|c| c == '^');
+        if !skip_frame && !t.is_empty() && !is_caret_line {
             lines.push(t.to_string());
         }
     }
@@ -181,6 +197,25 @@ mod tests {
     fn zero_trace_lines_omits_traces_section() {
         let out = render(&sample(), 0, None);
         assert!(!out.contains("traces"));
+    }
+
+    #[test]
+    fn trim_trace_drops_caret_marker_lines() {
+        let raw = "tests/test_dedup.py:3: in <module>\n    from sift.dedup import cluster_items\n^^^^^^^^^^^^^^^^^^^^^^^^^\nE   ModuleNotFoundError: No module named 'sift'";
+        let t = trim_trace(raw).join("\n");
+        assert!(t.contains("from sift.dedup"));
+        assert!(!t.contains("^^^"), "got: {t}");
+        assert!(t.contains("ModuleNotFoundError"));
+    }
+
+    #[test]
+    fn trim_trace_drops_short_style_framework_frames() {
+        let raw = "../../.local/share/uv/python/cpython-3.11/lib/python3.11/importlib/__init__.py:126: in import_module\n    return _bootstrap._gcd_import(name)\ntests/test_dedup.py:3: in <module>\n    from sift.dedup import cluster_items\nE   ModuleNotFoundError: No module named 'sift'";
+        let t = trim_trace(raw).join("\n");
+        assert!(!t.contains("importlib"), "got: {t}");
+        assert!(!t.contains("_gcd_import"), "got: {t}");
+        assert!(t.contains("tests/test_dedup.py:3"));
+        assert!(t.contains("ModuleNotFoundError"));
     }
 
     #[test]

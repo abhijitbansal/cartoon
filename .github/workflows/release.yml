@@ -15,7 +15,7 @@ jobs:
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -38,11 +38,11 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/$bin" dist/
           tar -C dist -czf "cartoon-${{ matrix.target }}.tar.gz" "$bin"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tarball-${{ matrix.target }}
           path: cartoon-*.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cartoon-bin-${{ matrix.target }}
           path: |
@@ -56,7 +56,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: tarball-*
           merge-multiple: true
@@ -75,13 +75,13 @@ jobs:
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           command: build
           args: --release --out wheels
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target }}
           path: wheels
@@ -94,7 +94,7 @@ jobs:
       # repo + workflow via the pending publisher configured on pypi.org.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           merge-multiple: true
@@ -107,15 +107,19 @@ jobs:
   npm-publish:
     needs: build
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      # npm Trusted Publishing (OIDC) — each package's Trusted Publisher on
+      # npmjs.com points at this repo + workflow; no NPM_TOKEN secret.
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-      - uses: actions/download-artifact@v4
+      # Trusted publishing needs npm >= 11.5; Node 22 bundles an older npm.
+      - run: npm install -g npm@latest
+      - uses: actions/download-artifact@v8
         with:
           pattern: cartoon-bin-*
           path: bins
@@ -124,18 +128,35 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/npm-platform-packages.mjs "$VERSION" bins npm-out
           for d in npm-out/*/; do
-            (cd "$d" && npm publish --access public)
+            pkg=$(node -p "require('./$d/package.json').name")
+            if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $pkg@$VERSION: already published"
+            else
+              (cd "$d" && npm publish --access public)
+            fi
           done
       - name: publish parent package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "cartoon-wrap@$VERSION" version >/dev/null 2>&1; then
+            echo "skip cartoon-wrap@$VERSION: already published"
+            exit 0
+          fi
           node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap
           (cd packages/npm/cartoon-wrap && npm publish --access public)
 
   crates-publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      # crates.io Trusted Publishing (OIDC) — the crate's Trusted Publisher
+      # settings point at this repo + workflow; no CRATES_TOKEN secret.
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --token ${{ secrets.CRATES_TOKEN }}
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

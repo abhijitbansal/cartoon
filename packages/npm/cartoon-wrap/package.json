@@ -3,7 +3,12 @@
   "version": "0.0.0",
   "description": "Token-optimized TOON output wrapper for any CLI (installs the `cartoon` binary)",
   "license": "MIT",
-  "repository": "github:abhijitbansal/cartoon",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abhijitbansal/cartoon.git"
+  },
+  "homepage": "https://github.com/abhijitbansal/cartoon",
+  "keywords": ["llm", "agents", "tokens", "toon", "cli", "pytest", "jest", "test-output"],
   "bin": { "cartoon": "bin/cartoon.js" },
   "optionalDependencies": {
     "cartoon-wrap-darwin-arm64": "0.0.0",

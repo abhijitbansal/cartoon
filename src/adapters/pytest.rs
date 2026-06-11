@@ -5,6 +5,18 @@ use anyhow::{Context, Result};
 
 pub struct Pytest;
 
+/// Flags that make pytest informational (no test session, no junit xml).
+const NON_TEST_FLAGS: &[&str] = &[
+    "--version",
+    "-V",
+    "--help",
+    "-h",
+    "--collect-only",
+    "--co",
+    "--fixtures",
+    "--markers",
+];
+
 impl Adapter for Pytest {
     fn name(&self) -> &'static str {
         "pytest"
@@ -13,10 +25,14 @@ impl Adapter for Pytest {
         "pytest | python -m pytest"
     }
     fn detect(&self, argv: &[String]) -> bool {
-        argv.first()
+        let is_pytest = argv
+            .first()
             .map(|a| basename(a) == "pytest")
             .unwrap_or(false)
-            || is_python_module(argv, "pytest")
+            || is_python_module(argv, "pytest");
+        // Informational invocations run no tests, so pytest exits before
+        // writing junit xml — injecting it only buys a parse warning.
+        is_pytest && !argv.iter().any(|a| NON_TEST_FLAGS.contains(&a.as_str()))
     }
     fn prepare(&self, mut argv: Vec<String>) -> Prepared {
         let artifact = tempfile::Builder::new()
@@ -78,7 +94,7 @@ pub fn parse_junit(xml: &str) -> Result<TestReport> {
             .find(|c| c.has_tag_name("failure") || c.has_tag_name("error"));
         if let Some(fail) = fail_node {
             failed += 1;
-            let msg = fail
+            let mut msg = fail
                 .attribute("message")
                 .unwrap_or("")
                 .lines()
@@ -86,6 +102,13 @@ pub fn parse_junit(xml: &str) -> Result<TestReport> {
                 .unwrap_or("")
                 .to_string();
             let trace = super::report::trim_trace(fail.text().unwrap_or(""));
+            // "collection failure" hides the real error (ImportError etc.);
+            // promote pytest's `E ...` line — the actual exception — to msg.
+            if msg.is_empty() || msg == "collection failure" {
+                if let Some(e) = trace.iter().find(|l| l.starts_with("E ")) {
+                    msg = e[1..].trim_start().to_string();
+                }
+            }
             let loc = match line {
                 Some(l) if !file.is_empty() => format!("{file}:{l}"),
                 _ => file.to_string(),
@@ -161,5 +184,42 @@ mod tests {
     #[test]
     fn empty_xml_is_parse_error() {
         assert!(parse_junit("").is_err());
+    }
+
+    fn argv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn detects_test_invocations() {
+        assert!(Pytest.detect(&argv(&["pytest"])));
+        assert!(Pytest.detect(&argv(&["pytest", "-q", "tests/"])));
+        assert!(Pytest.detect(&argv(&["python", "-m", "pytest"])));
+    }
+
+    #[test]
+    fn skips_informational_invocations() {
+        for flag in super::NON_TEST_FLAGS {
+            assert!(
+                !Pytest.detect(&argv(&["pytest", flag])),
+                "should skip pytest {flag}"
+            );
+        }
+        assert!(!Pytest.detect(&argv(&["python", "-m", "pytest", "--version"])));
+    }
+
+    #[test]
+    fn collection_failure_msg_promotes_real_error() {
+        let xml = r#"<testsuites><testsuite name="pytest" tests="1" time="0.04">
+<testcase classname="tests.test_dedup" name="tests.test_dedup" file="tests/test_dedup.py">
+<error message="collection failure">tests/test_dedup.py:3: in &lt;module&gt;
+    from sift.dedup import cluster_items
+E   ModuleNotFoundError: No module named 'sift'</error>
+</testcase></testsuite></testsuites>"#;
+        let r = parse_junit(xml).unwrap();
+        assert_eq!(
+            r.failures[0].msg,
+            "ModuleNotFoundError: No module named 'sift'"
+        );
     }
 }
