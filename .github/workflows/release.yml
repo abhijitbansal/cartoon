@@ -127,14 +127,25 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/npm-platform-packages.mjs "$VERSION" bins npm-out
+          fails=""
           for d in npm-out/*/; do
             pkg=$(node -p "require('./$d/package.json').name")
             if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then
               echo "skip $pkg@$VERSION: already published"
             else
-              (cd "$d" && npm publish --access public)
+              (cd "$d" && npm publish --access public) || fails="$fails $pkg"
             fi
           done
+          # cartoon-wrap-win32-x64 is spam-blocked pending npm support
+          # (docs/RELEASING.md "Known issues"); its failure must not stop
+          # the parent publish. Any other failure still fails the job.
+          # TODO: drop this exception once the name is unblocked.
+          fails="${fails# }"
+          if [ -n "$fails" ] && [ "$fails" != "cartoon-wrap-win32-x64" ]; then
+            echo "::error::platform publish failed:$fails"
+            exit 1
+          fi
+          [ -z "$fails" ] || echo "::warning::skipped known-blocked:$fails"
       - name: publish parent package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
