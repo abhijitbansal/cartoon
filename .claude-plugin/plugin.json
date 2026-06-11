@@ -1,7 +1,7 @@
 {
   "name": "cartoon",
   "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Abhijit Bansal",
     "email": "contact@abhijitbansal.com"

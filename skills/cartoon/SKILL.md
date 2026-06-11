@@ -42,12 +42,38 @@ cartoon npx jest src/                   # jest
 cartoon python -m unittest              # unittest
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
 cartoon --heuristic make                # lossy compression for plain text
+cartoon --tag api pytest                # tag the archived run for later lookup
 cartoon stats --since 7d                # report tokens saved
 ```
 
 Read the result like a test report: `summary` has the counts; if
 `failed > 0`, the `failures[...]` rows and `traces` section contain
 everything needed to fix the code without rerunning unwrapped.
+
+Only when the user asks for faster test runs: `cartoon --fast pytest`
+appends `-n auto` (pytest-xdist) and discloses it with a `fast:` line.
+Parallel execution can change test behavior — don't enable it on your own,
+and rerun without `--fast` before debugging any failure seen with it.
+
+## Need the full output? Never rerun — read the archive
+
+Every wrapped run stores its complete raw stdout/stderr on disk and prints
+the location as the last line of the report:
+
+```text
+raw_log: ~/.local/state/cartoon/runs/20260611-051415-342d
+```
+
+If the TOON summary dropped something you need (full tracebacks, warnings,
+print output), fetch the original instead of rerunning the command:
+
+```bash
+cat <raw_log path>/stdout.log           # full original stdout (stderr.log too)
+cartoon logs --last --stdout            # same, for the newest run
+cartoon logs                            # list archived runs
+cartoon logs --tag api                  # filter by tag
+cartoon logs <run-id> --stderr          # specific run, one stream
+```
 
 ## Why wrapping is safe
 
