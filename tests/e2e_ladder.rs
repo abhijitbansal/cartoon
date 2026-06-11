@@ -58,8 +58,14 @@ fn aggressive_flag_extracts_diagnostics() {
         .output()
         .expect("run cartoon");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("diagnostics"), "TOON table emitted: {stdout}");
-    assert!(stdout.contains("src/lexer.c:10:5"), "locations kept: {stdout}");
+    assert!(
+        stdout.contains("diagnostics"),
+        "TOON table emitted: {stdout}"
+    );
+    assert!(
+        stdout.contains("src/lexer.c:10:5"),
+        "locations kept: {stdout}"
+    );
 }
 
 #[test]

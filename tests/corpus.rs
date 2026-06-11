@@ -41,10 +41,7 @@ fn corpus_signal_retention_and_token_floor() {
         ] {
             let out = compress(&log, level);
             for line in &manifest.must_survive {
-                assert!(
-                    out.contains(line),
-                    "{name}@{level:?}: signal lost: {line}"
-                );
+                assert!(out.contains(line), "{name}@{level:?}: signal lost: {line}");
             }
             let r = reduction(&log, &out);
             eprintln!("{name}@{level:?}: reduction {r:.3} (floor {floor:.3})");
