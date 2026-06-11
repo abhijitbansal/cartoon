@@ -35,12 +35,12 @@ competitive research) merged and prioritized. Items marked ✅ shipped on
 
 ## NOW (next session)
 
-1. **PreToolUse auto-wrap hook: `cartoon hook install|rewrite|status`** —
-   the single biggest savings multiplier: converts adoption from "when the
-   model remembers the skill" to 100% of matching Bash calls. The
-   net-savings guard makes auto-rewrite uniquely safe (worst case =
-   byte-identical). Fail-open on any parse error. `-c` mode (shipped) is
-   the load-bearing prerequisite.
+1. ✅ **PreToolUse auto-wrap hook** — SHIPPED same day: `cartoon hook
+   rewrite|install|uninstall|status` + `hooks/hooks.json` in the plugin
+   (0.2.0). Conservative allowlist because updatedInput requires
+   permissionDecision "allow" (bypasses the prompt): dev-loop tools only,
+   subcommand-gated package managers, no infra CLIs, shell-state builtins
+   pass through, fail-open everywhere.
 2. **BENCHMARKS.md + README hero table** — reproducible "pytest: 48,200 →
    1,900 tokens, 96%, $/run at Claude pricing" table; every growth channel
    depends on it; include one modest-savings row for credibility; CI
