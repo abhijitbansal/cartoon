@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- cartoon mark: gold compression chevrons on deep navy -->
+  <rect width="64" height="64" rx="14" fill="#1e3a5f"/>
+  <rect width="64" height="64" rx="14" fill="url(#g)" opacity="0.35"/>
+  <defs>
+    <radialGradient id="g" cx="0.8" cy="0.15" r="1.1">
+      <stop offset="0" stop-color="#d4a73a" stop-opacity="0.55"/>
+      <stop offset="0.55" stop-color="#d4a73a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M18 20 L30 32 L18 44" fill="none" stroke="#d4a73a" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 20 L46 32 L34 44" fill="none" stroke="#f2e3bb" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+</svg>
