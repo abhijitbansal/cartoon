@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="TestResults" errors="0" tests="2" failures="1" time="0.030">
+<testcase classname="CartoonKitTests" name="greetingMatches()" time="0.012">
+<failure message="Expectation failed: (greeting → &quot;hello&quot;) == &quot;hullo&quot;"/>
+</testcase>
+<testcase classname="CartoonKitTests" name="parsesEmpty()" time="0.003"/>
+</testsuite>
+</testsuites>

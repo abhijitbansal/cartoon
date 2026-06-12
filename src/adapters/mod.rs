@@ -3,6 +3,8 @@ pub mod jest;
 pub mod pytest;
 pub mod report;
 pub mod ruff;
+pub mod swift_build;
+pub mod swift_test;
 pub mod tsc;
 pub mod unittest;
 pub mod vitest;
@@ -70,9 +72,11 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(unittest::Unittest),
         Box::new(jest::Jest),
         Box::new(vitest::Vitest),
+        Box::new(swift_test::SwiftTest),
         Box::new(ruff::Ruff),
         Box::new(eslint::Eslint),
         Box::new(tsc::Tsc),
+        Box::new(swift_build::SwiftBuild),
     ]
 }
 
@@ -124,7 +128,17 @@ mod tests {
         let names: Vec<&str> = registry().iter().map(|a| a.name()).collect();
         assert_eq!(
             names,
-            vec!["pytest", "unittest", "jest", "vitest", "ruff", "eslint", "tsc"]
+            vec![
+                "pytest",
+                "unittest",
+                "jest",
+                "vitest",
+                "swift-test",
+                "ruff",
+                "eslint",
+                "tsc",
+                "swift-build"
+            ]
         );
     }
 

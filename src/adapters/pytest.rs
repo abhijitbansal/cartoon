@@ -66,6 +66,10 @@ impl Adapter for Pytest {
 }
 
 pub fn parse_junit(xml: &str) -> Result<TestReport> {
+    parse_junit_named(xml, "pytest")
+}
+
+pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> {
     let doc = roxmltree::Document::parse(xml).context("invalid junit xml")?;
     let mut duration_s = 0.0;
     for suite in doc.descendants().filter(|n| n.has_tag_name("testsuite")) {
@@ -129,7 +133,7 @@ pub fn parse_junit(xml: &str) -> Result<TestReport> {
         anyhow::bail!("junit xml contained no testcases");
     }
     Ok(TestReport {
-        runner: "pytest",
+        runner,
         total,
         passed,
         failed,
