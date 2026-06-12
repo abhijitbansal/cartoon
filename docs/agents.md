@@ -49,13 +49,19 @@ system instructions:
 ```markdown
 ## CLI output: use cartoon
 
-Prefix `cartoon` onto test runs and JSON-emitting CLIs to get
-token-optimized TOON output (~70% smaller, failures keep full detail):
-`cartoon pytest`, `cartoon npx jest`, `cartoon aws s3api list-buckets`.
-Exit codes are mirrored exactly and parse failures pass the original
-output through, so wrapping is always safe. Don't wrap interactive
-commands. If `cartoon` is not installed: `uv tool install cartoon`
-(or `pipx install cartoon` / `npm i -g cartoon-wrap` / `cargo install cartoon`).
+Prefix `cartoon` onto noisy commands to get token-optimized output:
+test runs and JSON CLIs become compact TOON reports (~70% smaller,
+failures keep full detail), and everything else compresses through a
+safe deterministic tier automatically: `cartoon pytest`,
+`cartoon npx jest`, `cartoon make`, `cartoon aws s3api list-buckets`.
+Existing logs work too: `cartoon ingest build.log` or `cmd | cartoon -`.
+Exit codes are mirrored exactly, parse failures pass the original output
+through, and a net-savings guard means output never gets bigger — so
+wrapping is always safe. Full raw output is archived per run; search it
+with `cartoon logs grep <pattern> --last` instead of re-running or
+cat-ing the log. Don't wrap interactive commands. If `cartoon` is not
+installed: `uv tool install cartoon` (or `pipx install cartoon` /
+`npm i -g cartoon-wrap` / `cargo install cartoon`).
 ```
 
 ## Manual install (single agent, no tooling)

@@ -92,7 +92,9 @@ competitive research) merged and prioritized. Items marked ✅ shipped on
   candidates from archived raw logs, replay-scored, `--emit-fixture` for
   upstream contribution) — the community adapter flywheel and long-term
   moat.
-- **Reach:** stdin pipe mode (`| cartoon -`), PATH shim dir (env-gated),
+- **Reach:** ✅ stdin pipe + file ingest SHIPPED same day (`cartoon
+  ingest <file>` / `| cartoon -` — same flow as a wrapped run, shared
+  `transform_emit_record` path). Remaining: PATH shim dir (env-gated),
   MCP server mode via rmcp (covers sandboxed/remote agents where the
   raw_log path is unreadable), GitHub Action + `--ci` annotations, Windows
   first-class (after hook + `-c` are in the matrix).

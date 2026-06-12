@@ -78,6 +78,8 @@ cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
 cartoon make                   # safe tier auto-on: ANSI/progress/dupe collapse
 cartoon --compress=aggressive make   # opt-in lossy: level filter, diag tables, windowing
 cartoon -c 'cd app && make -j4'      # wrap a shell command string
+cartoon ingest ci-run.log      # compress a log you already have
+some-cmd | cartoon -           # same, from a pipe
 cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon learn                  # mine your own runs for config suggestions
@@ -106,6 +108,35 @@ traces:
   "tests/test_auth.py::test_expiry"[2]: "tests/test_auth.py:42 in test_expiry",assert token.exp < now()
 ```
 
+## How it works
+
+Every command (or ingested log) moves through one pipeline; the first
+stage that understands the content wins:
+
+1. **Adapter match** — known runners (pytest, jest, vitest, …) get their
+   machine-readable format injected and re-rendered as a compact report.
+2. **JSON detection** — any JSON document in stdout is TOON-encoded.
+3. **Ladder, safe tier (default)** — ANSI stripping, progress-bar
+   collapse, duplicate-line collapse, blank-run collapse. Deterministic
+   and non-lossy in practice.
+4. **Ladder, aggressive tier (opt-in)** — log-level filtering (INFO/DEBUG
+   to counts, WARN+ kept with context), near-duplicate templating,
+   compiler-diagnostic extraction into a TOON table (gcc/clang one-liners
+   and rustc multi-line blocks), error-anchored windowing.
+5. **Net-savings guard** — the transform plus the `raw_log` footer must
+   beat the original token count, or the original is emitted
+   byte-identically. Trying cartoon is zero-risk by construction.
+
+Every rule is a pure function that no-ops when its pattern is absent, so
+plain prose is never mangled. Measured on the golden corpus that runs in
+CI (token reduction at the aggressive tier, signal lines asserted intact):
+
+| Fixture | Reduction | Signal kept |
+|---|---|---|
+| chatty service log (156 lines, 1 ERROR) | **−92.5%** | ERROR + WARN verbatim, ±2 lines context |
+| real `cargo build` failure (3 errors) | **−61.5%** | all errors + locations in a TOON table |
+| npm ERESOLVE conflict | ±0% | guard emits the original — never negative |
+
 ## Guarantees
 
 - Exit codes always mirrored — `cartoon pytest && deploy` behaves like
@@ -123,8 +154,9 @@ traces:
 Every wrapped run keeps its full raw output under
 `~/.local/state/cartoon/runs/<run-id>/` (`stdout.log`, `stderr.log`,
 `meta.json`). Transformed output ends with a `raw_log:` line pointing at the
-archive — if the TOON summary dropped something you need, fetch the original
-with `cat` or `cartoon logs <id>` instead of rerunning. Passthrough and
+archive — if the TOON summary dropped something you need, search it with
+`cartoon logs grep <pattern> --last` (capped, disclosed) or fetch it with
+`cartoon logs <id>` instead of rerunning. Passthrough and
 `--raw` output stay byte-identical (no footer) but are still archived.
 Retention is capped (`keep_runs`, default 50; `max_archive_mb`, default 50);
 `keep_runs = 0` disables archiving.
