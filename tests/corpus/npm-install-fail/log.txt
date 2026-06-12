@@ -1,0 +1,44 @@
+npm warn using --force Recommended protections disabled.
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it.
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+npm warn deprecated abab@2.0.6: Use your platform's native atob() and btoa() methods instead
+npm warn deprecated domexception@4.0.0: Use your platform's native DOMException instead
+npm warn deprecated source-map@0.8.0-beta.0: The work that was done in this beta branch won't be included in future versions
+npm warn deprecated har-validator@5.1.5: this library is no longer supported
+npm warn deprecated request@2.88.2: request has been deprecated, see https://github.com/request/request/issues/3142
+npm warn deprecated uuid@3.4.0: Please upgrade  to version 7 or higher.
+npm error code ERESOLVE
+npm error ERESOLVE could not resolve
+npm error
+npm error While resolving: react-scripts@5.0.1
+npm error Found: typescript@5.4.5
+npm error node_modules/typescript
+npm error   typescript@"^5.4.0" from the root project
+npm error   peer typescript@">= 2.7" from fork-ts-checker-webpack-plugin@6.5.3
+npm error   node_modules/fork-ts-checker-webpack-plugin
+npm error     fork-ts-checker-webpack-plugin@"^6.5.0" from react-dev-utils@12.0.1
+npm error     node_modules/react-dev-utils
+npm error       react-dev-utils@"^12.0.1" from react-scripts@5.0.1
+npm error       node_modules/react-scripts
+npm error         react-scripts@"5.0.1" from the root project
+npm error
+npm error Could not resolve dependency:
+npm error peerOptional typescript@"^3.2.1 || ^4" from react-scripts@5.0.1
+npm error node_modules/react-scripts
+npm error   react-scripts@"5.0.1" from the root project
+npm error
+npm error Conflicting peer dependency: typescript@4.9.5
+npm error node_modules/typescript
+npm error   peerOptional typescript@"^3.2.1 || ^4" from react-scripts@5.0.1
+npm error   node_modules/react-scripts
+npm error     react-scripts@"5.0.1" from the root project
+npm error
+npm error Fix the upstream dependency conflict, or retry
+npm error this command with --force or --legacy-peer-deps
+npm error to accept an incorrect (and potentially broken) dependency resolution.
+npm error
+npm error
+npm error For a full report see:
+npm error /Users/dev/.npm/_logs/2026-06-11T08_12_44_512Z-eresolve-report.txt
+npm error A complete log of this run can be found in: /Users/dev/.npm/_logs/2026-06-11T08_12_44_512Z-debug-0.log

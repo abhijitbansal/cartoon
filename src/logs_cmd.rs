@@ -11,17 +11,84 @@ pub fn run(query: LogsQuery) -> Result<i32> {
             Ok(0)
         }
         LogsQuery::Show { sel, stream } => {
-            let id = match sel {
-                RunSel::Id(id) => id,
-                RunSel::Last => {
-                    archive::last_id().ok_or_else(|| anyhow::anyhow!("no archived runs yet"))?
-                }
-            };
+            let id = resolve_sel(sel)?;
             let (meta, stdout, stderr) = archive::load(&id)?;
             println!("{}", render_show(&meta, &stdout, &stderr, &stream));
             Ok(0)
         }
+        LogsQuery::Grep {
+            sel,
+            pattern,
+            context,
+        } => {
+            let id = resolve_sel(sel)?;
+            let (_, stdout, stderr) = archive::load(&id)?;
+            let re =
+                regex::Regex::new(&pattern).map_err(|e| anyhow::anyhow!("invalid pattern: {e}"))?;
+            print!("{}", render_grep(&id, &stdout, &stderr, &re, context));
+            Ok(0)
+        }
     }
+}
+
+fn resolve_sel(sel: RunSel) -> Result<String> {
+    match sel {
+        RunSel::Id(id) => Ok(id),
+        RunSel::Last => archive::last_id().ok_or_else(|| anyhow::anyhow!("no archived runs yet")),
+    }
+}
+
+/// Cap on emitted match blocks: grep exists to AVOID re-reading a huge log.
+const MAX_MATCHES: usize = 50;
+
+pub fn render_grep(
+    id: &str,
+    stdout: &str,
+    stderr: &str,
+    re: &regex::Regex,
+    context: usize,
+) -> String {
+    let mut out = String::new();
+    let mut total = 0usize;
+    for (stream, text) in [("stdout", stdout), ("stderr", stderr)] {
+        let lines: Vec<&str> = text.lines().collect();
+        let hits: Vec<usize> = (0..lines.len())
+            .filter(|&i| re.is_match(lines[i]))
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        let quota = MAX_MATCHES.saturating_sub(total);
+        let emitted = hits.len().min(quota);
+        out.push_str(&format!("--- {stream} ({} matches) ---\n", hits.len()));
+        let mut last_end: Option<usize> = None;
+        for &i in hits.iter().take(quota) {
+            let lo = i.saturating_sub(context);
+            let hi = (i + context).min(lines.len() - 1);
+            if let Some(le) = last_end {
+                if lo > le + 1 {
+                    out.push_str("...\n");
+                }
+            }
+            let start = last_end.map_or(lo, |le| lo.max(le + 1));
+            for (j, line) in lines.iter().enumerate().take(hi + 1).skip(start) {
+                out.push_str(&format!("{}:{}\n", j + 1, line));
+            }
+            last_end = Some(hi);
+        }
+        total += emitted;
+        // Never truncate silently: disclose whenever the quota cut matches.
+        if emitted < hits.len() {
+            out.push_str(&format!(
+                "  (showing {emitted} of {} matches; cartoon logs {id} for the full log)\n",
+                hits.len()
+            ));
+        }
+    }
+    if out.is_empty() {
+        out = format!("no matches in run {id}\n");
+    }
+    out
 }
 
 pub fn render_list(metas: &[RunMeta]) -> String {
@@ -116,5 +183,37 @@ mod tests {
             &crate::cli::StreamSel::Stdout,
         );
         assert_eq!(out, "RAW OUT");
+    }
+
+    #[test]
+    fn grep_finds_matches_with_context() {
+        let re = regex::Regex::new("ERROR").unwrap();
+        let out = render_grep("id1", "a\nb\nERROR boom\nd\ne", "", &re, 1);
+        assert!(out.contains("--- stdout (1 matches) ---"));
+        assert!(out.contains("2:b\n3:ERROR boom\n4:d"));
+        assert!(!out.contains("1:a"), "context capped: {out}");
+    }
+
+    #[test]
+    fn grep_no_matches_says_so() {
+        let re = regex::Regex::new("nope").unwrap();
+        assert!(render_grep("id1", "a\nb", "c", &re, 2).contains("no matches in run id1"));
+    }
+
+    #[test]
+    fn grep_cap_spans_streams_and_discloses_truncation() {
+        let re = regex::Regex::new("hit").unwrap();
+        let stdout: String = (0..60)
+            .map(|i| format!("hit {i}\n"))
+            .collect::<Vec<_>>()
+            .join("");
+        let stderr = "hit err one\nhit err two\n";
+        let out = render_grep("id1", &stdout, stderr, &re, 0);
+        assert!(out.contains("--- stdout (60 matches) ---"));
+        assert!(out.contains("(showing 50 of 60 matches"), "got:\n{out}");
+        // stderr quota exhausted: header + disclosure, no silent truncation
+        assert!(out.contains("--- stderr (2 matches) ---"));
+        assert!(out.contains("(showing 0 of 2 matches"), "got:\n{out}");
+        assert!(!out.contains("hit err one"));
     }
 }

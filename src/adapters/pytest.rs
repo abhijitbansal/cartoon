@@ -53,7 +53,7 @@ impl Adapter for Pytest {
         let xml = std::fs::read_to_string(&path).context("junit xml missing")?;
         let report = parse_junit(&xml)?;
         Ok(ParseOutcome {
-            report,
+            report: super::AdapterReport::Tests(report),
             // stdout was pytest's human report — consumed. stderr may hold
             // user warnings the agent needs.
             passthrough_stdout: None,

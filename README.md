@@ -41,20 +41,53 @@ npx skills add abhijitbansal/cartoon
 Copy-paste blocks for AGENTS.md / copilot-instructions.md and the full
 integration matrix: [docs/agents.md](docs/agents.md).
 
+### Auto-wrap hook (Claude Code)
+
+The plugin ships a `PreToolUse` hook that rewrites noisy Bash commands to
+run under cartoon automatically — no skill recall needed. Standalone
+install (without the plugin):
+
+```bash
+cartoon hook install     # adds the hook to ~/.claude/settings.json
+cartoon hook status      # check where it's active
+cartoon hook uninstall   # remove it
+```
+
+What it wraps: dev-loop commands only — test runners, linters,
+typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
+`mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
+`npm test|ci`, …). Because a rewrite auto-approves the call, the allowlist
+is deliberately conservative: infra CLIs (docker, kubectl, terraform, gh,
+aws) and mutating subcommands (`cargo publish`, `npm install`) are never
+wrapped, commands that change shell state (`cd`, `export`, `source`) pass
+through untouched, and anything unrecognized is left alone (fail-open).
+The net-savings guard still applies — worst case the output is
+byte-identical.
+
 ## Use
 
 ```bash
 cartoon pytest                 # asymmetric test report in TOON
 cartoon jest src/              # same for jest
+cartoon vitest run             # same for vitest (watch mode passes through)
 cartoon python -m unittest     # same for unittest
+cartoon ruff check .           # lint diagnostics as a compact TOON table
+cartoon npx eslint src/        # same for eslint
+cartoon npx tsc --noEmit       # same for tsc type errors
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
-cartoon --heuristic make       # lossy compression for plain text (opt-in)
+cartoon make                   # safe tier auto-on: ANSI/progress/dupe collapse
+cartoon --compress=aggressive make   # opt-in lossy: level filter, diag tables, windowing
+cartoon -c 'cd app && make -j4'      # wrap a shell command string
+cartoon ingest ci-run.log      # compress a log you already have
+some-cmd | cartoon -           # same, from a pipe
 cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
+cartoon learn                  # mine your own runs for config suggestions
 cartoon adapters               # list built-in adapters
 cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
+cartoon logs grep ERROR --last # search a raw log instead of re-reading it
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 ```
 
@@ -75,24 +108,55 @@ traces:
   "tests/test_auth.py::test_expiry"[2]: "tests/test_auth.py:42 in test_expiry",assert token.exp < now()
 ```
 
+## How it works
+
+Every command (or ingested log) moves through one pipeline; the first
+stage that understands the content wins:
+
+1. **Adapter match** — known runners (pytest, jest, vitest, …) get their
+   machine-readable format injected and re-rendered as a compact report.
+2. **JSON detection** — any JSON document in stdout is TOON-encoded.
+3. **Ladder, safe tier (default)** — ANSI stripping, progress-bar
+   collapse, duplicate-line collapse, blank-run collapse. Deterministic
+   and non-lossy in practice.
+4. **Ladder, aggressive tier (opt-in)** — log-level filtering (INFO/DEBUG
+   to counts, WARN+ kept with context), near-duplicate templating,
+   compiler-diagnostic extraction into a TOON table (gcc/clang one-liners
+   and rustc multi-line blocks), error-anchored windowing.
+5. **Net-savings guard** — the transform plus the `raw_log` footer must
+   beat the original token count, or the original is emitted
+   byte-identically. Trying cartoon is zero-risk by construction.
+
+Every rule is a pure function that no-ops when its pattern is absent, so
+plain prose is never mangled. Measured on the golden corpus that runs in
+CI (token reduction at the aggressive tier, signal lines asserted intact):
+
+| Fixture | Reduction | Signal kept |
+|---|---|---|
+| chatty service log (156 lines, 1 ERROR) | **−92.5%** | ERROR + WARN verbatim, ±2 lines context |
+| real `cargo build` failure (3 errors) | **−61.5%** | all errors + locations in a TOON table |
+| npm ERESOLVE conflict | ±0% | guard emits the original — never negative |
+
 ## Guarantees
 
 - Exit codes always mirrored — `cartoon pytest && deploy` behaves like
   `pytest && deploy`.
 - If parsing fails, the original output passes through untouched (one
-  warning on stderr). Information is never silently lost.
+  warning on stderr). The safe tier preserves all non-redundant text;
+  lossy tiers are opt-in and always leave a `raw_log` pointer to the
+  unmodified output.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
   byte-identically. Savings are never negative.
-- Heuristic (lossy) mode is off unless you ask for it.
 
 ## Raw log archive
 
 Every wrapped run keeps its full raw output under
 `~/.local/state/cartoon/runs/<run-id>/` (`stdout.log`, `stderr.log`,
 `meta.json`). Transformed output ends with a `raw_log:` line pointing at the
-archive — if the TOON summary dropped something you need, fetch the original
-with `cat` or `cartoon logs <id>` instead of rerunning. Passthrough and
+archive — if the TOON summary dropped something you need, search it with
+`cartoon logs grep <pattern> --last` (capped, disclosed) or fetch it with
+`cartoon logs <id>` instead of rerunning. Passthrough and
 `--raw` output stay byte-identical (no footer) but are still archived.
 Retention is capped (`keep_runs`, default 50; `max_archive_mb`, default 50);
 `keep_runs = 0` disables archiving.
@@ -115,12 +179,21 @@ runner).
 `~/.config/cartoon/config.toml`:
 
 ```toml
-heuristic = false    # default for lossy fallback
 tokenizer = "o200k"  # or "approx" (bytes/4) for zero-cost estimates
 trace_lines = 20     # per-failure traceback cap
 keep_runs = 50       # archived raw logs to keep (0 disables)
 max_archive_mb = 50  # max total archive size
+
+[compress]
+level = "safe"       # default for non-adapter output: safe | aggressive
+
+[command.docker]
+level = "aggressive" # per-command pin; CLI --compress wins over config
 ```
+
+Compression precedence: `--compress` flag > `--heuristic` (deprecated alias
+for aggressive) > `[command.<name>]` > `[compress]` > legacy `heuristic`
+key > safe.
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
 
@@ -131,11 +204,18 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 | pytest | `pytest`, `python -m pytest` | injected `--junit-xml` |
 | unittest | `python -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
+| vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
+| ruff | `ruff check` | injected `--output-format json` |
+| eslint | `eslint`, `npx eslint` | injected `--format json` |
+| tsc | `tsc`, `npx tsc` (not `--watch`) | injected `--pretty false` |
 
-No adapter match → JSON auto-detection → optional heuristic → passthrough.
+No adapter match → JSON auto-detection → compression ladder (safe tier by
+default, aggressive opt-in) → passthrough when nothing pays for itself.
 
-Want another runner (cargo test, go test, vitest, rspec)? See
+Want another runner (cargo test, go test, rspec)? See
 [CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.
+The roadmap lives in
+[docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md](docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md).
 
 ## Support
 

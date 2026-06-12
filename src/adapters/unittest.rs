@@ -28,7 +28,7 @@ impl Adapter for Unittest {
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         let report = parse_text(&captured.stderr)?;
         Ok(ParseOutcome {
-            report,
+            report: super::AdapterReport::Tests(report),
             // stdout holds user prints — the agent may need them.
             passthrough_stdout: (!captured.stdout.is_empty()).then(|| captured.stdout.clone()),
             // stderr WAS the report — consumed.

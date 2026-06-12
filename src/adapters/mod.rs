@@ -1,7 +1,11 @@
+pub mod eslint;
 pub mod jest;
 pub mod pytest;
 pub mod report;
+pub mod ruff;
+pub mod tsc;
 pub mod unittest;
+pub mod vitest;
 
 use crate::runner::Captured;
 use anyhow::Result;
@@ -20,10 +24,27 @@ impl Prepared {
     }
 }
 
+/// What an adapter produces: a structured test report (rendered with the
+/// asymmetric pass/fail layout) or an arbitrary TOON-encodable value
+/// (diagnostics tools like linters and typecheckers).
+pub enum AdapterReport {
+    Tests(report::TestReport),
+    Value(serde_json::Value),
+}
+
+impl AdapterReport {
+    pub fn render(&self, trace_lines: usize, fast_note: Option<&str>) -> String {
+        match self {
+            AdapterReport::Tests(r) => report::render(r, trace_lines, fast_note),
+            AdapterReport::Value(v) => crate::toon::encode(v),
+        }
+    }
+}
+
 /// What the agent should still see besides the TOON report.
 /// `None` means the adapter consumed that stream (it WAS the report).
 pub struct ParseOutcome {
-    pub report: report::TestReport,
+    pub report: AdapterReport,
     pub passthrough_stdout: Option<String>,
     pub passthrough_stderr: Option<String>,
 }
@@ -48,6 +69,10 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(pytest::Pytest),
         Box::new(unittest::Unittest),
         Box::new(jest::Jest),
+        Box::new(vitest::Vitest),
+        Box::new(ruff::Ruff),
+        Box::new(eslint::Eslint),
+        Box::new(tsc::Tsc),
     ]
 }
 
@@ -95,9 +120,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_three_adapters() {
+    fn registry_lists_all_adapters() {
         let names: Vec<&str> = registry().iter().map(|a| a.name()).collect();
-        assert_eq!(names, vec!["pytest", "unittest", "jest"]);
+        assert_eq!(
+            names,
+            vec!["pytest", "unittest", "jest", "vitest", "ruff", "eslint", "tsc"]
+        );
     }
 
     #[test]

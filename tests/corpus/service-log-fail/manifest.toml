@@ -1,0 +1,8 @@
+# Chatty leveled service log: 154 INFO/DEBUG lines, 1 ERROR, 1 WARN.
+must_survive = [
+  "ERROR api.db      connection refused to postgres:5432 (attempt 3/5)",
+  "WARN  api.retry   backoff 8s before next attempt",
+]
+# Measured 2026-06-11: safe 0.000, aggressive 0.925 (level filtering + windowing).
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.85

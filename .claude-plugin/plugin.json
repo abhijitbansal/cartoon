@@ -1,7 +1,7 @@
 {
   "name": "cartoon",
-  "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens",
-  "version": "0.1.2",
+  "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens. Includes a PreToolUse hook that auto-wraps noisy dev commands (requires the cartoon binary; no-op without it)",
+  "version": "0.2.0",
   "author": {
     "name": "Abhijit Bansal",
     "email": "contact@abhijitbansal.com"

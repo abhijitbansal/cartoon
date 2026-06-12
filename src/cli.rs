@@ -10,15 +10,29 @@ use clap::Parser;
   adapters                                   list built-in adapters
   logs [--tag <t>]                           list archived raw runs
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
+  logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
+  learn [--since <7d|24h|30m>]               config suggestions from your runs
+  hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
+  ingest (<file> | -)                        compress an existing log file
+                                             (or stdin: some-cmd | cartoon -)
 
 Every wrapped run archives its complete raw stdout/stderr and prints the
-location as a `raw_log:` footer — read that instead of rerunning unwrapped.
+location as a `raw_log:` footer — `cartoon logs grep` that instead of
+rerunning unwrapped.
 
-`stats`, `adapters`, and `logs` are reserved words; to wrap a binary \
-literally named `stats`, use: cartoon env stats"
+Non-adapter output compresses through the safe tier by default (ANSI,
+progress, duplicate and blank collapse — non-lossy in practice);
+--compress=aggressive adds lossy rules with the raw log as escape hatch.
+
+`stats`, `adapters`, `logs`, and `learn` are reserved words; to wrap a \
+binary literally named `stats`, use: cartoon env stats"
 )]
 pub struct Cli {
-    /// Enable the lossy heuristic fallback for this call
+    /// Compression level for non-adapter output: safe (default) | aggressive
+    #[arg(long, value_name = "LEVEL")]
+    pub compress: Option<String>,
+
+    /// Deprecated alias for --compress=aggressive
     #[arg(long)]
     pub heuristic: bool,
 
@@ -37,6 +51,12 @@ pub struct Cli {
     #[arg(long)]
     pub fast: bool,
 
+    /// Wrap a shell command string (like sh -c). Simple commands are
+    /// adapter-detected; strings with shell operators run via the shell
+    /// and compress through the generic ladder.
+    #[arg(short = 'c', long = "shell", value_name = "STRING")]
+    pub shell: Option<String>,
+
     /// Command to wrap plus its args (or: stats | adapters)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
@@ -46,6 +66,7 @@ pub struct Cli {
 pub enum Mode {
     Wrap {
         argv: Vec<String>,
+        compress: Option<String>,
         heuristic: bool,
         raw: bool,
         tags: Vec<String>,
@@ -56,12 +77,35 @@ pub enum Mode {
     },
     Adapters,
     Logs(LogsQuery),
+    Learn {
+        since: Option<String>,
+    },
+    Hook {
+        args: Vec<String>,
+    },
+    /// Run an existing log (file or stdin) through the compression flow.
+    Ingest {
+        source: String,
+        compress: Option<String>,
+        tags: Vec<String>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
 pub enum LogsQuery {
-    List { tag: Option<String> },
-    Show { sel: RunSel, stream: StreamSel },
+    List {
+        tag: Option<String>,
+    },
+    Show {
+        sel: RunSel,
+        stream: StreamSel,
+    },
+    /// Search a run's raw output instead of re-reading all of it.
+    Grep {
+        sel: RunSel,
+        pattern: String,
+        context: usize,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -77,7 +121,64 @@ pub enum StreamSel {
     Stderr,
 }
 
+/// Shell metacharacters that force `sh -c` execution; a string without
+/// any of these is split into argv so adapters can detect the command.
+fn needs_shell(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            '|' | '&'
+                | ';'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '$'
+                | '`'
+                | '\\'
+                | '"'
+                | '\''
+                | '*'
+                | '?'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '~'
+                | '\n'
+                | '='
+        )
+    })
+}
+
+pub fn shell_argv(s: &str) -> Vec<String> {
+    if needs_shell(s) {
+        let sh = if cfg!(windows) { "cmd" } else { "sh" };
+        let flag = if cfg!(windows) { "/C" } else { "-c" };
+        vec![sh.to_string(), flag.to_string(), s.to_string()]
+    } else {
+        s.split_whitespace().map(String::from).collect()
+    }
+}
+
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
+    if let Some(s) = cli.shell {
+        if !cli.command.is_empty() {
+            anyhow::bail!("-c/--shell takes the whole command as one string; drop the extra args");
+        }
+        let argv = shell_argv(&s);
+        if argv.is_empty() {
+            anyhow::bail!("-c/--shell got an empty command string");
+        }
+        return Ok(Mode::Wrap {
+            argv,
+            compress: cli.compress,
+            heuristic: cli.heuristic,
+            raw: cli.raw,
+            tags: cli.tags,
+            fast: cli.fast,
+        });
+    }
     if cli.command.is_empty() {
         anyhow::bail!("no command given. usage: cartoon <cmd> [args...]");
     }
@@ -87,8 +188,29 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         }),
         "adapters" => Ok(Mode::Adapters),
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
+        "learn" => Ok(Mode::Learn {
+            since: parse_since(&cli.command[1..])?,
+        }),
+        "hook" => Ok(Mode::Hook {
+            args: cli.command[1..].to_vec(),
+        }),
+        "ingest" => match &cli.command[1..] {
+            [source] => Ok(Mode::Ingest {
+                source: source.clone(),
+                compress: cli.compress,
+                tags: cli.tags,
+            }),
+            _ => anyhow::bail!("usage: cartoon ingest (<file> | -)"),
+        },
+        // `some-cmd | cartoon -` shorthand for stdin ingest
+        "-" if cli.command.len() == 1 => Ok(Mode::Ingest {
+            source: "-".into(),
+            compress: cli.compress,
+            tags: cli.tags,
+        }),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
+            compress: cli.compress,
             heuristic: cli.heuristic,
             raw: cli.raw,
             tags: cli.tags,
@@ -106,8 +228,10 @@ fn parse_since(args: &[String]) -> anyhow::Result<Option<String>> {
 }
 
 fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
-    const USAGE: &str =
-        "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr]";
+    const USAGE: &str = "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr] | cartoon logs grep <pattern> [<id> | --last] [-C <lines>]";
+    if args.first().map(String::as_str) == Some("grep") {
+        return parse_logs_grep(&args[1..], USAGE);
+    }
     let mut sel: Option<RunSel> = None;
     let mut stream = StreamSel::Both;
     let mut tag: Option<String> = None;
@@ -132,6 +256,33 @@ fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
     }
 }
 
+fn parse_logs_grep(args: &[String], usage: &str) -> anyhow::Result<LogsQuery> {
+    let mut pattern: Option<String> = None;
+    let mut sel: Option<RunSel> = None;
+    let mut context = 2usize;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--last" if sel.is_none() => sel = Some(RunSel::Last),
+            "-C" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!(usage.to_string()))?;
+                context = v.parse().map_err(|_| anyhow::anyhow!(usage.to_string()))?;
+            }
+            s if pattern.is_none() => pattern = Some(s.to_string()),
+            s if sel.is_none() && !s.starts_with('-') => sel = Some(RunSel::Id(s.to_string())),
+            _ => anyhow::bail!(usage.to_string()),
+        }
+    }
+    let pattern = pattern.ok_or_else(|| anyhow::anyhow!(usage.to_string()))?;
+    Ok(LogsQuery::Grep {
+        sel: sel.unwrap_or(RunSel::Last),
+        pattern,
+        context,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +299,7 @@ mod tests {
             m,
             Mode::Wrap {
                 argv: vec!["pytest".into(), "-q".into(), "--maxfail=1".into()],
+                compress: None,
                 heuristic: false,
                 raw: false,
                 tags: vec![],
@@ -207,6 +359,7 @@ mod tests {
             m,
             Mode::Wrap {
                 argv: vec!["pytest".into()],
+                compress: None,
                 heuristic: false,
                 raw: false,
                 tags: vec!["api".into(), "ci".into()],
@@ -284,5 +437,62 @@ mod tests {
     fn fast_defaults_off() {
         let m = mode(&["cartoon", "pytest"]);
         assert!(matches!(m, Mode::Wrap { fast: false, .. }));
+    }
+
+    #[test]
+    fn compress_flag_parses() {
+        let cli = Cli::parse_from(["cartoon", "--compress", "aggressive", "make"]);
+        assert_eq!(cli.compress.as_deref(), Some("aggressive"));
+    }
+
+    #[test]
+    fn ingest_file_parses() {
+        assert_eq!(
+            mode(&["cartoon", "ingest", "build.log"]),
+            Mode::Ingest {
+                source: "build.log".into(),
+                compress: None,
+                tags: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn ingest_with_compress_and_tag() {
+        let m = mode(&[
+            "cartoon",
+            "--compress",
+            "aggressive",
+            "--tag",
+            "ci",
+            "ingest",
+            "x.log",
+        ]);
+        assert_eq!(
+            m,
+            Mode::Ingest {
+                source: "x.log".into(),
+                compress: Some("aggressive".into()),
+                tags: vec!["ci".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn bare_dash_is_stdin_ingest() {
+        assert_eq!(
+            mode(&["cartoon", "-"]),
+            Mode::Ingest {
+                source: "-".into(),
+                compress: None,
+                tags: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn ingest_without_source_errors() {
+        assert!(parse_mode(Cli::parse_from(["cartoon", "ingest"])).is_err());
+        assert!(parse_mode(Cli::parse_from(["cartoon", "ingest", "a", "b"])).is_err());
     }
 }

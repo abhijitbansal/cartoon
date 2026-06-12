@@ -39,7 +39,16 @@ Prefix only — all flags and args of the wrapped command stay verbatim:
 cartoon pytest                          # instead of: pytest
 cartoon npx jest src/                   # any supported runner
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
+cartoon make                            # any noisy command: safe compression is automatic
+cartoon ingest build.log                # a log that already exists on disk
+some-cmd | cartoon -                    # or piped in
 ```
+
+Commands without a dedicated adapter still compress: the safe tier (ANSI,
+progress, duplicate, blank collapse) applies automatically, and
+`--compress=aggressive` adds lossy rules (log-level filtering, diagnostic
+tables, error windowing) when the user wants deeper cuts. A net-savings
+guard means worst case is byte-identical output — wrapping is never worse.
 
 Read the result like a test report: `summary` has the counts; if
 `failed > 0`, the `failures[...]` rows and `traces` section contain
@@ -63,8 +72,15 @@ raw_log: ~/.local/state/cartoon/runs/20260611-051415-342d
 ```
 
 If the TOON summary dropped something you need (full tracebacks, warnings,
-print output), read `<raw_log path>/stdout.log` (or `stderr.log`) instead
-of rerunning the command.
+print output), do NOT cat the whole file — that spends the tokens cartoon
+just saved. Search it instead:
+
+```bash
+cartoon logs grep "ERROR" --last -C 2   # matching lines + context, capped
+```
+
+Only read `<raw_log path>/stdout.log` in full when a targeted grep can't
+answer the question.
 
 ## Why wrapping is safe
 

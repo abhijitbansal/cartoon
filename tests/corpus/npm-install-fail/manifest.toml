@@ -1,0 +1,11 @@
+# npm install ERESOLVE peer-dependency conflict (npm v10 error format).
+must_survive = [
+  "npm error code ERESOLVE",
+  "npm error Could not resolve dependency:",
+  "npm error Conflicting peer dependency: typescript@4.9.5",
+]
+# Safe is marginally negative here: the bare `npm error` dupe collapses to
+# an `(x2)` marker that costs ~1 token more than it saves. In production the
+# net-savings guard emits the original instead; the floor documents the rule.
+min_reduction_safe = -0.01
+min_reduction_aggressive = -0.01

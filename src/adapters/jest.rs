@@ -36,7 +36,7 @@ impl Adapter for Jest {
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         let report = parse_json(&captured.stdout)?;
         Ok(ParseOutcome {
-            report,
+            report: super::AdapterReport::Tests(report),
             // stdout was the JSON payload; stderr was jest's human report.
             // Both consumed. v1 limitation: console.log output inside tests
             // is not forwarded (it lives inside the jest report).
@@ -90,6 +90,10 @@ struct JestLoc {
 }
 
 pub fn parse_json(stdout: &str) -> Result<TestReport> {
+    parse_json_named(stdout, "jest")
+}
+
+pub fn parse_json_named(stdout: &str, runner: &'static str) -> Result<TestReport> {
     let json_value =
         crate::fallback::detect_json(stdout).context("no JSON document in jest output")?;
     let root: JestRoot = serde_json::from_value(json_value).context("jest JSON shape mismatch")?;
@@ -124,7 +128,7 @@ pub fn parse_json(stdout: &str) -> Result<TestReport> {
     }
 
     Ok(TestReport {
-        runner: "jest",
+        runner,
         total: root.total,
         passed: root.passed,
         failed: root.failed,

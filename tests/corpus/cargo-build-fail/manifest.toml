@@ -1,0 +1,12 @@
+# Real `cargo build` failure (3 compile errors), paths scrubbed.
+# must_survive uses substrings that survive both tiers: aggressive
+# re-shapes rustc blocks into the TOON diagnostics table.
+must_survive = [
+  "cannot find value `c` in this scope",
+  "mismatched types",
+  "borrow of moved value: `s`",
+  "error: could not compile `cartoon-fixture-proj` (lib) due to 3 previous errors",
+]
+# Measured 2026-06-11: safe 0.002, aggressive 0.615 (rustc block extraction).
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.55
