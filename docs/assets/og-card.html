@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<!-- Source for docs/assets/og.png (1200x630). Regenerate with:
+     chrome --headless=new --screenshot=og.png --window-size=1200,630 \
+       --virtual-time-budget=15000 --hide-scrollbars file://$PWD/og-card.html -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: #121a24;
+    background-image:
+      radial-gradient(ellipse at 85% 0%, rgba(212,167,58,0.20) 0%, transparent 48%),
+      radial-gradient(ellipse at 0% 100%, rgba(143,180,221,0.14) 0%, transparent 42%);
+    color: #e8e4da;
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 64px 72px 56px;
+    font-family: 'Instrument Serif', Georgia, serif;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 18px;
+    font-family: 'JetBrains Mono', monospace; font-size: 22px;
+    letter-spacing: 6px; text-transform: uppercase; color: #d4a73a;
+  }
+  .mark { width: 52px; height: 52px; border-radius: 12px; }
+  h1 {
+    font-weight: 400; font-size: 84px; line-height: 1.04;
+    letter-spacing: -1px; max-width: 17ch;
+  }
+  h1 em { font-style: italic; color: #d4a73a; }
+  .foot {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .pills { display: flex; gap: 14px; }
+  .pill {
+    font-size: 19px; color: #93a0b0;
+    border: 1.5px solid rgba(214,226,240,0.22); border-radius: 999px;
+    padding: 10px 22px;
+  }
+  .pill b { color: #7fc8a0; font-weight: 600; }
+  .url { font-size: 20px; color: #8fb4dd; }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <rect width="64" height="64" rx="14" fill="#1e3a5f"/>
+      <path d="M18 20 L30 32 L18 44" fill="none" stroke="#d4a73a" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M34 20 L46 32 L34 44" fill="none" stroke="#f2e3bb" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    </svg>
+    cartoon
+  </div>
+  <h1>Stop paying your AI agent to read <em>PASSED PASSED PASSED</em>.</h1>
+  <div class="foot">
+    <div class="pills">
+      <div class="pill"><b>~70%</b> smaller test runs</div>
+      <div class="pill">raw log always archived</div>
+      <div class="pill">exit codes mirrored</div>
+    </div>
+    <div class="url">abhijitbansal.github.io/cartoon</div>
+  </div>
+</body>
+</html>
