@@ -9,6 +9,23 @@ pub struct Captured {
     pub status: ExitStatus,
 }
 
+impl Captured {
+    /// A Captured that no process produced (e.g. `cartoon ingest` reading an
+    /// existing log). Status is a synthetic success; callers pass the real
+    /// exit code separately everywhere it matters.
+    pub fn synthetic(stdout: String, stderr: String) -> Self {
+        #[cfg(unix)]
+        let status = <ExitStatus as std::os::unix::process::ExitStatusExt>::from_raw(0);
+        #[cfg(windows)]
+        let status = <ExitStatus as std::os::windows::process::ExitStatusExt>::from_raw(0);
+        Captured {
+            stdout,
+            stderr,
+            status,
+        }
+    }
+}
+
 /// Spawn argv[0] with argv[1..], capture both streams, wait for exit.
 /// Non-UTF8 output is converted lossily (documented v1 limitation).
 pub fn run(argv: &[String]) -> Result<Captured> {

@@ -30,6 +30,20 @@ pub fn run_wrap(
         eprint!("{}", captured.stderr);
         return Ok(code);
     }
+    transform_emit_record(argv, &captured, code, level, tags, cfg)
+}
+
+/// Shared tail of the non-adapter flow: transform under the ladder, apply
+/// the net-savings guard (footer included), archive, emit, record stats.
+/// Used by wrapped runs and by `ingest` (existing logs, synthetic capture).
+fn transform_emit_record(
+    argv: &[String],
+    captured: &runner::Captured,
+    code: i32,
+    level: CompressLevel,
+    tags: &[String],
+    cfg: &Config,
+) -> Result<i32> {
     // Reserve the archive slot first so the raw_log footer (part of the
     // emitted output) can be counted in the net-savings guard below.
     let reserved = archive::reserve(cfg);
@@ -58,7 +72,7 @@ pub fn run_wrap(
         }
     };
     let run =
-        reserved.and_then(|r| archive::write_reserved(r, argv, mode, &captured, code, tags, cfg));
+        reserved.and_then(|r| archive::write_reserved(r, argv, mode, captured, code, tags, cfg));
     if mode == "passthrough" {
         // Byte-identical guarantee: no trailing-newline normalization.
         print!("{out}");
@@ -78,6 +92,31 @@ pub fn run_wrap(
         run.as_ref().map(|r| r.id.as_str()),
     );
     Ok(code)
+}
+
+/// `cartoon ingest (<file> | -)` — run an EXISTING log through the same
+/// flow as a wrapped command: JSON detect → ladder → net-savings guard →
+/// raw-log archive → stats. Exit code is 0 (nothing executed) unless the
+/// source can't be read.
+pub fn run_ingest(
+    source: &str,
+    level: CompressLevel,
+    tags: &[String],
+    cfg: &Config,
+) -> Result<i32> {
+    let content = if source == "-" {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| anyhow::anyhow!("cannot read stdin: {e}"))?;
+        buf
+    } else {
+        std::fs::read_to_string(source).map_err(|e| anyhow::anyhow!("cannot read {source}: {e}"))?
+    };
+    let argv = vec!["ingest".to_string(), source.to_string()];
+    let captured = runner::Captured::synthetic(content, String::new());
+    transform_emit_record(&argv, &captured, 0, level, tags, cfg)
 }
 
 fn run_with_adapter(

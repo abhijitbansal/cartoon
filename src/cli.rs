@@ -13,6 +13,8 @@ use clap::Parser;
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
   learn [--since <7d|24h|30m>]               config suggestions from your runs
   hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
+  ingest (<file> | -)                        compress an existing log file
+                                             (or stdin: some-cmd | cartoon -)
 
 Every wrapped run archives its complete raw stdout/stderr and prints the
 location as a `raw_log:` footer — `cartoon logs grep` that instead of
@@ -80,6 +82,12 @@ pub enum Mode {
     },
     Hook {
         args: Vec<String>,
+    },
+    /// Run an existing log (file or stdin) through the compression flow.
+    Ingest {
+        source: String,
+        compress: Option<String>,
+        tags: Vec<String>,
     },
 }
 
@@ -185,6 +193,20 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         }),
         "hook" => Ok(Mode::Hook {
             args: cli.command[1..].to_vec(),
+        }),
+        "ingest" => match &cli.command[1..] {
+            [source] => Ok(Mode::Ingest {
+                source: source.clone(),
+                compress: cli.compress,
+                tags: cli.tags,
+            }),
+            _ => anyhow::bail!("usage: cartoon ingest (<file> | -)"),
+        },
+        // `some-cmd | cartoon -` shorthand for stdin ingest
+        "-" if cli.command.len() == 1 => Ok(Mode::Ingest {
+            source: "-".into(),
+            compress: cli.compress,
+            tags: cli.tags,
         }),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
@@ -421,5 +443,56 @@ mod tests {
     fn compress_flag_parses() {
         let cli = Cli::parse_from(["cartoon", "--compress", "aggressive", "make"]);
         assert_eq!(cli.compress.as_deref(), Some("aggressive"));
+    }
+
+    #[test]
+    fn ingest_file_parses() {
+        assert_eq!(
+            mode(&["cartoon", "ingest", "build.log"]),
+            Mode::Ingest {
+                source: "build.log".into(),
+                compress: None,
+                tags: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn ingest_with_compress_and_tag() {
+        let m = mode(&[
+            "cartoon",
+            "--compress",
+            "aggressive",
+            "--tag",
+            "ci",
+            "ingest",
+            "x.log",
+        ]);
+        assert_eq!(
+            m,
+            Mode::Ingest {
+                source: "x.log".into(),
+                compress: Some("aggressive".into()),
+                tags: vec!["ci".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn bare_dash_is_stdin_ingest() {
+        assert_eq!(
+            mode(&["cartoon", "-"]),
+            Mode::Ingest {
+                source: "-".into(),
+                compress: None,
+                tags: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn ingest_without_source_errors() {
+        assert!(parse_mode(Cli::parse_from(["cartoon", "ingest"])).is_err());
+        assert!(parse_mode(Cli::parse_from(["cartoon", "ingest", "a", "b"])).is_err());
     }
 }

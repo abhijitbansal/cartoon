@@ -53,6 +53,25 @@ fn main() {
             eprintln!("cartoon: {e}");
             2
         }),
+        Ok(cartoon::cli::Mode::Ingest {
+            source,
+            compress,
+            tags,
+        }) => {
+            let cfg = cartoon::config::load();
+            match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
+                Ok(level) => {
+                    cartoon::app::run_ingest(&source, level, &tags, &cfg).unwrap_or_else(|e| {
+                        eprintln!("cartoon: {e}");
+                        2
+                    })
+                }
+                Err(e) => {
+                    eprintln!("cartoon: {e}");
+                    2
+                }
+            }
+        }
         Err(e) => {
             eprintln!("cartoon: {e}");
             2
