@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cartoon — token-optimized output for any CLI</title>
+<meta name="description" content="Prefix cartoon onto any command and your AI agent reads 12 lines instead of 800 — with the full raw log always archived. Exit codes mirrored, zero-risk by construction.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-display: 'Instrument Serif', Georgia, serif;
+    --font-body: 'Source Sans 3', 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    --bg: #f7f5f0;
+    --surface: #ffffff;
+    --surface2: #efece4;
+    --surface-elevated: #fffdf7;
+    --border: rgba(30, 58, 95, 0.10);
+    --border-bright: rgba(30, 58, 95, 0.22);
+    --text: #1c2b3a;
+    --text-dim: #6b7787;
+    --navy: #1e3a5f;
+    --navy-dim: rgba(30, 58, 95, 0.07);
+    --gold: #b8860b;
+    --gold-dim: rgba(212, 167, 58, 0.13);
+    --green: #2f6f4f;
+    --green-dim: rgba(47, 111, 79, 0.09);
+    --rust: #9a3b22;
+    --rust-dim: rgba(154, 59, 34, 0.08);
+    --slate: #44617e;
+    --slate-dim: rgba(68, 97, 126, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121a24;
+      --surface: #1a2430;
+      --surface2: #16202b;
+      --surface-elevated: #212d3c;
+      --border: rgba(214, 226, 240, 0.08);
+      --border-bright: rgba(214, 226, 240, 0.18);
+      --text: #e8e4da;
+      --text-dim: #93a0b0;
+      --navy: #8fb4dd;
+      --navy-dim: rgba(143, 180, 221, 0.10);
+      --gold: #d4a73a;
+      --gold-dim: rgba(212, 167, 58, 0.14);
+      --green: #7fc8a0;
+      --green-dim: rgba(127, 200, 160, 0.10);
+      --rust: #e08a6d;
+      --rust-dim: rgba(224, 138, 109, 0.10);
+      --slate: #9db8d2;
+      --slate-dim: rgba(157, 184, 210, 0.10);
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    background-image:
+      radial-gradient(ellipse at 80% 0%, var(--gold-dim) 0%, transparent 42%),
+      radial-gradient(ellipse at 0% 100%, var(--navy-dim) 0%, transparent 38%);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.55;
+    padding: 0 28px 72px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  .anim { animation: fadeUp 0.5s ease-out both; animation-delay: calc(var(--i, 0) * 0.05s); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  code, pre { font-family: var(--font-mono); }
+  p code, li code, td code, .gcard code {
+    font-size: 0.85em; background: var(--navy-dim); color: var(--navy);
+    padding: 1px 5px; border-radius: 4px;
+  }
+
+  /* hero */
+  .hero { padding: 84px 0 30px; text-align: center; }
+  .hero .brand {
+    font-family: var(--font-mono); font-size: 13px; letter-spacing: 4px;
+    text-transform: uppercase; color: var(--gold); margin-bottom: 22px;
+  }
+  h1 {
+    font-family: var(--font-display); font-weight: 400;
+    font-size: clamp(40px, 6.5vw, 68px); line-height: 1.04;
+    letter-spacing: -0.5px; text-wrap: balance; max-width: 18ch; margin: 0 auto;
+  }
+  h1 em { font-style: italic; color: var(--gold); }
+  .hero .sub {
+    font-size: 19px; color: var(--text-dim); max-width: 58ch; margin: 22px auto 0;
+  }
+  .install-row {
+    display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 30px;
+  }
+  .install-pill {
+    font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--surface); border: 1px solid var(--border-bright);
+    border-radius: 999px; padding: 8px 16px;
+    transition: border-color .2s, transform .2s;
+  }
+  .install-pill:hover { border-color: var(--gold); transform: translateY(-1px); }
+  .install-pill b { color: var(--gold); font-weight: 600; }
+
+  .statband {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px; margin: 44px 0 0;
+  }
+  .stat {
+    background: var(--surface-elevated); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 16px 14px;
+    box-shadow: 0 6px 24px rgba(30,58,95,0.06); min-width: 0;
+  }
+  .stat .n { font-family: var(--font-display); font-size: 40px; line-height: 1; color: var(--navy); }
+  .stat.gold { border-color: var(--gold); background: linear-gradient(160deg, var(--gold-dim), var(--surface-elevated) 70%); }
+  .stat.gold .n { color: var(--gold); }
+  .stat .l { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .8px; text-transform: uppercase; color: var(--text-dim); margin-top: 8px; }
+
+  /* sections */
+  h2 { font-family: var(--font-display); font-weight: 400; font-size: 32px; margin-bottom: 8px; }
+  .shead { margin: 76px 0 24px; }
+  .shead .rule { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+  .shead .rule::after { content: ''; flex: 1; height: 1px; background: var(--border-bright); }
+  .shead .tag {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--gold);
+    border: 1px solid var(--gold); border-radius: 999px; padding: 2px 12px;
+  }
+  .shead p { color: var(--text-dim); max-width: 70ch; }
+
+  /* before / after */
+  .ba {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--border-bright); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 10px 32px rgba(30,58,95,0.08);
+  }
+  @media (max-width: 720px) { .ba { grid-template-columns: 1fr; } }
+  .ba > div { padding: 20px 22px; min-width: 0; }
+  .ba .before { background: var(--surface2); border-right: 1px solid var(--border); }
+  .ba .after { background: var(--surface); }
+  .ba h4 { font-family: var(--font-mono); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; color: var(--text-dim); }
+  .ba .after h4 { color: var(--green); }
+  .ba pre { font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: break-word; }
+  .ba .dim { color: var(--text-dim); }
+  .ba .cost { margin-top: 12px; font-family: var(--font-mono); font-size: 12px; }
+  .ba .before .cost { color: var(--rust); }
+  .ba .after .cost { color: var(--green); }
+
+  /* feature grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+  .gcard {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; min-width: 0;
+    transition: border-color .2s, transform .2s;
+  }
+  .gcard:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+  .gcard .chip {
+    display: inline-block; font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+    letter-spacing: 1.2px; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; margin-bottom: 12px;
+  }
+  .chip--navy { color: var(--navy); background: var(--navy-dim); }
+  .chip--gold { color: var(--gold); background: var(--gold-dim); }
+  .chip--green { color: var(--green); background: var(--green-dim); }
+  .chip--rust { color: var(--rust); background: var(--rust-dim); }
+  .chip--slate { color: var(--slate); background: var(--slate-dim); }
+  .gcard h3 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+  .gcard h3 code { font-size: 14px; }
+  .gcard p { font-size: 14px; color: var(--text-dim); }
+
+  /* pipeline */
+  .pipeline { display: flex; align-items: stretch; overflow-x: auto; padding: 6px 0 10px; }
+  .pstep {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; min-width: 150px; max-width: 200px; flex-shrink: 0;
+  }
+  .pstep .pn { font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: 1px; margin-bottom: 5px; }
+  .pstep .pt { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+  .pstep .pd { font-size: 11px; color: var(--text-dim); line-height: 1.45; }
+  .pstep--navy { border-top: 3px solid var(--navy); } .pstep--navy .pn { color: var(--navy); }
+  .pstep--gold { border-top: 3px solid var(--gold); } .pstep--gold .pn { color: var(--gold); }
+  .pstep--green { border-top: 3px solid var(--green); } .pstep--green .pn { color: var(--green); }
+  .pstep--rust { border-top: 3px solid var(--rust); } .pstep--rust .pn { color: var(--rust); }
+  .pstep--slate { border-top: 3px solid var(--slate); } .pstep--slate .pn { color: var(--slate); }
+  .parrow { display: flex; align-items: center; padding: 0 8px; color: var(--border-bright); font-size: 18px; flex-shrink: 0; }
+  .pnote { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-top: 10px; }
+
+  /* guarantees */
+  .gx { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .gx .g {
+    background: var(--surface-elevated); border: 1px solid var(--border);
+    border-left: 4px solid var(--gold); border-radius: 0 12px 12px 0;
+    padding: 18px 20px; min-width: 0;
+  }
+  .gx .g h3 { font-family: var(--font-display); font-weight: 400; font-size: 20px; margin-bottom: 6px; }
+  .gx .g p { font-size: 13.5px; color: var(--text-dim); }
+
+  /* tables */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--surface); }
+  thead th {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase;
+    text-align: left; color: var(--text-dim); padding: 11px 14px;
+    background: var(--surface2); border-bottom: 1px solid var(--border-bright);
+  }
+  tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface) 60%, var(--surface2) 40%); }
+  tbody tr:hover { background: var(--gold-dim); }
+  td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .good { color: var(--green); font-weight: 600; }
+
+  /* agent setup */
+  .setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .setup .s {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; min-width: 0;
+  }
+  .setup .s h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+  .setup pre {
+    font-size: 11.5px; line-height: 1.7; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+    white-space: pre-wrap; overflow-wrap: break-word; margin-top: 8px;
+  }
+  .setup p { font-size: 13px; color: var(--text-dim); }
+
+  /* pull quote */
+  .pull {
+    font-family: var(--font-display); font-size: clamp(24px, 3.4vw, 34px);
+    font-style: italic; text-align: center; color: var(--navy);
+    max-width: 26ch; margin: 84px auto; line-height: 1.3; text-wrap: balance;
+  }
+  .pull span { color: var(--gold); }
+
+  footer {
+    margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-dim);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  footer a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--border-bright); }
+
+  @media (max-width: 640px) { body { padding: 0 16px 56px; } .hero { padding-top: 56px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero anim" style="--i:0">
+    <div class="brand">cartoon</div>
+    <h1>Stop paying your AI agent to read <em>PASSED PASSED PASSED</em>.</h1>
+    <p class="sub">Prefix <code>cartoon</code> onto any command and its output becomes compact, structured, agent-ready — same exit codes, same behavior, a fraction of the input tokens. The full raw log is always archived, so compression is reversible by construction.</p>
+    <div class="install-row">
+      <div class="install-pill"><b>uv</b> tool install cartoon</div>
+      <div class="install-pill"><b>pipx</b> install cartoon</div>
+      <div class="install-pill"><b>npm</b> i -g cartoon-wrap</div>
+      <div class="install-pill"><b>cargo</b> install cartoon</div>
+    </div>
+  </section>
+
+  <div class="statband">
+    <div class="stat gold anim" style="--i:1"><div class="n">~70%</div><div class="l">smaller test runs, typical</div></div>
+    <div class="stat anim" style="--i:2"><div class="n">92.5%</div><div class="l">token cut · chatty service log</div></div>
+    <div class="stat anim" style="--i:3"><div class="n">61.5%</div><div class="l">token cut · cargo build failure</div></div>
+    <div class="stat anim" style="--i:4"><div class="n">0</div><div class="l">risk — output never gets bigger</div></div>
+  </div>
+
+  <!-- ============ BEFORE / AFTER ============ -->
+  <div class="shead anim" style="--i:5">
+    <div class="rule"><span class="tag">See it</span></div>
+    <h2>A failing pytest run, before and after</h2>
+    <p>Agents read CLI output formatted for humans: banners, progress noise, hundreds of pass lines — and you pay for every token, on every subsequent turn of the conversation. cartoon keeps what the agent needs and drops the rest.</p>
+  </div>
+
+  <div class="ba anim" style="--i:6">
+    <div class="before">
+      <h4>pytest · raw</h4>
+      <pre class="dim">==================== test session starts ====================
+platform darwin -- Python 3.12.4, pytest-9.0.3
+collected 48 items
+
+tests/test_auth.py::test_login PASSED              [  2%]
+tests/test_auth.py::test_logout PASSED             [  4%]
+&hellip;44 more lines of PASSED&hellip;
+tests/test_auth.py::test_expiry FAILED             [ 87%]
+&hellip;full session banner, warnings, summary&hellip;</pre>
+      <div class="cost">~4,800 tokens → the agent</div>
+    </div>
+    <div class="after">
+      <h4>cartoon pytest</h4>
+      <pre>runner: pytest
+summary:
+  total: 48
+  passed: 45
+  failed: 2
+  skipped: 1
+  duration_s: 3.2
+failures[2]{id,loc,msg}:
+  "tests/test_auth.py::test_expiry","tests/test_auth.py:42",assert exp &lt; now
+  "tests/test_user.py::test_create","tests/test_user.py:88","KeyError: 'email'"
+traces:
+  "tests/test_auth.py::test_expiry"[2]: "tests/test_auth.py:42 in test_expiry",assert token.exp &lt; now()
+raw_log: ~/.local/state/cartoon/runs/20260611-051415-342d</pre>
+      <div class="cost">~300 tokens — failures keep full detail</div>
+    </div>
+  </div>
+
+  <!-- ============ FEATURES ============ -->
+  <div class="shead anim" style="--i:7">
+    <div class="rule"><span class="tag">Features</span></div>
+    <h2>Everything in the box</h2>
+  </div>
+
+  <div class="grid">
+    <div class="gcard anim" style="--i:8">
+      <span class="chip chip--navy">Adapters</span>
+      <h3>Seven runners, native formats</h3>
+      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--format json</code>, <code>--pretty false</code>) and renders a compact report. Clean lint/typecheck runs collapse to a summary line.</p>
+    </div>
+    <div class="gcard anim" style="--i:9">
+      <span class="chip chip--gold">Default on</span>
+      <h3>Compression ladder</h3>
+      <p>No adapter? The safe tier still fires: ANSI stripping, progress-bar collapse, duplicate and blank collapse — deterministic, non-lossy in practice. Opt into <code>--compress=aggressive</code> for log-level filtering, near-duplicate templating, compiler-diagnostic tables, and error-anchored windowing.</p>
+    </div>
+    <div class="gcard anim" style="--i:10">
+      <span class="chip chip--green">Reversible</span>
+      <h3>Raw log archive + grep</h3>
+      <p>Every run stores complete stdout/stderr on disk and prints a <code>raw_log:</code> pointer. Need something the summary dropped? <code>cartoon logs grep ERROR --last</code> fetches just the matching lines — never re-run, never re-read 100k tokens.</p>
+    </div>
+    <div class="gcard anim" style="--i:11">
+      <span class="chip chip--green">Bring your logs</span>
+      <h3><code>cartoon ingest</code></h3>
+      <p>Already have the log? <code>cartoon ingest build.log</code> — or pipe it: <code>some-cmd | cartoon -</code>. Existing files go through the exact same flow as a wrapped command: detection, ladder, guard, archive, stats.</p>
+    </div>
+    <div class="gcard anim" style="--i:12">
+      <span class="chip chip--slate">Self-tuning</span>
+      <h3><code>cartoon learn</code></h3>
+      <p>Mines your own usage ledger — all local, no telemetry. Commands wasting tokens uncompressed get ready-to-paste config pins; repeated identical failures get a "read the archive instead of re-running" nudge.</p>
+    </div>
+    <div class="gcard anim" style="--i:13">
+      <span class="chip chip--rust">Hands-free</span>
+      <h3>Claude Code auto-wrap hook</h3>
+      <p>The plugin ships a PreToolUse hook that rewrites noisy dev commands (test, lint, typecheck, build) to run under cartoon automatically. Conservative allowlist, fail-open on anything unrecognized — savings stop depending on the model remembering a skill.</p>
+    </div>
+    <div class="gcard anim" style="--i:14">
+      <span class="chip chip--navy">Receipts</span>
+      <h3><code>cartoon stats</code></h3>
+      <p>A local ledger records tokens in, tokens out, and savings per call, per adapter. <code>cartoon stats --since 7d</code> tells you exactly what cartoon earned — self-measuring, not self-reported.</p>
+    </div>
+    <div class="gcard anim" style="--i:15">
+      <span class="chip chip--gold">Speed, disclosed</span>
+      <h3><code>--fast</code> mode</h3>
+      <p>Opt-in acceleration: pytest gains <code>-n auto</code> via pytest-xdist, disclosed right in the report. Strictly off by default — parallel execution is not "same behavior", so cartoon never enables it on its own.</p>
+    </div>
+  </div>
+
+  <!-- ============ HOW ============ -->
+  <div class="shead anim" style="--i:16">
+    <div class="rule"><span class="tag">How it's achieved</span></div>
+    <h2>One pipeline, first understanding wins</h2>
+    <p>Every wrapped command and ingested log flows through the same stages. Each compression rule is a pure function that no-ops when its pattern is absent — plain prose is never mangled.</p>
+  </div>
+
+  <div class="anim" style="--i:17">
+    <div class="pipeline">
+      <div class="pstep pstep--navy"><div class="pn">IN</div><div class="pt">command or log</div><div class="pd">cartoon pytest · cartoon -c '&hellip;' · cartoon ingest file · cmd | cartoon -</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--navy"><div class="pn">1 · MATCH</div><div class="pt">adapter?</div><div class="pd">inject machine format, parse, render compact report</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--gold"><div class="pn">2 · DETECT</div><div class="pt">JSON?</div><div class="pd">any JSON document in stdout → TOON encoding</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--green"><div class="pn">3 · SAFE (DEFAULT)</div><div class="pt">deterministic rules</div><div class="pd">ANSI · progress · duplicates · blanks</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--rust"><div class="pn">4 · OPT-IN</div><div class="pt">aggressive rules</div><div class="pd">level filter · near-dup templates · diagnostic tables · error windows</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--slate"><div class="pn">5 · GUARD</div><div class="pt">net-savings check</div><div class="pd">must beat the original token count (footer included) or pass through byte-identical</div></div>
+      <div class="parrow">→</div>
+      <div class="pstep pstep--gold"><div class="pn">OUT</div><div class="pt">compact + receipt</div><div class="pd">raw_log pointer · full output archived · exit code mirrored</div></div>
+    </div>
+    <p class="pnote">Quality is enforced by a golden corpus in CI: real captured logs with must-survive signal assertions and measured token-reduction floors.</p>
+  </div>
+
+  <!-- ============ GUARANTEES ============ -->
+  <div class="shead anim" style="--i:18">
+    <div class="rule"><span class="tag">Why you can trust it</span></div>
+    <h2>Four guarantees, by construction</h2>
+    <p>Filter tools must be trusted blindly — dropped lines are gone. cartoon is built so you never have to trust it.</p>
+  </div>
+
+  <div class="gx anim" style="--i:19">
+    <div class="g"><h3>Reversible</h3><p>Every run archives full raw stdout/stderr with a one-command escape hatch. Compression you can always undo.</p></div>
+    <div class="g"><h3>Never worse</h3><p>The net-savings guard: output gets smaller or passes through byte-identical. Trying cartoon is zero-risk.</p></div>
+    <div class="g"><h3>Never lies</h3><p>Exit codes mirrored exactly — <code>cartoon pytest &amp;&amp; deploy</code> behaves like <code>pytest &amp;&amp; deploy</code>. Parse failures pass the original through.</p></div>
+    <div class="g"><h3>Structure, not deletion</h3><p>TOON re-encoding keeps every test and diagnostic as queryable data, and the stats ledger makes savings self-measuring.</p></div>
+  </div>
+
+  <!-- ============ ADAPTERS + MEASURED ============ -->
+  <div class="shead anim" style="--i:20">
+    <div class="rule"><span class="tag">Coverage</span></div>
+    <h2>Adapters &amp; measured results</h2>
+  </div>
+
+  <div class="grid anim" style="--i:21">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Adapter</th><th>Trigger</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><code>pytest</code></td><td>pytest, python -m pytest</td><td>injected junit-xml</td></tr>
+          <tr><td><code>unittest</code></td><td>python -m unittest</td><td>stderr text parse</td></tr>
+          <tr><td><code>jest</code></td><td>jest, npx jest</td><td>injected --json</td></tr>
+          <tr><td><code>vitest</code></td><td>vitest run (watch passes through)</td><td>injected --reporter=json</td></tr>
+          <tr><td><code>ruff</code></td><td>ruff check</td><td>injected --output-format json</td></tr>
+          <tr><td><code>eslint</code></td><td>eslint, npx eslint</td><td>injected --format json</td></tr>
+          <tr><td><code>tsc</code></td><td>tsc, npx tsc (not --watch)</td><td>injected --pretty false</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Corpus fixture</th><th style="text-align:right">Aggressive cut</th><th>Signal kept</th></tr></thead>
+        <tbody>
+          <tr><td>chatty service log<br><small>156 lines, 1 ERROR buried</small></td><td class="num good">−92.5%</td><td>ERROR + WARN verbatim, ±2 lines context</td></tr>
+          <tr><td>real cargo build failure<br><small>3 compile errors</small></td><td class="num good">−61.5%</td><td>all errors + locations in a TOON table</td></tr>
+          <tr><td>npm ERESOLVE conflict</td><td class="num">±0%</td><td>guard emits original — savings never negative</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="pull anim" style="--i:22">"Your agent reads 12 lines instead of 800 — and the <span>receipt is always on disk</span>."</p>
+
+  <!-- ============ AGENTS ============ -->
+  <div class="shead anim" style="--i:23">
+    <div class="rule"><span class="tag">For agents</span></div>
+    <h2>Wire it into your agent once, forget it</h2>
+  </div>
+
+  <div class="setup anim" style="--i:24">
+    <div class="s">
+      <h3>Claude Code — plugin (recommended)</h3>
+      <p>Skill + auto-wrap hook in one install. Claude wraps noisy commands without being asked.</p>
+      <pre>/plugin marketplace add abhijitbansal/cartoon
+/plugin install cartoon@cartoon</pre>
+    </div>
+    <div class="s">
+      <h3>Codex, Cursor, Copilot, 40+ agents</h3>
+      <p>skills.sh auto-detects the agents you have and installs the cartoon skill into each.</p>
+      <pre>npx skills add abhijitbansal/cartoon</pre>
+    </div>
+    <div class="s">
+      <h3>Standalone hook / plain instructions</h3>
+      <p>No plugin? Install the Claude Code hook directly, or paste the snippet from docs/agents.md into your AGENTS.md.</p>
+      <pre>cartoon hook install   # auto-wrap in ~/.claude/settings.json
+cartoon hook status    # check · uninstall to remove</pre>
+    </div>
+  </div>
+
+  <footer class="anim" style="--i:25">
+    <span>cartoon · MIT license · a cartoon is a compressed rendering of reality — so is this</span>
+    <span><a href="https://github.com/abhijitbansal/cartoon">github.com/abhijitbansal/cartoon</a></span>
+  </footer>
+</div>
+</body>
+</html>
