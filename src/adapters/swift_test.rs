@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 pub struct SwiftTest;
 
-/// Flags/subcommands that run no tests, so SwiftPM never writes xunit xml.
-const NON_TEST_ARGS: &[&str] = &["--version", "--help", "-h", "--list-tests", "-l", "list"];
+/// Flags that run no tests, so SwiftPM never writes xunit xml.
+/// (`swift test list` is gated positionally in detect.)
+const NON_TEST_ARGS: &[&str] = &["--version", "--help", "-h", "--list-tests", "-l"];
 
 impl Adapter for SwiftTest {
     fn name(&self) -> &'static str {
@@ -20,9 +21,13 @@ impl Adapter for SwiftTest {
     fn detect(&self, argv: &[String]) -> bool {
         let is_swift_test = matches!(argv, [first, second, ..]
             if basename(first) == "swift" && second == "test");
+        // `list` is only a subcommand in position 2 — a filter value like
+        // `--filter list` must not disable the adapter.
+        let is_list = argv.get(2).map(String::as_str) == Some("list");
         // A user-supplied --xunit-output means they want the file themselves;
         // injecting a second one would silently steal it.
         is_swift_test
+            && !is_list
             && !argv
                 .iter()
                 .any(|a| NON_TEST_ARGS.contains(&a.as_str()) || a.starts_with("--xunit-output"))
@@ -70,23 +75,32 @@ impl Adapter for SwiftTest {
 /// zero testcases; merge whatever parsed.
 fn parse_xunit_pair(path: &Path) -> Result<TestReport> {
     let mut merged: Option<TestReport> = None;
+    let mut last_err: Option<anyhow::Error> = None;
     let sibling = swift_testing_sibling(path);
     for p in [path.to_path_buf(), sibling.clone()] {
         let Ok(xml) = std::fs::read_to_string(&p) else {
             continue;
         };
-        let Ok(r) = parse_junit_named(&xml, "swift-test") else {
-            continue;
-        };
-        merged = Some(match merged {
-            None => r,
-            Some(acc) => merge(acc, r),
-        });
+        match parse_junit_named(&xml, "swift-test") {
+            Ok(r) => {
+                merged = Some(match merged {
+                    None => r,
+                    Some(acc) => merge(acc, r),
+                })
+            }
+            // One file may legitimately be empty (single-framework project);
+            // keep the error so a fully unusable pair reports the real cause.
+            Err(e) => last_err = Some(e),
+        }
     }
     // The main artifact is a NamedTempFile, but the sibling SwiftPM created
     // next to it is ours to clean up.
     let _ = std::fs::remove_file(&sibling);
-    merged.context("no test cases in swift xunit output")
+    match (merged, last_err) {
+        (Some(r), _) => Ok(r),
+        (None, Some(e)) => Err(e.context("swift xunit output unusable")),
+        (None, None) => anyhow::bail!("no test cases in swift xunit output"),
+    }
 }
 
 fn swift_testing_sibling(path: &Path) -> PathBuf {
@@ -139,6 +153,20 @@ mod tests {
         assert!(!SwiftTest.detect(&argv(&["swift", "test", "-l"])));
         assert!(!SwiftTest.detect(&argv(&["swift", "test", "--help"])));
         assert!(!SwiftTest.detect(&argv(&["swift", "test", "--version"])));
+    }
+
+    #[test]
+    fn list_gated_positionally_not_as_filter_value() {
+        assert!(SwiftTest.detect(&argv(&["swift", "test", "--filter", "list"])));
+    }
+
+    #[test]
+    fn malformed_xml_error_is_propagated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.xml");
+        std::fs::write(&path, "<testsuites><unclosed").unwrap();
+        let err = format!("{:#}", parse_xunit_pair(&path).unwrap_err());
+        assert!(err.contains("swift xunit output unusable"), "got: {err}");
     }
 
     #[test]

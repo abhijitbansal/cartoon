@@ -30,8 +30,15 @@ impl Adapter for SwiftBuild {
     }
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         // Diagnostics land on stdout on Swift 6.3, stderr on older
-        // toolchains — scan both. Progress lines never match the pattern.
-        let (value, matched) = parse_text(&format!("{}\n{}", captured.stdout, captured.stderr));
+        // toolchains — scan both (separately: joining the streams could weld
+        // a split line into a phantom diagnostic).
+        let (mut diags, mut errors, mut warnings) = collect_diagnostics(&captured.stdout);
+        let (d2, e2, w2) = collect_diagnostics(&captured.stderr);
+        diags.extend(d2);
+        errors += e2;
+        warnings += w2;
+        let matched = errors + warnings;
+        let value = build_value(diags, errors, warnings);
         // A failed build with zero matched diagnostics (linker error, manifest
         // error, ...) must not be swallowed — the agent needs the raw streams.
         let unexplained_failure = !captured.status.success() && matched == 0;
@@ -55,6 +62,14 @@ fn diagnostic_regex() -> &'static Regex {
 
 /// Returns the TOON value and how many diagnostic lines matched.
 pub fn parse_text(text: &str) -> (Value, u64) {
+    let (diagnostics, errors, warnings) = collect_diagnostics(text);
+    (
+        build_value(diagnostics, errors, warnings),
+        errors + warnings,
+    )
+}
+
+fn collect_diagnostics(text: &str) -> (Vec<Value>, u64, u64) {
     let mut errors: u64 = 0;
     let mut warnings: u64 = 0;
     let mut diagnostics: Vec<Value> = Vec::new();
@@ -65,6 +80,11 @@ pub fn parse_text(text: &str) -> (Value, u64) {
         let Some(caps) = diagnostic_regex().captures(line) else {
             continue;
         };
+        // A real path always has a separator or extension; this rejects
+        // bare tokens like "1" that the loose pattern would accept.
+        if !caps["file"].contains(['/', '\\', '.']) {
+            continue;
+        }
         let severity = &caps["sev"];
         if severity == "error" {
             errors += 1;
@@ -77,8 +97,10 @@ pub fn parse_text(text: &str) -> (Value, u64) {
             "msg": &caps["msg"],
         }));
     }
+    (diagnostics, errors, warnings)
+}
 
-    let matched = errors + warnings;
+fn build_value(diagnostics: Vec<Value>, errors: u64, warnings: u64) -> Value {
     let mut value = json!({
         "runner": "swift-build",
         "summary": { "errors": errors, "warnings": warnings },
@@ -86,7 +108,7 @@ pub fn parse_text(text: &str) -> (Value, u64) {
     if !diagnostics.is_empty() {
         value["diagnostics"] = Value::Array(diagnostics);
     }
-    (value, matched)
+    value
 }
 
 #[cfg(test)]
@@ -175,6 +197,32 @@ mod tests {
         let diags = v["diagnostics"].as_array().unwrap();
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0]["msg"], "cannot find 'undefinedVar' in scope");
+    }
+
+    #[test]
+    fn bare_number_file_token_is_rejected() {
+        let (v, matched) = parse_text("1:2:3: error: not a real path\n");
+        assert_eq!(matched, 0);
+        assert!(v.get("diagnostics").is_none());
+    }
+
+    #[test]
+    fn split_line_across_streams_makes_no_phantom_diagnostic() {
+        use std::os::unix::process::ExitStatusExt;
+        // stdout ends mid-path with no trailing newline; stderr completes a
+        // diagnostic-shaped line. Joined naively they would match.
+        let captured = Captured {
+            stdout: "/Users/dev/proj/Sources/App/Auth.swift:12".into(),
+            stderr: ":5: error: phantom\n".into(),
+            status: std::process::ExitStatus::from_raw(0),
+        };
+        let out = SwiftBuild
+            .parse(&captured, &SwiftBuild.prepare(argv(&["swift", "build"])))
+            .unwrap();
+        let AdapterReport::Value(v) = out.report else {
+            panic!("expected value report")
+        };
+        assert_eq!(v["summary"]["errors"], 0);
     }
 
     #[test]
