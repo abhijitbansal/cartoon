@@ -46,6 +46,7 @@ const SUBCOMMAND: &[(&str, &[&str])] = &[
     ("gradle", &["test", "build", "check"]),
     ("gradlew", &["test", "build", "check"]),
     ("mvn", &["test", "verify", "package"]),
+    ("swift", &["test", "build"]),
 ];
 
 /// Runner prefixes: wrap when the NEXT word is itself an ALWAYS tool.
@@ -383,6 +384,10 @@ mod tests {
         assert!(wrap_command("npm install left-pad").is_none());
         assert!(wrap_command("go test ./...").is_some());
         assert!(wrap_command("go run main.go").is_none());
+        assert!(wrap_command("swift test").is_some());
+        assert!(wrap_command("swift build -c release").is_some());
+        assert!(wrap_command("swift run myapp").is_none());
+        assert!(wrap_command("swift package update").is_none());
     }
 
     #[test]
