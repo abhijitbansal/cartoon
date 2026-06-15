@@ -44,7 +44,10 @@ impl Adapter for Pytest {
             argv.push(format!("--junit-xml={}", f.path().display()));
             argv.push("--override-ini=junit_family=legacy".into());
         }
-        Prepared { argv, artifact }
+        Prepared {
+            argv,
+            artifact: artifact.map(super::Artifact::File),
+        }
     }
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let path = prepared

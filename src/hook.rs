@@ -161,6 +161,14 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
         if STATE_BUILTINS.contains(&first) || STATE_BUILTINS.contains(&base) {
             return None;
         }
+        // xcodebuild actions (test/build) float among flags, so the single
+        // next-word check can't gate them — reuse the adapter's full-argv scan.
+        if base == "xcodebuild" {
+            let mut argv = vec![first.to_string()];
+            argv.extend(words.map(String::from));
+            crate::adapters::xcodebuild::action(&argv)?;
+            continue;
+        }
         if !is_noisy(base, words.next()) {
             return None;
         }
@@ -388,6 +396,12 @@ mod tests {
         assert!(wrap_command("swift build -c release").is_some());
         assert!(wrap_command("swift run myapp").is_none());
         assert!(wrap_command("swift package update").is_none());
+        assert!(wrap_command("xcodebuild test -scheme App").is_some());
+        assert!(wrap_command("xcodebuild -project X.xcodeproj test").is_some());
+        assert!(wrap_command("xcodebuild clean test -scheme App").is_some());
+        assert!(wrap_command("xcodebuild build -scheme App").is_some());
+        assert!(wrap_command("xcodebuild archive -scheme App").is_none());
+        assert!(wrap_command("xcodebuild -list").is_none());
     }
 
     #[test]

@@ -1,0 +1,16 @@
+{
+  "devicesAndConfigurations" : [],
+  "environmentDescription" : "SwiftDemo-Package · Built with macOS 26.6",
+  "expectedFailures" : 0,
+  "failedTests" : 0,
+  "finishTime" : 1781404571.149,
+  "passedTests" : 3,
+  "result" : "Succeeded",
+  "skippedTests" : 0,
+  "startTime" : 1781404567.149,
+  "statistics" : [],
+  "testFailures" : [],
+  "title" : "Test - SwiftDemo-Package",
+  "topInsights" : [],
+  "totalTestCount" : 3
+}

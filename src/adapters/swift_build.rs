@@ -1,9 +1,7 @@
-use super::{basename, Adapter, AdapterReport, ParseOutcome, Prepared};
+use super::{basename, diagnostics, Adapter, AdapterReport, ParseOutcome, Prepared};
 use crate::runner::Captured;
 use anyhow::Result;
-use regex::Regex;
-use serde_json::{json, Value};
-use std::sync::OnceLock;
+use serde_json::Value;
 
 pub struct SwiftBuild;
 
@@ -32,13 +30,13 @@ impl Adapter for SwiftBuild {
         // Diagnostics land on stdout on Swift 6.3, stderr on older
         // toolchains — scan both (separately: joining the streams could weld
         // a split line into a phantom diagnostic).
-        let (mut diags, mut errors, mut warnings) = collect_diagnostics(&captured.stdout);
-        let (d2, e2, w2) = collect_diagnostics(&captured.stderr);
+        let (mut diags, mut errors, mut warnings) = diagnostics::collect(&captured.stdout);
+        let (d2, e2, w2) = diagnostics::collect(&captured.stderr);
         diags.extend(d2);
         errors += e2;
         warnings += w2;
         let matched = errors + warnings;
-        let value = build_value(diags, errors, warnings);
+        let value = diagnostics::build_value("swift-build", diags, errors, warnings);
         // A failed build with zero matched diagnostics (linker error, manifest
         // error, ...) must not be swallowed — the agent needs the raw streams.
         let unexplained_failure = !captured.status.success() && matched == 0;
@@ -52,63 +50,14 @@ impl Adapter for SwiftBuild {
     }
 }
 
-fn diagnostic_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^(?P<file>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+): (?P<sev>error|warning): (?P<msg>.*)$")
-            .unwrap()
-    })
-}
-
-/// Returns the TOON value and how many diagnostic lines matched.
+/// Returns the TOON value and how many diagnostic lines matched. Kept as a
+/// thin wrapper so the existing swift-build tests read naturally.
 pub fn parse_text(text: &str) -> (Value, u64) {
-    let (diagnostics, errors, warnings) = collect_diagnostics(text);
+    let (diagnostics, errors, warnings) = diagnostics::collect(text);
     (
-        build_value(diagnostics, errors, warnings),
+        diagnostics::build_value("swift-build", diagnostics, errors, warnings),
         errors + warnings,
     )
-}
-
-fn collect_diagnostics(text: &str) -> (Vec<Value>, u64, u64) {
-    let mut errors: u64 = 0;
-    let mut warnings: u64 = 0;
-    let mut diagnostics: Vec<Value> = Vec::new();
-
-    for line in text.lines() {
-        // Source echo + caret lines that follow a diagnostic never match the
-        // location pattern, so they are naturally excluded.
-        let Some(caps) = diagnostic_regex().captures(line) else {
-            continue;
-        };
-        // A real path always has a separator or extension; this rejects
-        // bare tokens like "1" that the loose pattern would accept.
-        if !caps["file"].contains(['/', '\\', '.']) {
-            continue;
-        }
-        let severity = &caps["sev"];
-        if severity == "error" {
-            errors += 1;
-        } else {
-            warnings += 1;
-        }
-        diagnostics.push(json!({
-            "loc": format!("{}:{}:{}", &caps["file"], &caps["line"], &caps["col"]),
-            "severity": severity,
-            "msg": &caps["msg"],
-        }));
-    }
-    (diagnostics, errors, warnings)
-}
-
-fn build_value(diagnostics: Vec<Value>, errors: u64, warnings: u64) -> Value {
-    let mut value = json!({
-        "runner": "swift-build",
-        "summary": { "errors": errors, "warnings": warnings },
-    });
-    if !diagnostics.is_empty() {
-        value["diagnostics"] = Value::Array(diagnostics);
-    }
-    value
 }
 
 #[cfg(test)]

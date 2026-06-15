@@ -206,10 +206,12 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 | jest | `jest`, `npx jest` | injected `--json` |
 | vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
 | swift-test | `swift test` | injected `--xunit-output` + `--parallel` (merges XCTest + Swift Testing files) |
+| xcodebuild-test | `xcodebuild test` | injected `-resultBundlePath`, parsed via `xcresulttool … test-results summary` (Xcode 16+) |
 | ruff | `ruff check` | injected `--output-format json` |
 | eslint | `eslint`, `npx eslint` | injected `--format json` |
 | tsc | `tsc`, `npx tsc` (not `--watch`) | injected `--pretty false` |
 | swift-build | `swift build` | stdout/stderr text parse |
+| xcodebuild-build | `xcodebuild build` (no test action) | stdout/stderr diagnostics parse |
 
 No adapter match → JSON auto-detection → compression ladder (safe tier by
 default, aggressive opt-in) → passthrough when nothing pays for itself.

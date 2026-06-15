@@ -35,7 +35,9 @@ pub fn render(report: &TestReport, trace_lines: usize, fast_note: Option<&str>) 
             "passed": report.passed,
             "failed": report.failed,
             "skipped": report.skipped,
-            "duration_s": report.duration_s,
+            // Non-finite durations (e.g. an absurd timestamp in untrusted
+            // runner output) would serialize to null/panic; clamp to 0.
+            "duration_s": if report.duration_s.is_finite() { report.duration_s } else { 0.0 },
         }),
     );
     if !report.failures.is_empty() {

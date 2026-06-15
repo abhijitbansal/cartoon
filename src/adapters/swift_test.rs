@@ -51,7 +51,10 @@ impl Adapter for SwiftTest {
                 argv.push("--parallel".into());
             }
         }
-        Prepared { argv, artifact }
+        Prepared {
+            argv,
+            artifact: artifact.map(super::Artifact::File),
+        }
     }
     fn parse(&self, _captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let path = prepared

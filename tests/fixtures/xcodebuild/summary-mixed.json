@@ -1,0 +1,57 @@
+{
+  "devicesAndConfigurations" : [
+    {
+      "device" : {
+        "architecture" : "arm64",
+        "deviceId" : "00006040-000E08141EF8801C",
+        "deviceName" : "My Mac",
+        "modelName" : "MacBook Pro",
+        "osBuildNumber" : "25G5028f",
+        "osVersion" : "26.6",
+        "platform" : "macOS"
+      },
+      "expectedFailures" : 0,
+      "failedTests" : 2,
+      "passedTests" : 2,
+      "skippedTests" : 0,
+      "testPlanConfiguration" : {
+        "configurationId" : "1",
+        "configurationName" : "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription" : "SwiftDemo-Package · Built with macOS 26.6",
+  "expectedFailures" : 0,
+  "failedTests" : 2,
+  "finishTime" : 1781404571.149,
+  "passedTests" : 2,
+  "result" : "Failed",
+  "skippedTests" : 0,
+  "startTime" : 1781404557.028,
+  "statistics" : [
+
+  ],
+  "testFailures" : [
+    {
+      "failureText" : "Expectation failed: (greeting(for: \"world\") → \"hello, world!\") == \"hello, worldz!\"",
+      "targetName" : "SwiftDemoTests",
+      "testIdentifier" : 4,
+      "testIdentifierString" : "greetingMatches()",
+      "testIdentifierURL" : "test://com.apple.xcode/SwiftDemo/SwiftDemoTests/greetingMatches()",
+      "testName" : "greetingMatches()"
+    },
+    {
+      "failureText" : "XCTAssertEqual failed: (\"hello, world!\") is not equal to (\"hello, worldz!\")",
+      "targetName" : "SwiftDemoTests",
+      "testIdentifier" : 1,
+      "testIdentifierString" : "GreeterXCTests/testGreetingExact()",
+      "testIdentifierURL" : "test://com.apple.xcode/SwiftDemo/SwiftDemoTests/GreeterXCTests/testGreetingExact",
+      "testName" : "testGreetingExact()"
+    }
+  ],
+  "title" : "Test - SwiftDemo-Package",
+  "topInsights" : [
+
+  ],
+  "totalTestCount" : 4
+}
