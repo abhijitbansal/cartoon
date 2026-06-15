@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="TestResults" errors="0" tests="2" failures="0" time="0.050">
+<testcase classname="CartoonKitTests.AuthTests" name="testTokenRefresh" time="0.041"/>
+<testcase classname="CartoonKitTests.ParserTests" name="testEmptyInput" time="0.002"/>
+</testsuite>
+</testsuites>

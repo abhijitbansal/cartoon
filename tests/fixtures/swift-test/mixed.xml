@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="TestResults" errors="0" tests="3" failures="1" time="0.245">
+<testcase classname="CartoonKitTests.AuthTests" name="testTokenExpiry" time="0.102">
+<failure message="XCTAssertLessThan failed: (&quot;1700000000&quot;) is not less than (&quot;1690000000&quot;)"/>
+</testcase>
+<testcase classname="CartoonKitTests.AuthTests" name="testTokenRefresh" time="0.041"/>
+<testcase classname="CartoonKitTests.ParserTests" name="testEmptyInput" time="0.002"/>
+</testsuite>
+</testsuites>

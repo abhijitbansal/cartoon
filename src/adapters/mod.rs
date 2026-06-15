@@ -1,26 +1,51 @@
+pub mod diagnostics;
 pub mod eslint;
 pub mod jest;
 pub mod pytest;
 pub mod report;
 pub mod ruff;
+pub mod swift_build;
+pub mod swift_test;
 pub mod tsc;
 pub mod unittest;
 pub mod vitest;
+pub mod xcodebuild;
+pub mod xcodebuild_build;
+pub mod xcodebuild_test;
 
 use crate::runner::Captured;
 use anyhow::Result;
 use std::path::PathBuf;
 
-/// Invocation after `prepare`: possibly extended argv plus an artifact file
-/// the adapter expects the child to write (e.g. junit xml).
+/// Owns the temp artifact for cleanup AND exposes the path the adapter reads.
+///
+/// `File`: pytest/swift_test write into this file (e.g. junit xml). `Dir`:
+/// xcodebuild writes a `.xcresult` bundle at `path` — a non-existent child of
+/// `_guard` (xcodebuild refuses a pre-existing `-resultBundlePath`); the dir
+/// tree is removed on drop. Keep "thing that cleans up" and "path to read" in
+/// sync here — `artifact_path()` is the single accessor both variants go through.
+pub enum Artifact {
+    File(tempfile::NamedTempFile),
+    Dir {
+        _guard: tempfile::TempDir,
+        path: PathBuf,
+    },
+}
+
+/// Invocation after `prepare`: possibly extended argv plus an artifact the
+/// adapter expects the child to write (junit xml, xcresult bundle, ...).
 pub struct Prepared {
     pub argv: Vec<String>,
-    pub artifact: Option<tempfile::NamedTempFile>,
+    pub artifact: Option<Artifact>,
 }
 
 impl Prepared {
     pub fn artifact_path(&self) -> Option<PathBuf> {
-        self.artifact.as_ref().map(|f| f.path().to_path_buf())
+        match &self.artifact {
+            Some(Artifact::File(f)) => Some(f.path().to_path_buf()),
+            Some(Artifact::Dir { path, .. }) => Some(path.clone()),
+            None => None,
+        }
     }
 }
 
@@ -70,9 +95,13 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(unittest::Unittest),
         Box::new(jest::Jest),
         Box::new(vitest::Vitest),
+        Box::new(swift_test::SwiftTest),
+        Box::new(xcodebuild_test::XcodebuildTest),
         Box::new(ruff::Ruff),
         Box::new(eslint::Eslint),
         Box::new(tsc::Tsc),
+        Box::new(swift_build::SwiftBuild),
+        Box::new(xcodebuild_build::XcodebuildBuild),
     ]
 }
 
@@ -124,7 +153,19 @@ mod tests {
         let names: Vec<&str> = registry().iter().map(|a| a.name()).collect();
         assert_eq!(
             names,
-            vec!["pytest", "unittest", "jest", "vitest", "ruff", "eslint", "tsc"]
+            vec![
+                "pytest",
+                "unittest",
+                "jest",
+                "vitest",
+                "swift-test",
+                "xcodebuild-test",
+                "ruff",
+                "eslint",
+                "tsc",
+                "swift-build",
+                "xcodebuild-build"
+            ]
         );
     }
 

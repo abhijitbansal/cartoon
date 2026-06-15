@@ -44,6 +44,24 @@ cartoon ingest build.log                # a log that already exists on disk
 some-cmd | cartoon -                    # or piped in
 ```
 
+## Don't pre-truncate noisy commands — wrap them
+
+When a command is noisy (a test run, a build, a JSON CLI), do NOT pipe it to
+`head`/`tail`/`grep` to shrink the output. That is lossy in the wrong way: it
+keeps an arbitrary slice (often the wrong one — a build's real error sits
+mid-log while `tail` shows only `BUILD FAILED`) and the hook will not wrap a
+piped command at all, so you lose cartoon entirely.
+
+```bash
+xcodebuild build … | tail -15     # WRONG: dumb cut, and wrapping is skipped
+cartoon xcodebuild build …        # RIGHT: signal kept, ~70% fewer tokens
+```
+
+Wrap first; if you still need a slice of the raw log afterward, use
+`cartoon logs grep … --last`. Anything with a dedicated adapter (pytest, jest,
+vitest, swift test/build, `xcodebuild test`/`build`, ruff, eslint, tsc) should
+be run bare so the auto-wrap hook catches it — never behind a pipe.
+
 Commands without a dedicated adapter still compress: the safe tier (ANSI,
 progress, duplicate, blank collapse) applies automatically, and
 `--compress=aggressive` adds lossy rules (log-level filtering, diagnostic
