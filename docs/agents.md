@@ -174,6 +174,10 @@ cp -r skills/cartoon ~/.codex/skills/
 - **One source of truth**: root `skills/<name>/SKILL.md` is the layout
   both Claude Code plugins and the skills.sh CLI consume. Edit a skill
   once; every channel picks it up.
+- **Progressive disclosure**: supporting files in the skill dir (e.g.
+  `skills/cartoon/install.md`) ship alongside `SKILL.md` and are loaded by
+  the agent only when its link is followed — keep heavy, rarely-needed
+  detail (install/setup matrix) there so it doesn't bloat always-on context.
 - **Plugin + marketplace in one repo**: `.claude-plugin/plugin.json` makes
   the repo a plugin; `.claude-plugin/marketplace.json` lists that plugin
   with source `./`, so `marketplace add abhijitbansal/cartoon` is all
