@@ -24,7 +24,7 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Wrap regardless of arguments.
 pub const ALWAYS: &[&str] = &[
@@ -335,11 +335,16 @@ fn split_segments(cmd: &str) -> Vec<&str> {
 
 // ---------- install / uninstall / status ----------
 
+/// Substring every installed hook entry's command contains — the single
+/// source of truth for both building the command and recognizing our own
+/// entries on uninstall/status (so a rename can't desync them).
+const HOOK_MARKER: &str = "cartoon hook rewrite";
+
 /// The shell command an installed hook entry runs. Fail-open if cartoon is
 /// not on PATH. `--deny-mode` switches transparent rewrite to deny.
 fn hook_command(deny: bool) -> String {
     let mode = if deny { " --deny-mode" } else { "" };
-    format!("command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite{mode} || exit 0")
+    format!("command -v cartoon >/dev/null 2>&1 && {HOOK_MARKER}{mode} || exit 0")
 }
 
 fn install(t: Target) -> Result<i32> {
@@ -387,7 +392,7 @@ fn is_our_entry(entry: &Value) -> bool {
             hs.iter().any(|h| {
                 h["command"]
                     .as_str()
-                    .is_some_and(|c| c.contains("cartoon hook rewrite"))
+                    .is_some_and(|c| c.contains(HOOK_MARKER))
             })
         })
         .unwrap_or(false)
@@ -555,8 +560,17 @@ fn uninstall_copilot(t: Target) -> Result<i32> {
     Ok(0)
 }
 
-fn is_our_copilot_file(path: &PathBuf) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|s| s.contains("cartoon hook rewrite"))
+fn is_our_copilot_file(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| s.contains(HOOK_MARKER))
+}
+
+/// Is our hook entry present in a Claude-format settings.json?
+fn claude_entry_present(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v["hooks"]["PreToolUse"].as_array().cloned())
+        .is_some_and(|arr| arr.iter().any(is_our_entry))
 }
 
 // --- status across every surface ---
@@ -564,16 +578,10 @@ fn is_our_copilot_file(path: &PathBuf) -> bool {
 fn status() -> Result<i32> {
     for project in [false, true] {
         let path = claude_settings_path(project)?;
-        let installed = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| v["hooks"]["PreToolUse"].as_array().cloned())
-            .map(|arr| arr.iter().any(is_our_entry))
-            .unwrap_or(false);
         println!(
             "{} (Claude Code / VS Code Copilot Chat): {}",
             path.display(),
-            yes_no(installed)
+            yes_no(claude_entry_present(&path))
         );
     }
     for project in [false, true] {
