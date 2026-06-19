@@ -86,6 +86,31 @@ Activate for the non-interactive shells agents spawn with
 `CARTOON_NO_SHIM=1`. Shims wrap the same allowlist as the hook, but (unlike
 the hook) can't see surrounding pipes, so keep them to tools you run bare.
 
+### Copilot tips & limitations
+
+Tips:
+
+- **Confirmation dialog on every wrapped command?** Some Copilot CLI
+  v1.0.24 builds prompt even when the hook approves the rewrite. Reinstall
+  with `cartoon hook install --copilot --deny` (blocks-and-suggests, no
+  modal). `cartoon hook rewrite --deny-mode` forces deny anywhere.
+- **Share it with the team / coding agent** by committing
+  `.github/hooks/cartoon.json` (`cartoon hook install --copilot --project`).
+- `cartoon hook status` reports every surface at once;
+  `cartoon shim status` shows the shim file.
+
+Limitations:
+
+- **VS Code Copilot Chat** can only deny, not rewrite (no `updatedInput`
+  field exists), so wrapping costs one extra round-trip while the agent
+  re-issues the command.
+- **Requires Copilot CLI ≥ v1.0.24** for transparent rewrite; older builds
+  ignore `updatedInput` — use `--deny` there.
+- **Install to `~/.copilot/hooks` or `.github/hooks`**, not a plugin
+  directory — plugin-defined Copilot hooks currently don't fire.
+- **Shims can't see pipes/redirection** and **path-invoked binaries**
+  (`./gradlew`, `./node_modules/.bin/jest`) bypass shell functions entirely.
+
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
 `mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
