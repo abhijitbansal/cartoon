@@ -182,14 +182,18 @@ fn extract(v: &Value) -> Option<(String, Value, Surface)> {
         let cmd = input.get("command")?.as_str()?.to_string();
         return Some((cmd, input.clone(), surface));
     }
-    // Copilot CLI: { toolName:"bash", toolArgs:"<json string>" }. toolArgs is
-    // double-encoded — a JSON string that itself contains the args object.
+    // Copilot CLI: { toolName:"bash", toolArgs:... }. toolArgs is normally
+    // double-encoded (a JSON string that itself contains the args object),
+    // but tolerate a plain object too in case a version sends it un-encoded.
     if let Some(name) = v.get("toolName").and_then(Value::as_str) {
         if !name.eq_ignore_ascii_case("bash") && !name.eq_ignore_ascii_case("shell") {
             return None;
         }
-        let raw = v.get("toolArgs")?.as_str()?;
-        let args: Value = serde_json::from_str(raw).ok()?;
+        let args = match v.get("toolArgs")? {
+            Value::String(s) => serde_json::from_str(s).ok()?,
+            obj @ Value::Object(_) => obj.clone(),
+            _ => return None,
+        };
         let cmd = args.get("command")?.as_str()?.to_string();
         return Some((cmd, args, Surface::CopilotCli));
     }
@@ -257,6 +261,8 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
         || trimmed.contains('`')
         || trimmed.contains('>')
         || trimmed.contains('<')
+        || trimmed.contains('\n')
+        || trimmed.contains('\r')
         || trimmed.replace("&&", "").contains('&')
     {
         return None;
@@ -500,6 +506,14 @@ fn copilot_config(deny: bool) -> Value {
 
 fn install_copilot(t: Target) -> Result<i32> {
     let path = copilot_path(t.project)?;
+    // We own the dedicated `cartoon.json` name; refuse to clobber a file at
+    // that path we didn't write (uninstall is already this careful).
+    if path.exists() && !is_our_copilot_file(&path) {
+        bail!(
+            "{} exists but is not a cartoon hook; move it aside first",
+            path.display()
+        );
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -613,6 +627,26 @@ mod tests {
         assert!(wrap_command("pytest > out.txt").is_none());
         assert!(wrap_command("pytest < input.txt").is_none());
         assert!(wrap_command("pytest & cargo test").is_none());
+    }
+
+    #[test]
+    fn rejects_newline_injection() {
+        // A newline is a command separator; an allowlisted first line must
+        // not smuggle arbitrary following lines past the auto-approve.
+        assert!(wrap_command("pytest\nrm -rf /tmp/x").is_none());
+        assert!(wrap_command("pytest\r\nrm -rf /tmp/x").is_none());
+    }
+
+    #[test]
+    fn copilot_accepts_toolargs_object() {
+        // Tolerate toolArgs delivered as an object, not only as a JSON string.
+        let input = r#"{"toolName":"bash","toolArgs":{"command":"pytest -q"}}"#;
+        let out = rewrite_decision(input, false).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["hookSpecificOutput"]["updatedInput"]["command"],
+            "cartoon -c 'pytest -q'"
+        );
     }
 
     #[test]
