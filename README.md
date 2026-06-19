@@ -49,22 +49,28 @@ automatically — no skill recall needed. One `cartoon hook rewrite` serves
 every supported agent; install it where each one looks:
 
 ```bash
-cartoon hook install              # ~/.claude/settings.json
-                                  #   → Claude Code AND VS Code Copilot Chat
-cartoon hook install --copilot    # ~/.copilot/hooks/cartoon.json → Copilot CLI
-cartoon hook install --copilot --project   # .github/hooks/cartoon.json (repo)
+cartoon hook install              # Claude Code        → ~/.claude/settings.json
+cartoon hook install --vscode     # VS Code Copilot Chat (same Claude-format file)
+cartoon hook install --copilot    # Copilot CLI        → ~/.copilot/hooks/cartoon.json
+cartoon hook install --copilot --project   # repo-shared .github/hooks/cartoon.json
 cartoon hook status               # where it's active, per agent
-cartoon hook uninstall [--copilot] [--project]
+cartoon hook uninstall [--copilot | --vscode] [--project]
 ```
 
 Per agent:
 
 - **Claude Code** and **Copilot CLI** (≥ v1.0.24) support transparent
   rewrite (`updatedInput`): the wrapped command runs in place.
-- **VS Code Copilot Chat** has no rewrite field, so the hook *denies* the
-  raw command with a "re-run wrapped" suggestion — still deterministic
-  enforcement, just one extra round-trip. The shared `~/.claude/settings.json`
-  entry covers it automatically.
+- **VS Code Copilot Chat** reads the same Claude-format
+  `~/.claude/settings.json` (its hooks are Preview), so `--vscode` installs
+  there — one entry covers both it and Claude Code. Chat has no rewrite
+  field, so the hook *denies* the raw command with a "re-run wrapped"
+  suggestion — still deterministic, just one extra round-trip. (Plain
+  `cartoon hook install` already covers Chat too; `--vscode` is the explicit,
+  VS-Code-labelled form.)
+- The repo-shared `--copilot --project` file (`.github/hooks/cartoon.json`)
+  is written in **Copilot-CLI format** (camelCase `preToolUse`) for the
+  Copilot CLI and coding agent — it is *not* the VS Code Chat format.
 - If your Copilot CLI prompts on every rewrite (a known v1.0.24 bug), use
   `cartoon hook install --copilot --deny` for the smoother deny-and-suggest
   flow. `cartoon hook rewrite --deny-mode` forces deny anywhere.

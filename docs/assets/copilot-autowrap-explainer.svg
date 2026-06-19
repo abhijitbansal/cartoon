@@ -53,13 +53,15 @@
 
   <!-- Claude + VS Code card -->
   <rect x="40" y="298" width="356" height="196" class="card" rx="14"/>
-  <text x="60" y="328" class="lbl">Claude Code  +  VS Code Copilot Chat</text>
-  <rect x="60" y="344" width="316" height="30" class="chip" rx="6"/>
-  <text x="72" y="364" class="codek">cartoon hook install</text>
-  <text x="60" y="398" class="sm">→ ~/.claude/settings.json  (both agents read it)</text>
-  <text x="60" y="426" class="good">Claude Bash → transparent rewrite</text>
-  <text x="60" y="448" class="good">VS Code run_in_terminal → deny + suggest</text>
-  <text x="60" y="476" class="sm">matcher broadened to Bash|run_in_terminal</text>
+  <text x="60" y="326" class="lbl">Claude Code  +  VS Code Copilot Chat</text>
+  <rect x="60" y="338" width="316" height="28" class="chip" rx="6"/>
+  <text x="72" y="357" class="codek">cartoon hook install</text>
+  <text x="60" y="384" class="good">Claude Bash → transparent rewrite</text>
+  <rect x="60" y="396" width="316" height="28" class="chip" rx="6"/>
+  <text x="72" y="415" class="codek">cartoon hook install --vscode</text>
+  <text x="60" y="442" class="warn">VS Code run_in_terminal → deny (Preview)</text>
+  <text x="60" y="466" class="sm">one shared ~/.claude/settings.json file;</text>
+  <text x="60" y="484" class="sm">matcher Bash|run_in_terminal</text>
 
   <!-- Copilot CLI card -->
   <rect x="412" y="298" width="356" height="196" class="card" rx="14"/>
@@ -144,18 +146,20 @@
   <text x="40" y="1048" class="sec">CHEATSHEET</text>
   <rect x="40" y="1064" width="1100" height="146" class="card" rx="14"/>
   <text x="62" y="1094" class="codek">cartoon hook install</text>
-  <text x="360" y="1094" class="sm">Claude Code + VS Code Copilot Chat</text>
-  <text x="62" y="1122" class="codek">cartoon hook install --copilot</text>
-  <text x="360" y="1122" class="sm">Copilot CLI (personal ~/.copilot/hooks)</text>
-  <text x="62" y="1150" class="codek">cartoon hook install --copilot --project</text>
-  <text x="360" y="1150" class="sm">repo-shared .github/hooks (+ coding agent)</text>
-  <text x="62" y="1178" class="codek">cartoon shim install</text>
-  <text x="360" y="1178" class="sm">any agent — shell-function wrappers via BASH_ENV</text>
+  <text x="448" y="1094" class="sm">Claude Code</text>
+  <text x="62" y="1122" class="codek">cartoon hook install --vscode</text>
+  <text x="448" y="1122" class="sm">VS Code Copilot Chat (Preview)</text>
+  <text x="62" y="1150" class="codek">cartoon hook install --copilot</text>
+  <text x="448" y="1150" class="sm">Copilot CLI · ~/.copilot/hooks</text>
+  <text x="62" y="1178" class="codek">cartoon hook install --copilot --project</text>
+  <text x="448" y="1178" class="sm">repo .github/hooks (+ coding agent)</text>
 
-  <text x="700" y="1122" class="codek">cartoon hook status</text>
-  <text x="940" y="1122" class="sm">where it's active</text>
-  <text x="700" y="1150" class="codek">--deny / --deny-mode</text>
-  <text x="940" y="1150" class="sm">block instead of rewrite</text>
-  <text x="700" y="1178" class="codek">CARTOON_NO_SHIM=1</text>
-  <text x="940" y="1178" class="sm">opt out of shims</text>
+  <text x="760" y="1094" class="codek">cartoon shim install</text>
+  <text x="965" y="1094" class="sm">any agent · BASH_ENV</text>
+  <text x="760" y="1122" class="codek">cartoon hook status</text>
+  <text x="965" y="1122" class="sm">where it's active</text>
+  <text x="760" y="1150" class="codek">--deny / --deny-mode</text>
+  <text x="965" y="1150" class="sm">block, not rewrite</text>
+  <text x="760" y="1178" class="codek">CARTOON_NO_SHIM=1</text>
+  <text x="965" y="1178" class="sm">opt out of shims</text>
 </svg>

@@ -76,7 +76,7 @@ pub fn run(args: &[String]) -> Result<i32> {
         Some("uninstall") => uninstall(target(args)?),
         Some("status") => status(),
         _ => bail!(
-            "usage: cartoon hook (rewrite [--deny-mode] | install [--copilot] [--project] [--deny] | uninstall [--copilot] [--project] | status)"
+            "usage: cartoon hook (rewrite [--deny-mode] | install [--copilot|--vscode] [--project] [--deny] | uninstall [--copilot|--vscode] [--project] | status)"
         ),
     }
 }
@@ -84,9 +84,12 @@ pub fn run(args: &[String]) -> Result<i32> {
 /// Which agent's config to install into, and in what mode.
 #[derive(Clone, Copy)]
 struct Target {
-    /// Copilot CLI (`~/.copilot/hooks` or `.github/hooks`) vs Claude Code /
-    /// VS Code Copilot Chat (`~/.claude/settings.json` or `.claude/`).
+    /// Copilot CLI (`~/.copilot/hooks` or `.github/hooks`).
     copilot: bool,
+    /// VS Code Copilot Chat. Shares Claude Code's `~/.claude/settings.json`
+    /// (the location VS Code documents for hooks); the flag only tailors the
+    /// confirmation message, since one entry already covers both.
+    vscode: bool,
     /// Project scope vs user/home scope.
     project: bool,
     /// Bake `--deny-mode` into the installed command (block raw commands and
@@ -97,16 +100,23 @@ struct Target {
 fn target(args: &[String]) -> Result<Target> {
     let mut t = Target {
         copilot: false,
+        vscode: false,
         project: false,
         deny: false,
     };
     for a in &args[1..] {
         match a.as_str() {
             "--copilot" => t.copilot = true,
+            "--vscode" => t.vscode = true,
             "--project" => t.project = true,
             "--deny" => t.deny = true,
-            other => bail!("unknown flag {other} (expected --copilot, --project, or --deny)"),
+            other => {
+                bail!("unknown flag {other} (expected --copilot, --vscode, --project, or --deny)")
+            }
         }
+    }
+    if t.copilot && t.vscode {
+        bail!("--copilot and --vscode are different config files; pick one");
     }
     Ok(t)
 }
@@ -395,15 +405,28 @@ fn install_claude(t: Target) -> Result<i32> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
-    println!(
-        "cartoon hook installed in {}\n\
-         Covers Claude Code and VS Code Copilot Chat (both read this file).\n\
-         Noisy dev commands (test/lint/build) now auto-wrap; matching calls\n\
-         are auto-approved, so the allowlist stays conservative by design.\n\
-         Restart the agent (or run /hooks) to load it.\n\
-         Remove with: cartoon hook uninstall",
-        path.display()
-    );
+    if t.vscode {
+        println!(
+            "cartoon hook installed for VS Code Copilot Chat in {}\n\
+             VS Code reads this Claude-format file (hooks are Preview); the\n\
+             same entry also covers Claude Code. run_in_terminal calls are\n\
+             blocked and re-suggested wrapped (Chat has no rewrite field).\n\
+             Reload the window to load it. Remove with:\n\
+             cartoon hook uninstall --vscode{}",
+            path.display(),
+            if t.project { " --project" } else { "" }
+        );
+    } else {
+        println!(
+            "cartoon hook installed in {}\n\
+             Covers Claude Code and VS Code Copilot Chat (both read this file).\n\
+             Noisy dev commands (test/lint/build) now auto-wrap; matching calls\n\
+             are auto-approved, so the allowlist stays conservative by design.\n\
+             Restart the agent (or run /hooks) to load it.\n\
+             Remove with: cartoon hook uninstall",
+            path.display()
+        );
+    }
     Ok(0)
 }
 
@@ -775,6 +798,16 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(c.contains("cartoon hook rewrite --deny-mode"));
+    }
+
+    #[test]
+    fn target_parses_vscode_and_rejects_combo() {
+        let v = target(&["install".into(), "--vscode".into()]).unwrap();
+        assert!(v.vscode && !v.copilot);
+        // --vscode and --copilot point at different files: reject the combo.
+        assert!(target(&["install".into(), "--vscode".into(), "--copilot".into()]).is_err());
+        // unknown flag still errors.
+        assert!(target(&["install".into(), "--nope".into()]).is_err());
     }
 
     #[test]

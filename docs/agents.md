@@ -54,17 +54,28 @@ looks.
 | Agent | Install | Mechanism | Config location |
 |---|---|---|---|
 | Claude Code | `cartoon hook install` | transparent rewrite (`updatedInput`) | `~/.claude/settings.json` |
-| VS Code Copilot Chat | `cartoon hook install` (same file) | deny + "re-run wrapped" suggestion¹ | `~/.claude/settings.json` |
+| VS Code Copilot Chat | `cartoon hook install --vscode` | deny + "re-run wrapped" suggestion¹ | `~/.claude/settings.json`² |
 | Copilot CLI (≥ v1.0.24) | `cartoon hook install --copilot` | transparent rewrite (`updatedInput`) | `~/.copilot/hooks/cartoon.json` |
-| Copilot CLI / coding agent (repo-shared) | `cartoon hook install --copilot --project` | same | `.github/hooks/cartoon.json` |
+| Copilot CLI / coding agent (repo-shared) | `cartoon hook install --copilot --project` | same | `.github/hooks/cartoon.json`³ |
 
 ¹ VS Code Copilot Chat exposes no command-rewrite field, only
 allow/ask/deny, so the hook blocks the raw command and tells the agent to
 re-run it wrapped — deterministic, with one extra round-trip.
 
+² VS Code Copilot Chat reads the **same Claude-format settings file** (per
+Microsoft's own hooks reference; the feature is Preview), so `--vscode`
+installs there. One entry already covers both VS Code Chat and Claude Code —
+`--vscode` is the explicit, VS-Code-labelled form of `cartoon hook install`,
+so don't run both into the same scope.
+
+³ The repo-shared file is **Copilot-CLI format** (`{"version":1,"hooks":
+{"preToolUse":[…]}}`, camelCase) for the Copilot CLI and coding agent. VS
+Code Chat expects the Claude format (`{"hooks":{"PreToolUse":[…]}}`,
+PascalCase), so it does **not** read this file — use `--vscode` for Chat.
+
 ```bash
 cartoon hook status     # what's installed, per agent
-cartoon hook uninstall [--copilot] [--project]
+cartoon hook uninstall [--copilot | --vscode] [--project]
 ```
 
 Notes and knobs:
