@@ -513,12 +513,12 @@ cartoon hook status    # check · uninstall to remove</pre>
 cartoon hook install --copilot --project</pre>
     </div>
     <div class="s">
-      <div class="step">VS Code Copilot Chat</div>
+      <div class="step">VS Code Copilot Chat · Preview</div>
       <h3>Deny &amp; suggest</h3>
-      <p>Chat exposes no rewrite field, so the hook blocks the raw command and tells the agent to re-run it wrapped. Shares Claude Code's file.</p>
-      <pre>cartoon hook install
+      <p>Chat exposes no rewrite field, so the hook blocks the raw command and tells the agent to re-run it wrapped. It reads the same Claude-format file, so one entry covers both.</p>
+      <pre>cartoon hook install --vscode
 # → ~/.claude/settings.json
-#   (covers Claude Code too)</pre>
+#   (also covers Claude Code)</pre>
     </div>
     <div class="s">
       <div class="step">Any agent · no hook needed</div>
@@ -544,7 +544,7 @@ export BASH_ENV=~/.config/cartoon/shims.sh</pre>
       <div class="step">Limitations</div>
       <h3>Where each layer stops</h3>
       <ul>
-        <li><b>VS Code Copilot Chat</b> can only deny, not rewrite — wrapping costs one extra round-trip while the agent re-issues the command.</li>
+        <li><b>VS Code Copilot Chat</b> can only deny, not rewrite — wrapping costs one extra round-trip while the agent re-issues the command. Its hooks are Preview, and it reads the Claude-format settings file (not the Copilot-CLI <code>.github/hooks</code> format), so install it with <code>--vscode</code>.</li>
         <li><b>Shims see only their own argv</b>, not surrounding pipes — so unlike the hook they can't refuse <code>pytest | grep x</code>. Keep them to tools the agent runs bare; disable per-shell with <code>CARTOON_NO_SHIM=1</code>.</li>
         <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely.</li>
         <li><b>Install to <code>~/.copilot/hooks</code> or <code>.github/hooks</code></b>, not a plugin dir — plugin-defined Copilot hooks currently don't fire.</li>
