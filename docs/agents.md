@@ -91,6 +91,16 @@ Notes and knobs:
   deny anywhere.
 - **Install to `~/.copilot/hooks` or `.github/hooks`**, not a plugin
   directory — plugin-defined Copilot hooks currently don't fire.
+- **Disable without uninstalling**: set `CARTOON_NO_WRAP=1` (hook) or
+  `CARTOON_NO_SHIM=1` (shims) in the environment your agent runs in — any
+  non-empty value turns auto-wrap off for that session; unset to re-enable.
+  Permanent: `cartoon hook uninstall` / `cartoon shim uninstall`. One command
+  raw: `cartoon --raw <cmd>`.
+- **Overhead**: the per-command check is a tiny fail-open process
+  (negligible). When wrapping, cartoon **buffers** output — the report prints
+  when the command finishes, not live — and adds parse/encode time
+  proportional to output size (milliseconds in practice). Use `--raw` for
+  live streaming.
 
 ### No hook available? Shell shims
 

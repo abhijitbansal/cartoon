@@ -144,7 +144,18 @@ impl Surface {
     }
 }
 
+/// Session kill-switch: any non-empty `CARTOON_NO_WRAP` in the hook's
+/// environment disables auto-wrap (the hook emits nothing, so commands run
+/// unchanged). Mirrors the shims' `CARTOON_NO_SHIM`. Read here, not in the
+/// pure `rewrite_decision`, so the decision stays deterministic for tests.
+fn wrap_disabled() -> bool {
+    std::env::var_os("CARTOON_NO_WRAP").is_some_and(|v| !v.is_empty())
+}
+
 fn rewrite_from_stdin(deny: bool) -> Result<i32> {
+    if wrap_disabled() {
+        return Ok(0);
+    }
     let mut input = String::new();
     // Fail-open: unreadable stdin means no rewrite, never an error.
     if std::io::stdin().read_to_string(&mut input).is_err() {
@@ -423,7 +434,7 @@ fn install_claude(t: Target) -> Result<i32> {
              Noisy dev commands (test/lint/build) now auto-wrap; matching calls\n\
              are auto-approved, so the allowlist stays conservative by design.\n\
              Restart the agent (or run /hooks) to load it.\n\
-             Remove with: cartoon hook uninstall",
+             Disable a session: export CARTOON_NO_WRAP=1 · remove: cartoon hook uninstall",
             path.display()
         );
     }
@@ -506,6 +517,7 @@ fn install_copilot(t: Target) -> Result<i32> {
          Using {mode}.\n\
          If Copilot prompts for confirmation on every wrapped command\n\
          (a known v1.0.24 bug), reinstall with: cartoon hook install --copilot --deny\n\
+         Disable a session: export CARTOON_NO_WRAP=1\n\
          Remove with: cartoon hook uninstall --copilot{}",
         path.display(),
         if t.project { " --project" } else { "" }
@@ -798,6 +810,18 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(c.contains("cartoon hook rewrite --deny-mode"));
+    }
+
+    #[test]
+    fn no_wrap_env_disables_then_restores() {
+        // Serial within this test; no other test reads CARTOON_NO_WRAP.
+        std::env::remove_var("CARTOON_NO_WRAP");
+        assert!(!wrap_disabled());
+        std::env::set_var("CARTOON_NO_WRAP", "1");
+        assert!(wrap_disabled());
+        std::env::set_var("CARTOON_NO_WRAP", "");
+        assert!(!wrap_disabled(), "empty value must not disable");
+        std::env::remove_var("CARTOON_NO_WRAP");
     }
 
     #[test]
