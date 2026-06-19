@@ -12,7 +12,11 @@ use clap::Parser;
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
   learn [--since <7d|24h|30m>]               config suggestions from your runs
-  hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
+  hook (install|uninstall|status|rewrite)    agent auto-wrap hook
+                                             (Claude Code, Copilot CLI,
+                                             VS Code Copilot Chat)
+  shim (install|uninstall|status|print)      shell-function wrappers for
+                                             agents without a hook
   ingest (<file> | -)                        compress an existing log file
                                              (or stdin: some-cmd | cartoon -)
 
@@ -81,6 +85,9 @@ pub enum Mode {
         since: Option<String>,
     },
     Hook {
+        args: Vec<String>,
+    },
+    Shim {
         args: Vec<String>,
     },
     /// Run an existing log (file or stdin) through the compression flow.
@@ -192,6 +199,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             since: parse_since(&cli.command[1..])?,
         }),
         "hook" => Ok(Mode::Hook {
+            args: cli.command[1..].to_vec(),
+        }),
+        "shim" => Ok(Mode::Shim {
             args: cli.command[1..].to_vec(),
         }),
         "ingest" => match &cli.command[1..] {

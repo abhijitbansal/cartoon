@@ -53,6 +53,10 @@ fn main() {
             eprintln!("cartoon: {e}");
             2
         }),
+        Ok(cartoon::cli::Mode::Shim { args }) => cartoon::shim::run(&args).unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Ok(cartoon::cli::Mode::Ingest {
             source,
             compress,

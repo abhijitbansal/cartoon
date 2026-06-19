@@ -10,5 +10,6 @@ pub mod learn;
 pub mod logs_cmd;
 pub mod paths;
 pub mod runner;
+pub mod shim;
 pub mod stats;
 pub mod toon;
