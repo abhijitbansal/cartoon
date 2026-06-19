@@ -41,17 +41,50 @@ npx skills add abhijitbansal/cartoon
 Copy-paste blocks for AGENTS.md / copilot-instructions.md and the full
 integration matrix: [docs/agents.md](docs/agents.md).
 
-### Auto-wrap hook (Claude Code)
+### Auto-wrap hook (Claude Code, Copilot CLI, VS Code Copilot Chat)
 
-The plugin ships a `PreToolUse` hook that rewrites noisy Bash commands to
-run under cartoon automatically — no skill recall needed. Standalone
-install (without the plugin):
+Instructions only *ask* the agent to wrap; a `PreToolUse` hook *guarantees*
+it. The hook rewrites noisy shell commands to run under cartoon
+automatically — no skill recall needed. One `cartoon hook rewrite` serves
+every supported agent; install it where each one looks:
 
 ```bash
-cartoon hook install     # adds the hook to ~/.claude/settings.json
-cartoon hook status      # check where it's active
-cartoon hook uninstall   # remove it
+cartoon hook install              # ~/.claude/settings.json
+                                  #   → Claude Code AND VS Code Copilot Chat
+cartoon hook install --copilot    # ~/.copilot/hooks/cartoon.json → Copilot CLI
+cartoon hook install --copilot --project   # .github/hooks/cartoon.json (repo)
+cartoon hook status               # where it's active, per agent
+cartoon hook uninstall [--copilot] [--project]
 ```
+
+Per agent:
+
+- **Claude Code** and **Copilot CLI** (≥ v1.0.24) support transparent
+  rewrite (`updatedInput`): the wrapped command runs in place.
+- **VS Code Copilot Chat** has no rewrite field, so the hook *denies* the
+  raw command with a "re-run wrapped" suggestion — still deterministic
+  enforcement, just one extra round-trip. The shared `~/.claude/settings.json`
+  entry covers it automatically.
+- If your Copilot CLI prompts on every rewrite (a known v1.0.24 bug), use
+  `cartoon hook install --copilot --deny` for the smoother deny-and-suggest
+  flow. `cartoon hook rewrite --deny-mode` forces deny anywhere.
+
+### No hook? Shell shims (any agent)
+
+For agents without hooks — or as a belt-and-suspenders layer — `cartoon
+shim` writes shell functions that shadow the bare tool names and re-invoke
+them through cartoon. Functions beat both PATH and venv-local binaries, so
+an activated venv's `pytest` is still caught, with no agent cooperation:
+
+```bash
+cartoon shim install     # writes ~/.config/cartoon/shims.sh + activation help
+cartoon shim print       # emit the functions to stdout (eval/source them)
+```
+
+Activate for the non-interactive shells agents spawn with
+`export BASH_ENV=~/.config/cartoon/shims.sh`; disable per-shell with
+`CARTOON_NO_SHIM=1`. Shims wrap the same allowlist as the hook, but (unlike
+the hook) can't see surrounding pipes, so keep them to tools you run bare.
 
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,

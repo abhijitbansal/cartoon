@@ -41,28 +41,100 @@ npx skills list                                   # see what's installed where
 This also works for Claude Code (`-a claude-code`) if you prefer plain
 skills over the plugin.
 
+## Guaranteed wrapping: hooks (and shims)
+
+Skills and `AGENTS.md` / `copilot-instructions.md` only *ask* the agent to
+prefix `cartoon`; the model complies probabilistically and sometimes
+forgets. A **`PreToolUse` hook** removes the guesswork — it intercepts the
+tool call and rewrites it deterministically. cartoon ships one
+`cartoon hook rewrite` that auto-detects the agent from the event shape, so
+the same command works across agents; you just install it where each agent
+looks.
+
+| Agent | Install | Mechanism | Config location |
+|---|---|---|---|
+| Claude Code | `cartoon hook install` | transparent rewrite (`updatedInput`) | `~/.claude/settings.json` |
+| VS Code Copilot Chat | `cartoon hook install` (same file) | deny + "re-run wrapped" suggestion¹ | `~/.claude/settings.json` |
+| Copilot CLI (≥ v1.0.24) | `cartoon hook install --copilot` | transparent rewrite (`updatedInput`) | `~/.copilot/hooks/cartoon.json` |
+| Copilot CLI / coding agent (repo-shared) | `cartoon hook install --copilot --project` | same | `.github/hooks/cartoon.json` |
+
+¹ VS Code Copilot Chat exposes no command-rewrite field, only
+allow/ask/deny, so the hook blocks the raw command and tells the agent to
+re-run it wrapped — deterministic, with one extra round-trip.
+
+```bash
+cartoon hook status     # what's installed, per agent
+cartoon hook uninstall [--copilot] [--project]
+```
+
+Notes and knobs:
+
+- **Same conservative allowlist as Claude Code**: test runners, linters,
+  typecheckers, builds only. Infra CLIs (docker, kubectl, terraform, gh,
+  aws) and mutating subcommands (`cargo publish`, `npm install`) are never
+  wrapped; the net-savings guard means worst case is byte-identical output.
+- **Copilot confirmation-dialog bug**: some Copilot CLI builds prompt on
+  every rewritten command even when the hook approves it. If you hit that,
+  install with `--deny` (`cartoon hook install --copilot --deny`) for the
+  smoother deny-and-suggest path. `cartoon hook rewrite --deny-mode` forces
+  deny anywhere.
+- **Install to `~/.copilot/hooks` or `.github/hooks`**, not a plugin
+  directory — plugin-defined Copilot hooks currently don't fire.
+
+### No hook available? Shell shims
+
+For agents without hooks, or as a belt-and-suspenders layer, `cartoon shim`
+writes shell functions that shadow the bare tool names and re-invoke them
+through cartoon. Functions take precedence over PATH *and* venv-local
+binaries, so wrapping happens with zero agent cooperation:
+
+```bash
+cartoon shim install     # writes ~/.config/cartoon/shims.sh + activation help
+cartoon shim print       # functions to stdout: eval "$(cartoon shim print)"
+```
+
+Activate for the non-interactive shells agents spawn:
+`export BASH_ENV=~/.config/cartoon/shims.sh`. Disable per-shell with
+`CARTOON_NO_SHIM=1`. Shims reuse the hook's allowlist, but a shell function
+sees only its own argv (not surrounding pipes/redirection), so keep them to
+tools the agent runs bare; path-invoked binaries (`./gradlew`) aren't
+caught.
+
 ## Tools without skill support (copy-paste)
 
-Add this to your `AGENTS.md`, `.github/copilot-instructions.md`, or
-system instructions:
+When you can't install a hook or shim, fall back to instructions. Add this
+to your `AGENTS.md`, `.github/copilot-instructions.md`, or system
+instructions — phrased as an unconditional rule so the model treats it as a
+hard directive, not a suggestion:
 
 ```markdown
-## CLI output: use cartoon
+## CLI output: ALWAYS run noisy commands through cartoon
 
-Prefix `cartoon` onto noisy commands to get token-optimized output:
-test runs and JSON CLIs become compact TOON reports (~70% smaller,
-failures keep full detail), and everything else compresses through a
-safe deterministic tier automatically: `cartoon pytest`,
-`cartoon npx jest`, `cartoon make`, `cartoon aws s3api list-buckets`.
-Existing logs work too: `cartoon ingest build.log` or `cmd | cartoon -`.
-Exit codes are mirrored exactly, parse failures pass the original output
-through, and a net-savings guard means output never gets bigger — so
-wrapping is always safe. Full raw output is archived per run; search it
-with `cartoon logs grep <pattern> --last` instead of re-running or
-cat-ing the log. Don't wrap interactive commands. If `cartoon` is not
-installed: `uv tool install cartoon` (or `pipx install cartoon` /
-`npm i -g cartoon-wrap` / `cargo install cartoon`).
+This is a hard rule, not a suggestion. Before running any test, build,
+lint, typecheck, or JSON-emitting CLI, prefix it with `cartoon` — there is
+no case where the bare command is preferable. Wrapping is always safe: exit
+codes are mirrored exactly, parse failures pass the original output
+through, args are never reordered, and a net-savings guard means the output
+never gets bigger.
+
+ALWAYS prefix these (run them bare and you have made a mistake):
+`pytest`, `python -m pytest`, `unittest`, `jest`, `vitest`, `tsc`,
+`eslint`, `ruff`, `mypy`, `make`, `cargo build|test|check|clippy`,
+`go test|build|vet`, `npm test`, `swift test|build`, `xcodebuild
+test|build`, and any `... --output json` CLI (`aws`, `gh`, `kubectl`).
+Examples: `cartoon pytest -q`, `cartoon npx jest src/`, `cartoon make`,
+`cartoon aws ec2 describe-instances --output json`. Existing logs:
+`cartoon ingest build.log` or `cmd | cartoon -`.
+
+Do NOT pipe a noisy command to `head`/`tail`/`grep` to shrink it — wrap it
+instead, then search the archived raw log with
+`cartoon logs grep <pattern> --last`. Don't wrap interactive/TTY commands.
+If `cartoon` is not installed: `uv tool install cartoon` (or `pipx install
+cartoon` / `npm i -g cartoon-wrap` / `cargo install cartoon`).
 ```
+
+For deterministic enforcement instead of instructions, prefer a hook or
+shim (above) — they don't depend on the model remembering this block.
 
 ## Manual install (single agent, no tooling)
 

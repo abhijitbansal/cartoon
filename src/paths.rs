@@ -4,6 +4,11 @@ pub fn config_file() -> Option<PathBuf> {
     base("XDG_CONFIG_HOME", ".config").map(|d| d.join("cartoon/config.toml"))
 }
 
+/// Sourceable file of shell wrapper functions (`cartoon shim`).
+pub fn shims_file() -> Option<PathBuf> {
+    base("XDG_CONFIG_HOME", ".config").map(|d| d.join("cartoon/shims.sh"))
+}
+
 pub fn stats_file() -> Option<PathBuf> {
     base("XDG_STATE_HOME", ".local/state").map(|d| d.join("cartoon/stats.jsonl"))
 }
