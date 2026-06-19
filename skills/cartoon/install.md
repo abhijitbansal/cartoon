@@ -94,3 +94,6 @@ Check what's active anytime: `cartoon hook status` (every surface) and
   directory — plugin-defined Copilot hooks currently don't fire.
 - **`.github/hooks/cartoon.json` is Copilot-CLI format** (camelCase
   `preToolUse`); VS Code Chat does not read it — use `--vscode` for Chat.
+- **Shims don't cover** hyphenated tool names (`pre-commit`),
+  `python -m pytest`, or `xcodebuild` — the hook does. Re-running an install
+  won't overwrite a `cartoon.json` you didn't create.

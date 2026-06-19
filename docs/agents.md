@@ -119,7 +119,8 @@ Activate for the non-interactive shells agents spawn:
 `CARTOON_NO_SHIM=1`. Shims reuse the hook's allowlist, but a shell function
 sees only its own argv (not surrounding pipes/redirection), so keep them to
 tools the agent runs bare; path-invoked binaries (`./gradlew`) aren't
-caught.
+caught. Tools with non-identifier names (`pre-commit`) and `python -m` /
+`xcodebuild` invocations aren't shimmed either — the hook covers those.
 
 ## Tools without skill support (copy-paste)
 

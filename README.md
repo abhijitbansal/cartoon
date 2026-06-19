@@ -116,6 +116,8 @@ Limitations:
   directory — plugin-defined Copilot hooks currently don't fire.
 - **Shims can't see pipes/redirection** and **path-invoked binaries**
   (`./gradlew`, `./node_modules/.bin/jest`) bypass shell functions entirely.
+  Tools whose names aren't valid shell identifiers (`pre-commit`), plus
+  `python -m pytest` and `xcodebuild`, aren't shimmed — the hook covers them.
 
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,

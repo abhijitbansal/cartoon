@@ -547,7 +547,7 @@ export BASH_ENV=~/.config/cartoon/shims.sh</pre>
       <ul>
         <li><b>VS Code Copilot Chat</b> can only deny, not rewrite — wrapping costs one extra round-trip while the agent re-issues the command. Its hooks are Preview, and it reads the Claude-format settings file (not the Copilot-CLI <code>.github/hooks</code> format), so install it with <code>--vscode</code>.</li>
         <li><b>Shims see only their own argv</b>, not surrounding pipes — so unlike the hook they can't refuse <code>pytest | grep x</code>. Keep them to tools the agent runs bare; disable per-shell with <code>CARTOON_NO_SHIM=1</code>.</li>
-        <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely.</li>
+        <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely. Tools with non-identifier names (<code>pre-commit</code>) and <code>python -m</code>/<code>xcodebuild</code> aren't shimmed — the hook covers them.</li>
         <li><b>Install to <code>~/.copilot/hooks</code> or <code>.github/hooks</code></b>, not a plugin dir — plugin-defined Copilot hooks currently don't fire.</li>
         <li><b>Wrapped output is buffered</b> — the report prints when the command finishes, not live (cartoon adds parse/encode time proportional to output size, milliseconds in practice). Use <code>cartoon --raw</code> for live streaming.</li>
       </ul>
