@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="1240" viewBox="0 0 1180 1240" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1420"/>
+      <stop offset="1" stop-color="#131a2a"/>
+    </linearGradient>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6d5efc"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <style>
+      .h1{fill:#fff;font-size:30px;font-weight:700}
+      .sub{fill:#9fb0c8;font-size:15px}
+      .sec{fill:#cbd5e1;font-size:18px;font-weight:700;letter-spacing:.4px}
+      .lbl{fill:#e2e8f0;font-size:15px;font-weight:600}
+      .sm{fill:#94a3b8;font-size:13px}
+      .mono{font-family:'SF Mono','Consolas',monospace}
+      .code{fill:#a5f3fc;font-size:14px;font-family:'SF Mono','Consolas',monospace}
+      .codek{fill:#fcd34d;font-size:14px;font-family:'SF Mono','Consolas',monospace}
+      .good{fill:#4ade80;font-size:13px;font-weight:600}
+      .warn{fill:#fbbf24;font-size:13px;font-weight:600}
+      .pill{fill:#1e293b;stroke:#334155;stroke-width:1}
+      .card{fill:#172033;stroke:#2a3650;stroke-width:1.5;rx:14}
+      .chip{fill:#0b1220;stroke:#334155;stroke-width:1}
+    </style>
+  </defs>
+
+  <rect width="1180" height="1240" fill="url(#bg)"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1180" height="6" fill="url(#hdr)"/>
+  <text x="40" y="58" class="h1">cartoon — deterministic auto-wrap for coding agents</text>
+  <text x="40" y="84" class="sub">Stop relying on the model to remember. A hook (or shim) wraps noisy commands every time. New in this PR.</text>
+
+  <!-- ===== Problem -> Fix ===== -->
+  <text x="40" y="128" class="sec">WHY</text>
+  <rect x="40" y="142" width="540" height="92" class="card" rx="14"/>
+  <text x="60" y="172" class="lbl">📄 Instructions only</text>
+  <text x="60" y="196" class="sm">SKILL.md · copilot-instructions.md · AGENTS.md</text>
+  <text x="60" y="220" class="warn">▲ probabilistic — the model "sometimes misses"</text>
+
+  <rect x="600" y="142" width="540" height="92" class="card" rx="14"/>
+  <text x="620" y="172" class="lbl">🪝 Hook / shim</text>
+  <text x="620" y="196" class="sm">intercepts the tool call before it runs</text>
+  <text x="620" y="220" class="good">✔ deterministic — wraps every matching command</text>
+
+  <!-- arrow -->
+  <path d="M560 188 L596 188" stroke="#6d5efc" stroke-width="3" marker-end="url(#ah)"/>
+  <defs><marker id="ah" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6d5efc"/></marker></defs>
+
+  <!-- ===== Install map ===== -->
+  <text x="40" y="282" class="sec">INSTALL — one command per agent surface</text>
+
+  <!-- Claude + VS Code card -->
+  <rect x="40" y="298" width="356" height="196" class="card" rx="14"/>
+  <text x="60" y="328" class="lbl">Claude Code  +  VS Code Copilot Chat</text>
+  <rect x="60" y="344" width="316" height="30" class="chip" rx="6"/>
+  <text x="72" y="364" class="codek">cartoon hook install</text>
+  <text x="60" y="398" class="sm">→ ~/.claude/settings.json  (both agents read it)</text>
+  <text x="60" y="426" class="good">Claude Bash → transparent rewrite</text>
+  <text x="60" y="448" class="good">VS Code run_in_terminal → deny + suggest</text>
+  <text x="60" y="476" class="sm">matcher broadened to Bash|run_in_terminal</text>
+
+  <!-- Copilot CLI card -->
+  <rect x="412" y="298" width="356" height="196" class="card" rx="14"/>
+  <text x="432" y="328" class="lbl">Copilot CLI  (≥ v1.0.24)</text>
+  <rect x="432" y="344" width="316" height="30" class="chip" rx="6"/>
+  <text x="444" y="364" class="codek">cartoon hook install --copilot</text>
+  <text x="432" y="398" class="sm">→ ~/.copilot/hooks/cartoon.json</text>
+  <rect x="432" y="412" width="316" height="30" class="chip" rx="6"/>
+  <text x="444" y="432" class="code">… --copilot --project</text>
+  <text x="432" y="466" class="sm">→ .github/hooks/cartoon.json (repo-shared,</text>
+  <text x="432" y="484" class="sm">   also covers the Copilot coding agent)</text>
+
+  <!-- Shim card -->
+  <rect x="784" y="298" width="356" height="196" class="card" rx="14"/>
+  <text x="804" y="328" class="lbl">Any agent — no hook needed</text>
+  <rect x="804" y="344" width="316" height="30" class="chip" rx="6"/>
+  <text x="816" y="364" class="codek">cartoon shim install</text>
+  <text x="804" y="398" class="sm">shell functions that shadow the tool names;</text>
+  <text x="804" y="416" class="sm">beat PATH &amp; venv-local binaries.</text>
+  <rect x="804" y="430" width="316" height="30" class="chip" rx="6"/>
+  <text x="816" y="450" class="code">export BASH_ENV=~/.config/…/shims.sh</text>
+  <text x="804" y="484" class="sm">activates it for the shells agents spawn</text>
+
+  <!-- ===== How a command flows ===== -->
+  <text x="40" y="542" class="sec">WHAT HAPPENS WHEN THE AGENT RUNS A COMMAND</text>
+  <rect x="40" y="558" width="1100" height="232" class="card" rx="14"/>
+
+  <!-- step 1 -->
+  <rect x="64" y="586" width="210" height="64" class="pill" rx="10"/>
+  <text x="80" y="612" class="sm">agent runs</text>
+  <text x="80" y="636" class="code">pytest -q tests/</text>
+
+  <path d="M278 618 L322 618" stroke="#22d3ee" stroke-width="3" marker-end="url(#ah2)"/>
+  <defs><marker id="ah2" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#22d3ee"/></marker></defs>
+
+  <!-- step 2 -->
+  <rect x="326" y="586" width="230" height="64" class="pill" rx="10"/>
+  <text x="342" y="612" class="sm">PreToolUse hook fires</text>
+  <text x="342" y="636" class="code">cartoon hook rewrite</text>
+
+  <path d="M560 618 L604 618" stroke="#22d3ee" stroke-width="3" marker-end="url(#ah2)"/>
+
+  <!-- branch rewrite -->
+  <rect x="608" y="566" width="508" height="92" fill="#10261b" stroke="#1f7a4d" stroke-width="1.5" rx="10"/>
+  <text x="628" y="592" class="good">Claude · Copilot CLI  →  TRANSPARENT REWRITE</text>
+  <text x="628" y="618" class="sm">runs in place as:</text>
+  <text x="628" y="642" class="code">cartoon -c 'pytest -q tests/'</text>
+
+  <!-- branch deny -->
+  <rect x="608" y="668" width="508" height="98" fill="#2a2110" stroke="#9a7b1f" stroke-width="1.5" rx="10"/>
+  <text x="628" y="694" class="warn">VS Code Chat (no rewrite field)  →  DENY + SUGGEST</text>
+  <text x="628" y="720" class="sm">blocks the raw command, tells the agent:</text>
+  <text x="628" y="744" class="code">"re-run wrapped: cartoon -c 'pytest -q tests/'"</text>
+
+  <!-- step note under 1/2 -->
+  <text x="64" y="688" class="lbl">Same conservative allowlist</text>
+  <text x="64" y="712" class="sm">test / lint / build / typecheck only.</text>
+  <text x="64" y="732" class="sm">infra CLIs (docker, kubectl, gh, aws) and</text>
+  <text x="64" y="752" class="sm">mutating subcmds (cargo publish, npm i)</text>
+  <text x="64" y="772" class="sm">pass through. Net-savings guard: never bigger.</text>
+
+  <!-- ===== Knobs / fallbacks ===== -->
+  <text x="40" y="838" class="sec">KNOBS &amp; FALLBACKS</text>
+
+  <rect x="40" y="854" width="540" height="150" class="card" rx="14"/>
+  <text x="60" y="884" class="lbl">Force deny-with-suggestion</text>
+  <rect x="60" y="900" width="500" height="28" class="chip" rx="6"/>
+  <text x="72" y="919" class="code">cartoon hook install --copilot --deny</text>
+  <rect x="60" y="936" width="500" height="28" class="chip" rx="6"/>
+  <text x="72" y="955" class="code">cartoon hook rewrite --deny-mode</text>
+  <text x="60" y="990" class="sm">Use if Copilot pops a confirm dialog on every</text>
+
+  <rect x="600" y="854" width="540" height="150" class="card" rx="14"/>
+  <text x="620" y="884" class="lbl">Inspect &amp; disable</text>
+  <rect x="620" y="900" width="500" height="28" class="chip" rx="6"/>
+  <text x="632" y="919" class="code">cartoon hook status   ·   cartoon shim status</text>
+  <rect x="620" y="936" width="500" height="28" class="chip" rx="6"/>
+  <text x="632" y="955" class="codek">CARTOON_NO_SHIM=1   # disable shims per-shell</text>
+  <text x="620" y="990" class="sm">status reports every surface; uninstall mirrors install</text>
+
+  <!-- ===== Cheatsheet ===== -->
+  <text x="40" y="1048" class="sec">CHEATSHEET</text>
+  <rect x="40" y="1064" width="1100" height="146" class="card" rx="14"/>
+  <text x="62" y="1094" class="codek">cartoon hook install</text>
+  <text x="360" y="1094" class="sm">Claude Code + VS Code Copilot Chat</text>
+  <text x="62" y="1122" class="codek">cartoon hook install --copilot</text>
+  <text x="360" y="1122" class="sm">Copilot CLI (personal ~/.copilot/hooks)</text>
+  <text x="62" y="1150" class="codek">cartoon hook install --copilot --project</text>
+  <text x="360" y="1150" class="sm">repo-shared .github/hooks (+ coding agent)</text>
+  <text x="62" y="1178" class="codek">cartoon shim install</text>
+  <text x="360" y="1178" class="sm">any agent — shell-function wrappers via BASH_ENV</text>
+
+  <text x="700" y="1122" class="codek">cartoon hook status</text>
+  <text x="940" y="1122" class="sm">where it's active</text>
+  <text x="700" y="1150" class="codek">--deny / --deny-mode</text>
+  <text x="940" y="1150" class="sm">block instead of rewrite</text>
+  <text x="700" y="1178" class="codek">CARTOON_NO_SHIM=1</text>
+  <text x="940" y="1178" class="sm">opt out of shims</text>
+</svg>
