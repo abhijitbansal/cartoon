@@ -538,6 +538,7 @@ export BASH_ENV=~/.config/cartoon/shims.sh</pre>
         <li><code>cartoon hook rewrite --deny-mode</code> forces deny anywhere; handy on Copilot builds before <code>updatedInput</code> landed.</li>
         <li><code>cartoon hook status</code> shows every surface at once; <code>cartoon shim status</code> shows the shim file.</li>
         <li>Commit <code>.github/hooks/cartoon.json</code> so the whole team (and the Copilot coding agent) gets auto-wrap for free.</li>
+        <li><b>Disable without uninstalling:</b> set <code>CARTOON_NO_WRAP=1</code> (hook) or <code>CARTOON_NO_SHIM=1</code> (shims) in the agent's environment — any non-empty value turns it off for the session. <code>cartoon --raw &lt;cmd&gt;</code> runs one command untouched.</li>
       </ul>
     </div>
     <div class="s">
@@ -548,6 +549,7 @@ export BASH_ENV=~/.config/cartoon/shims.sh</pre>
         <li><b>Shims see only their own argv</b>, not surrounding pipes — so unlike the hook they can't refuse <code>pytest | grep x</code>. Keep them to tools the agent runs bare; disable per-shell with <code>CARTOON_NO_SHIM=1</code>.</li>
         <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely.</li>
         <li><b>Install to <code>~/.copilot/hooks</code> or <code>.github/hooks</code></b>, not a plugin dir — plugin-defined Copilot hooks currently don't fire.</li>
+        <li><b>Wrapped output is buffered</b> — the report prints when the command finishes, not live (cartoon adds parse/encode time proportional to output size, milliseconds in practice). Use <code>cartoon --raw</code> for live streaming.</li>
       </ul>
     </div>
   </div>

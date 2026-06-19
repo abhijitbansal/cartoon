@@ -160,6 +160,6 @@
   <text x="965" y="1122" class="sm">where it's active</text>
   <text x="760" y="1150" class="codek">--deny / --deny-mode</text>
   <text x="965" y="1150" class="sm">block, not rewrite</text>
-  <text x="760" y="1178" class="codek">CARTOON_NO_SHIM=1</text>
-  <text x="965" y="1178" class="sm">opt out of shims</text>
+  <text x="760" y="1178" class="codek">CARTOON_NO_WRAP=1</text>
+  <text x="965" y="1178" class="sm">disable · NO_SHIM=shims</text>
 </svg>

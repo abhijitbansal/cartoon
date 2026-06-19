@@ -128,6 +128,21 @@ through untouched, and anything unrecognized is left alone (fail-open).
 The net-savings guard still applies — worst case the output is
 byte-identical.
 
+### Disabling & overhead
+
+- **Disable for a session** — set in the environment your agent runs in:
+  `export CARTOON_NO_WRAP=1` (hook) or `export CARTOON_NO_SHIM=1` (shims).
+  Any non-empty value disables; unset to re-enable.
+- **Disable permanently** — `cartoon hook uninstall [--copilot | --vscode]
+  [--project]` and/or `cartoon shim uninstall` (then drop the `BASH_ENV` /
+  source line). `cartoon hook status` shows what's active.
+- **One command raw** — `cartoon --raw <cmd>` runs it untouched.
+- **Overhead** — the per-command hook check is a tiny, fail-open process
+  (negligible). When wrapping, cartoon **buffers** output (the report prints
+  when the command finishes, not live) and adds parse/encode time
+  proportional to output size — milliseconds in practice, dwarfed by the
+  command itself. Use `--raw` when you want live streaming.
+
 ## Use
 
 ```bash

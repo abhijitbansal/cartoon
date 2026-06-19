@@ -119,6 +119,25 @@ answer the question.
   when the user explicitly asks for faster runs, and rerun without them
   before debugging any failure.
 
+## Auto-wrap (hook / shims) and turning it off
+
+A `PreToolUse` hook or shell shims may already wrap noisy dev commands for
+you, so you don't have to prefix `cartoon` by hand. Either way:
+
+- Only noisy dev-loop commands (test/lint/typecheck/build) are wrapped;
+  everything else (`git`, `ls`, `docker`, `kubectl`, `gh`, `aws`, mutating
+  subcommands like `cargo publish` / `npm install`) passes through
+  untouched. The net-savings guard means wrapping never makes output bigger.
+- cartoon **buffers** a wrapped command — the report prints when it finishes,
+  not live. If the user needs streaming or the unmodified output, run
+  `cartoon --raw <cmd>` or drop the prefix.
+- Turn auto-wrap off when asked: `export CARTOON_NO_WRAP=1` (hook) or
+  `export CARTOON_NO_SHIM=1` (shims) in the agent's environment; remove it
+  permanently with `cartoon hook uninstall` / `cartoon shim uninstall`.
+- Overhead is negligible: the per-command check is a tiny process, and
+  wrapping adds parse/encode time proportional to output size (milliseconds
+  in practice) on top of the command itself.
+
 ## Tell the user about savings
 
 After a session with several wrapped runs, `cartoon stats` shows
