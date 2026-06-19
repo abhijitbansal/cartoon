@@ -292,6 +292,11 @@
     white-space: pre-wrap; overflow-wrap: break-word; margin-top: 8px;
   }
   .setup p { font-size: 13px; color: var(--text-dim); }
+  .setup .s ul { margin: 8px 0 0; padding-left: 18px; }
+  .setup .s ul li { font-size: 12.5px; color: var(--text-dim); line-height: 1.55; margin-bottom: 6px; }
+  .setup .s ul li b { color: var(--text); font-weight: 600; }
+  .setup .s.span2 { grid-column: span 2; }
+  @media (max-width: 720px) { .setup .s.span2 { grid-column: auto; } }
 
   /* pull quote */
   .pull {
@@ -489,6 +494,62 @@ cartoon hook status    # check · uninstall to remove</pre>
     <div class="stat anim" style="--i:3"><div class="n">92.5%</div><div class="l">token cut · chatty service log</div><div class="m">CI-measured</div></div>
     <div class="stat anim" style="--i:4"><div class="n">61.5%</div><div class="l">token cut · cargo build failure</div><div class="m">CI-measured</div></div>
     <div class="stat anim" style="--i:5"><div class="n">0</div><div class="l">risk — output never gets bigger</div></div>
+  </div>
+
+  <!-- ============ COPILOT / VS CODE / SHIMS ============ -->
+  <div class="shead anim" style="--i:5">
+    <div class="rule"><span class="tag">Copilot · VS Code · any agent</span></div>
+    <h2>Guaranteed wrapping, not just instructions</h2>
+    <p>Pasting rules into <code>copilot-instructions.md</code> or <code>AGENTS.md</code> only <em>asks</em> the model to prefix <code>cartoon</code> — and it sometimes forgets. A <code>PreToolUse</code> hook intercepts the command and wraps it every time. One <code>cartoon hook rewrite</code> serves every agent; install it where each one looks.</p>
+  </div>
+
+  <div class="setup anim" style="--i:6">
+    <div class="s">
+      <div class="step">GitHub Copilot CLI · v1.0.24+</div>
+      <h3>Transparent rewrite</h3>
+      <p>Writes a Copilot hook that rewrites the command in place — same as Claude Code.</p>
+      <pre>cartoon hook install --copilot
+# repo-shared (also the coding agent):
+cartoon hook install --copilot --project</pre>
+    </div>
+    <div class="s">
+      <div class="step">VS Code Copilot Chat</div>
+      <h3>Deny &amp; suggest</h3>
+      <p>Chat exposes no rewrite field, so the hook blocks the raw command and tells the agent to re-run it wrapped. Shares Claude Code's file.</p>
+      <pre>cartoon hook install
+# → ~/.claude/settings.json
+#   (covers Claude Code too)</pre>
+    </div>
+    <div class="s">
+      <div class="step">Any agent · no hook needed</div>
+      <h3>Shell shims</h3>
+      <p>Functions shadow the bare tool names and re-invoke through cartoon — they beat PATH and venv binaries.</p>
+      <pre>cartoon shim install
+export BASH_ENV=~/.config/cartoon/shims.sh</pre>
+    </div>
+  </div>
+
+  <div class="setup anim" style="--i:7; margin-top:16px">
+    <div class="s">
+      <div class="step">Tips</div>
+      <h3>Get the smoothest Copilot setup</h3>
+      <ul>
+        <li>Seeing a <b>confirmation dialog on every wrapped command</b> (a known Copilot CLI v1.0.24 bug)? Reinstall with <code>cartoon hook install --copilot --deny</code> — it blocks-and-suggests instead of rewriting, no modal.</li>
+        <li><code>cartoon hook rewrite --deny-mode</code> forces deny anywhere; handy on Copilot builds before <code>updatedInput</code> landed.</li>
+        <li><code>cartoon hook status</code> shows every surface at once; <code>cartoon shim status</code> shows the shim file.</li>
+        <li>Commit <code>.github/hooks/cartoon.json</code> so the whole team (and the Copilot coding agent) gets auto-wrap for free.</li>
+      </ul>
+    </div>
+    <div class="s">
+      <div class="step">Limitations</div>
+      <h3>Where each layer stops</h3>
+      <ul>
+        <li><b>VS Code Copilot Chat</b> can only deny, not rewrite — wrapping costs one extra round-trip while the agent re-issues the command.</li>
+        <li><b>Shims see only their own argv</b>, not surrounding pipes — so unlike the hook they can't refuse <code>pytest | grep x</code>. Keep them to tools the agent runs bare; disable per-shell with <code>CARTOON_NO_SHIM=1</code>.</li>
+        <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely.</li>
+        <li><b>Install to <code>~/.copilot/hooks</code> or <code>.github/hooks</code></b>, not a plugin dir — plugin-defined Copilot hooks currently don't fire.</li>
+      </ul>
+    </div>
   </div>
 
   <!-- ============ BEFORE / AFTER ============ -->
