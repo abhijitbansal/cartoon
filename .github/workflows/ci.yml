@@ -8,7 +8,10 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS runners are costly and burn CI credits fast; the Apple
+        # adapters (swift / xcodebuild) are exercised locally on a Mac
+        # instead. Re-add `macos-latest` here if that ever needs CI coverage.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
