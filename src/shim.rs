@@ -51,13 +51,16 @@ pub fn script() -> String {
     s.push_str("    cartoon \"$@\"\n");
     s.push_str("  fi\n");
     s.push_str("}\n");
-    // Always-noisy tools: wrap regardless of args.
-    for t in ALWAYS {
+    // Always-noisy tools: wrap regardless of args. Skip names that aren't
+    // valid POSIX function names (e.g. `pre-commit`) — sh/dash reject the
+    // definition with "Bad function name" and abort the WHOLE sourced file,
+    // killing every shim. Such tools are still covered by the hook.
+    for t in ALWAYS.iter().filter(|t| portable_fn_name(t)) {
         s.push_str(&format!("{t}() {{ __cartoon_run {t} \"$@\"; }}\n"));
     }
     // Subcommand-gated tools: wrap only the read-mostly subcommands, mirroring
     // the hook so `cargo publish` / `npm install` still run bare.
-    for (tool, subs) in SUBCOMMAND {
+    for (tool, subs) in SUBCOMMAND.iter().filter(|(t, _)| portable_fn_name(t)) {
         let pat = subs.join("|");
         s.push_str(&format!(
             "{tool}() {{ case \"${{1:-}}\" in {pat}) __cartoon_run {tool} \"$@\" ;; *) command {tool} \"$@\" ;; esac; }}\n"
@@ -71,6 +74,13 @@ pub fn script() -> String {
         ));
     }
     s
+}
+
+/// A shell function name that POSIX sh/dash will accept (`[A-Za-z0-9_]`).
+/// Hyphenated names like `pre-commit` are bash/zsh-only and break a sourced
+/// file under sh, so we don't define functions for them.
+fn portable_fn_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn shims_path() -> Result<std::path::PathBuf> {
@@ -156,5 +166,23 @@ mod tests {
     #[test]
     fn has_disable_escape_hatch() {
         assert!(script().contains("CARTOON_NO_SHIM"));
+    }
+
+    #[test]
+    fn skips_non_portable_function_names() {
+        // `pre-commit` would be a "Bad function name" in sh/dash and abort
+        // the whole sourced file, so no hyphenated function is defined.
+        let s = script();
+        assert!(!s.contains("pre-commit() {"), "hyphenated fn def leaked");
+        // Every emitted `name() {` definition uses a portable name.
+        for line in s.lines() {
+            if let Some(name) = line.split("()").next().filter(|_| line.contains("() {")) {
+                let name = name.trim();
+                assert!(
+                    portable_fn_name(name),
+                    "non-portable function name emitted: {name:?}"
+                );
+            }
+        }
     }
 }
