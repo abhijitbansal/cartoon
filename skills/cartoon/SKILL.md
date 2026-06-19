@@ -18,18 +18,10 @@ Typical test runs shrink ~70%+. Exit codes and behavior are unchanged.
 command -v cartoon
 ```
 
-If missing, install with the first toolchain available, then verify:
-
-```bash
-uv tool install cartoon        # preferred when uv exists
-pipx install cartoon           # Python fallback
-npm install -g cartoon-wrap    # Node (installs the `cartoon` binary)
-cargo install cartoon          # Rust
-cartoon adapters               # verify: lists the test-runner adapters
-```
-
-If no toolchain is available or installs need permission you don't have,
-skip wrapping — never block the user's actual task on cartoon.
+If it's missing — or you want to set up automatic wrapping (a PreToolUse
+hook or shell shims) so you don't prefix `cartoon` by hand — read
+[install.md](install.md). If cartoon can't be installed, skip wrapping;
+never block the user's actual task on it.
 
 ## Use
 
@@ -119,24 +111,15 @@ answer the question.
   when the user explicitly asks for faster runs, and rerun without them
   before debugging any failure.
 
-## Auto-wrap (hook / shims) and turning it off
+## Auto-wrap may already be on
 
-A `PreToolUse` hook or shell shims may already wrap noisy dev commands for
-you, so you don't have to prefix `cartoon` by hand. Either way:
-
-- Only noisy dev-loop commands (test/lint/typecheck/build) are wrapped;
-  everything else (`git`, `ls`, `docker`, `kubectl`, `gh`, `aws`, mutating
-  subcommands like `cargo publish` / `npm install`) passes through
-  untouched. The net-savings guard means wrapping never makes output bigger.
-- cartoon **buffers** a wrapped command — the report prints when it finishes,
-  not live. If the user needs streaming or the unmodified output, run
-  `cartoon --raw <cmd>` or drop the prefix.
-- Turn auto-wrap off when asked: `export CARTOON_NO_WRAP=1` (hook) or
-  `export CARTOON_NO_SHIM=1` (shims) in the agent's environment; remove it
-  permanently with `cartoon hook uninstall` / `cartoon shim uninstall`.
-- Overhead is negligible: the per-command check is a tiny process, and
-  wrapping adds parse/encode time proportional to output size (milliseconds
-  in practice) on top of the command itself.
+A hook or shell shims may wrap noisy dev commands for you, so commands you
+run bare may come back as TOON. Non-noisy commands (`git`, `ls`, `docker`,
+…) pass through untouched, and wrapped output is buffered (the report prints
+when the command finishes, not live). To turn it off when asked:
+`export CARTOON_NO_WRAP=1` (hook) or `CARTOON_NO_SHIM=1` (shims), or
+`cartoon --raw <cmd>` for one command. Setup, scope, and uninstall:
+[install.md](install.md).
 
 ## Tell the user about savings
 
