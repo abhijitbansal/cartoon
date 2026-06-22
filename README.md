@@ -282,8 +282,8 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 
 | Adapter | Trigger | Source |
 |---|---|---|
-| pytest | `pytest`, `python -m pytest` | injected `--junit-xml` |
-| unittest | `python -m unittest` | stderr text parse |
+| pytest | `pytest`, `python -m pytest`, `uv run pytest` | injected `--junit-xml` |
+| unittest | `python -m unittest`, `uv run python -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
 | vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
 | swift-test | `swift test` | injected `--xunit-output` + `--parallel` (merges XCTest + Swift Testing files) |

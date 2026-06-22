@@ -118,6 +118,21 @@ pub fn is_python_module(argv: &[String], module: &str) -> bool {
     basename(first).starts_with("python") && argv.windows(2).any(|w| w[0] == "-m" && w[1] == module)
 }
 
+/// Strip a leading `uv run`, `uvx`, or `uv tool run` wrapper, returning the
+/// inner command's argv. uv forwards everything after the target command
+/// straight through to it, and adapters only *append* their machine-output
+/// flags, so the wrapper is transparent to prepare/parse once detection looks
+/// past it. Returns argv unchanged when there's no uv wrapper.
+pub fn strip_uv_run(argv: &[String]) -> &[String] {
+    let arg = |i: usize| argv.get(i).map(String::as_str);
+    match basename(argv.first().map(String::as_str).unwrap_or("")) {
+        "uvx" => &argv[1..],
+        "uv" if arg(1) == Some("run") => &argv[2..],
+        "uv" if arg(1) == Some("tool") && arg(2) == Some("run") => &argv[3..],
+        _ => argv,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +161,60 @@ mod tests {
             &argv(&["python3", "script.py"]),
             "pytest"
         ));
+    }
+
+    #[test]
+    fn strip_uv_run_unwraps_wrappers() {
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "pytest", "-q"])),
+            &argv(&["pytest", "-q"])[..]
+        );
+        assert_eq!(
+            strip_uv_run(&argv(&["uvx", "pytest"])),
+            &argv(&["pytest"])[..]
+        );
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "tool", "run", "pytest"])),
+            &argv(&["pytest"])[..]
+        );
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "python", "-m", "pytest"])),
+            &argv(&["python", "-m", "pytest"])[..]
+        );
+    }
+
+    #[test]
+    fn strip_uv_run_leaves_non_uv_untouched() {
+        assert_eq!(
+            strip_uv_run(&argv(&["pytest", "-q"])),
+            &argv(&["pytest", "-q"])[..]
+        );
+        // `uv` without a recognized subcommand is not a runner wrapper.
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "pip", "install"])),
+            &argv(&["uv", "pip", "install"])[..]
+        );
+        assert!(strip_uv_run(&[]).is_empty());
+    }
+
+    #[test]
+    fn find_adapter_matches_uv_run_pytest() {
+        assert_eq!(
+            find_adapter(&argv(&["uv", "run", "pytest", "-q"])).map(|a| a.name()),
+            Some("pytest")
+        );
+        assert_eq!(
+            find_adapter(&argv(&["uvx", "pytest"])).map(|a| a.name()),
+            Some("pytest")
+        );
+        assert_eq!(
+            find_adapter(&argv(&["uv", "run", "python", "-m", "pytest"])).map(|a| a.name()),
+            Some("pytest")
+        );
+        assert_eq!(
+            find_adapter(&argv(&["uv", "run", "python", "-m", "unittest"])).map(|a| a.name()),
+            Some("unittest")
+        );
     }
 
     #[test]
