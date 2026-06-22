@@ -22,9 +22,13 @@ impl Adapter for Pytest {
         "pytest"
     }
     fn matches(&self) -> &'static str {
-        "pytest | python -m pytest"
+        "pytest | python -m pytest | uv run pytest"
     }
     fn detect(&self, argv: &[String]) -> bool {
+        // Look past a `uv run` / `uvx` wrapper: uv forwards our appended flags
+        // straight through to pytest, so detection is the only thing that needs
+        // to see the inner command.
+        let argv = super::strip_uv_run(argv);
         let is_pytest = argv
             .first()
             .map(|a| basename(a) == "pytest")
@@ -205,6 +209,15 @@ mod tests {
     }
 
     #[test]
+    fn detects_uv_run_invocations() {
+        assert!(Pytest.detect(&argv(&["uv", "run", "pytest"])));
+        assert!(Pytest.detect(&argv(&["uv", "run", "pytest", "-q", "tests/"])));
+        assert!(Pytest.detect(&argv(&["uvx", "pytest"])));
+        assert!(Pytest.detect(&argv(&["uv", "tool", "run", "pytest"])));
+        assert!(Pytest.detect(&argv(&["uv", "run", "python", "-m", "pytest"])));
+    }
+
+    #[test]
     fn skips_informational_invocations() {
         for flag in super::NON_TEST_FLAGS {
             assert!(
@@ -213,6 +226,8 @@ mod tests {
             );
         }
         assert!(!Pytest.detect(&argv(&["python", "-m", "pytest", "--version"])));
+        // informational flags are still skipped behind a uv wrapper
+        assert!(!Pytest.detect(&argv(&["uv", "run", "pytest", "--version"])));
     }
 
     #[test]

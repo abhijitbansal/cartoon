@@ -14,10 +14,11 @@ impl Adapter for Unittest {
         "unittest"
     }
     fn matches(&self) -> &'static str {
-        "python -m unittest"
+        "python -m unittest | uv run python -m unittest"
     }
     fn detect(&self, argv: &[String]) -> bool {
-        is_python_module(argv, "unittest")
+        // `uv run python -m unittest` is transparent once we strip the wrapper.
+        is_python_module(super::strip_uv_run(argv), "unittest")
     }
     fn prepare(&self, argv: Vec<String>) -> Prepared {
         Prepared {
