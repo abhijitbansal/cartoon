@@ -143,8 +143,10 @@ ALWAYS prefix these (run them bare and you have made a mistake):
 `pytest`, `python -m pytest`, `unittest`, `jest`, `vitest`, `tsc`,
 `eslint`, `ruff`, `mypy`, `make`, `cargo build|test|check|clippy`,
 `go test|build|vet`, `npm test`, `swift test|build`, `xcodebuild
-test|build`, and any `... --output json` CLI (`aws`, `gh`, `kubectl`).
-Examples: `cartoon pytest -q`, `cartoon uv run pytest`, `cartoon npx jest src/`, `cartoon make`,
+test|build`, the same tools run through uv (`uv run pytest`, `uvx ruff
+check`, `uv run -m pytest`), and any `... --output json` CLI (`aws`, `gh`,
+`kubectl`). Examples: `cartoon pytest -q`, `cartoon uv run pytest`,
+`cartoon npx jest src/`, `cartoon make`,
 `cartoon aws ec2 describe-instances --output json`. Existing logs:
 `cartoon ingest build.log` or `cmd | cartoon -`.
 

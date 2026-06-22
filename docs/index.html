@@ -610,7 +610,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       <span class="idx">01</span>
       <span class="chip chip--navy">Adapters</span>
       <h3>Eleven runners, native formats</h3>
-      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line.</p>
+      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> are first-class too — <code>uv run pytest</code> (uv auto-picks the project <code>.venv</code>), <code>uv run -m pytest</code>, and <code>uvx ruff check</code> are detected and auto-wrapped just like the bare tools.</p>
     </div>
     <div class="gcard anim" style="--i:11">
       <span class="idx">02</span>
@@ -790,8 +790,8 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     <table>
       <thead><tr><th>Adapter</th><th>Trigger</th><th>Source</th></tr></thead>
       <tbody>
-        <tr><td><code>pytest</code></td><td>pytest, python -m pytest</td><td>injected junit-xml</td></tr>
-        <tr><td><code>unittest</code></td><td>python -m unittest</td><td>stderr text parse</td></tr>
+        <tr><td><code>pytest</code></td><td>pytest, python -m pytest, uv run [-m] pytest, uvx pytest</td><td>injected junit-xml</td></tr>
+        <tr><td><code>unittest</code></td><td>python -m unittest, uv run [python] -m unittest</td><td>stderr text parse</td></tr>
         <tr><td><code>jest</code></td><td>jest, npx jest</td><td>injected --json</td></tr>
         <tr><td><code>vitest</code></td><td>vitest run (watch passes through)</td><td>injected --reporter=json</td></tr>
         <tr class="apple"><td><code>swift-test</code><span class="newchip">New · Apple</span></td><td>swift test</td><td>injected --xunit-output + --parallel; merges XCTest + Swift Testing xml</td></tr>
@@ -887,7 +887,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   <p class="pull anim" style="--i:25">"Your agent reads 12 lines instead of 800 — and the <span>receipt is always on disk</span>."</p>
 
   <div class="signoff anim" style="--i:28">
-    <div class="drule"><span>REV 0.4 · MIT</span></div>
+    <div class="drule"><span>REV <span id="version" data-cartoon-version>0.5.0</span> · MIT</span></div>
     a cartoon is a compressed rendering of reality — so is this
   </div>
 

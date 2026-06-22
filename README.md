@@ -122,13 +122,15 @@ Limitations:
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
 `mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
-`npm test|ci`, …). Because a rewrite auto-approves the call, the allowlist
-is deliberately conservative: infra CLIs (docker, kubectl, terraform, gh,
-aws) and mutating subcommands (`cargo publish`, `npm install`) are never
-wrapped, commands that change shell state (`cd`, `export`, `source`) pass
-through untouched, and anything unrecognized is left alone (fail-open).
-The net-savings guard still applies — worst case the output is
-byte-identical.
+`npm test|ci`, …), including those run through uv (`uv run pytest`,
+`uvx ruff check`, `uv run -m pytest`). Because a rewrite auto-approves the
+call, the allowlist is deliberately conservative: infra CLIs (docker,
+kubectl, terraform, gh, aws) and mutating subcommands (`cargo publish`,
+`npm install`) are never wrapped, a uv run carrying package-adding flags
+(`uv run --with <pkg> …`) is left for the normal prompt, commands that
+change shell state (`cd`, `export`, `source`) pass through untouched, and
+anything unrecognized is left alone (fail-open). The net-savings guard
+still applies — worst case the output is byte-identical.
 
 ### Disabling & overhead
 
@@ -282,8 +284,8 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 
 | Adapter | Trigger | Source |
 |---|---|---|
-| pytest | `pytest`, `python -m pytest`, `uv run pytest` | injected `--junit-xml` |
-| unittest | `python -m unittest`, `uv run python -m unittest` | stderr text parse |
+| pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest` | injected `--junit-xml` |
+| unittest | `python -m unittest`, `uv run [python] -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
 | vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
 | swift-test | `swift test` | injected `--xunit-output` + `--parallel` (merges XCTest + Swift Testing files) |

@@ -29,12 +29,18 @@ Prefix only — all flags and args of the wrapped command stay verbatim:
 
 ```bash
 cartoon pytest                          # instead of: pytest
+cartoon uv run pytest                   # uv picks the project .venv; cartoon still wraps
+cartoon uvx ruff check .                # uvx / uv tool run are wrapped too
 cartoon npx jest src/                   # any supported runner
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
 cartoon make                            # any noisy command: safe compression is automatic
 cartoon ingest build.log                # a log that already exists on disk
 some-cmd | cartoon -                    # or piped in
 ```
+
+`uv run pytest` / `uvx pytest` / `uv run -m pytest` are detected just like a
+bare `pytest`: cartoon appends pytest's machine-output flag and uv forwards
+it through, so wrapping a uv test run is identical to wrapping a bare one.
 
 ## Don't pre-truncate noisy commands — wrap them
 
