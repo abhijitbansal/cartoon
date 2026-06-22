@@ -77,6 +77,18 @@ __cartoon_run() {
             "{r}() {{ case \"${{1:-}}\" in {targets}) __cartoon_run {r} \"$@\" ;; *) command {r} \"$@\" ;; esac; }}\n"
         ));
     }
+    // uv/uvx: wrap a test/lint tool run through uv — `uv run pytest`,
+    // `uv run -m pytest`, `uv run python -m pytest`, `uvx ruff check` — while
+    // leaving `uv pip|sync|add|build|…` (and `uv run myscript.py`) untouched.
+    // A function sees only its own argv, so the flag-prefixed form
+    // (`uv run --no-sync pytest`) isn't caught here — the hook covers that.
+    let uv_targets = format!("{targets}|python|python3|-m");
+    s.push_str(&format!(
+        "uv() {{ if [ \"${{1:-}}\" = run ]; then case \"${{2:-}}\" in {uv_targets}) __cartoon_run uv \"$@\" ;; *) command uv \"$@\" ;; esac; else command uv \"$@\"; fi; }}\n"
+    ));
+    s.push_str(&format!(
+        "uvx() {{ case \"${{1:-}}\" in {targets}) __cartoon_run uvx \"$@\" ;; *) command uvx \"$@\" ;; esac; }}\n"
+    ));
     s
 }
 
@@ -165,6 +177,18 @@ mod tests {
     fn runners_wrap_only_noisy_targets() {
         let s = script();
         assert!(s.contains("npx() { case \"${1:-}\" in pytest|jest|vitest"));
+    }
+
+    #[test]
+    fn uv_run_wraps_noisy_targets_only() {
+        let s = script();
+        // `uv run <noisy>` wraps; `-m`/python module forms included.
+        assert!(s.contains("uv() { if [ \"${1:-}\" = run ]; then case \"${2:-}\" in pytest|"));
+        assert!(s.contains("|python|python3|-m) __cartoon_run uv \"$@\" ;;"));
+        // anything that isn't `uv run` passes straight through (uv pip/sync/…).
+        assert!(s.contains("else command uv \"$@\"; fi; }"));
+        // uvx wraps a noisy target too.
+        assert!(s.contains("uvx() { case \"${1:-}\" in pytest|"));
     }
 
     #[test]

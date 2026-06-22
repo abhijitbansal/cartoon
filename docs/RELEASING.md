@@ -31,6 +31,9 @@ Single source of truth is the **git tag** (`vX.Y.Z`):
 - PyPI version comes from the tag via maturin (`dynamic = ["version"]`).
 - **Cargo.toml `version` must be bumped manually to match the tag** before
   tagging — `cargo publish` uses it verbatim.
+- The marketing site (`docs/index.html`) shows the version from a marker kept
+  in sync with Cargo.toml by `scripts/sync-site-version.mjs`. CI runs it with
+  `--check`, so a Cargo.toml bump that forgets the site fails on main/PR.
 
 ## Auth: Trusted Publishing everywhere (no long-lived tokens)
 
@@ -83,7 +86,8 @@ Artifacts are retained ~90 days; after that, rebuild from the tag.
 ## Release checklist
 
 1. CI green on main; `cargo test` locally.
-2. Bump `Cargo.toml` version to match the tag; commit.
+2. Bump `Cargo.toml` version to match the tag, then
+   `node scripts/sync-site-version.mjs` to update the site; commit both.
 3. Tag + push (TL;DR above); watch the run.
 4. Smoke-test: `uv tool install cartoon`, `npm i -g cartoon-wrap`,
    `cargo install cartoon` → `cartoon adapters`.

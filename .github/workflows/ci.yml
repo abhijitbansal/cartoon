@@ -26,6 +26,10 @@ jobs:
         with:
           node-version: "22"
       - run: npm install -g jest
+      # Site version must track Cargo.toml (the in-repo source of truth); a
+      # bump that forgets docs/index.html fails here. Fix: node
+      # scripts/sync-site-version.mjs
+      - run: node scripts/sync-site-version.mjs --check
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings

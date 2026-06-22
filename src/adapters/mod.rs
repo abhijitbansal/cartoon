@@ -118,19 +118,142 @@ pub fn is_python_module(argv: &[String], module: &str) -> bool {
     basename(first).starts_with("python") && argv.windows(2).any(|w| w[0] == "-m" && w[1] == module)
 }
 
-/// Strip a leading `uv run`, `uvx`, or `uv tool run` wrapper, returning the
-/// inner command's argv. uv forwards everything after the target command
-/// straight through to it, and adapters only *append* their machine-output
-/// flags, so the wrapper is transparent to prepare/parse once detection looks
-/// past it. Returns argv unchanged when there's no uv wrapper.
+/// uv's own module form: `uv run -m pytest` strips (below) to `-m pytest`,
+/// where uv runs the module like `python -m` would. Recognize that leading
+/// `-m <module>` / `--module <module>`. Only meaningful on an argv that a uv
+/// wrapper was actually stripped from — a bare command never starts with `-m`.
+pub fn is_module_run(argv: &[String], module: &str) -> bool {
+    matches!(
+        argv.first().map(String::as_str),
+        Some("-m") | Some("--module")
+    ) && argv.get(1).map(String::as_str) == Some(module)
+}
+
+/// `uv run` / `uvx` options that take a following value (skipped *with* their
+/// value when scanning past the wrapper). Need not be exhaustive: an unknown
+/// option makes `skip_uv_opts` bail (fail open), so a missing entry only costs
+/// a wrap, never a wrong one. Boolean options must NOT appear here.
+const UV_VALUE_OPTS: &[&str] = &[
+    "--extra",
+    "--no-extra",
+    "--group",
+    "--no-group",
+    "--only-group",
+    "--env-file",
+    "--with",
+    "-w",
+    "--with-editable",
+    "--with-requirements",
+    "--package",
+    "--python-platform",
+    "--python",
+    "-p",
+    "--directory",
+    "--project",
+    "--config-file",
+    "--index",
+    "--default-index",
+    "--find-links",
+    "-f",
+    "--cache-dir",
+    "--refresh-package",
+    "--index-strategy",
+    "--keyring-provider",
+    "--resolution",
+    "--prerelease",
+    "--exclude-newer",
+    "--link-mode",
+    "--index-url",
+    "--extra-index-url",
+    "--config-setting",
+    "-C",
+];
+
+/// `uv run` / `uvx` boolean options (skipped on their own). MUST stay purely
+/// boolean: a value-taking option misfiled here could let its value masquerade
+/// as the wrapped command and cause a false match. Unknown options aren't
+/// skipped (we bail), so this list only needs the common ones.
+const UV_BOOL_OPTS: &[&str] = &[
+    "--all-extras",
+    "--no-dev",
+    "--no-default-groups",
+    "--all-groups",
+    "--only-dev",
+    "--no-editable",
+    "--exact",
+    "--no-env-file",
+    "--isolated",
+    "--active",
+    "--no-sync",
+    "--locked",
+    "--frozen",
+    "--all-packages",
+    "--no-project",
+    "--script",
+    "-s",
+    "--gui-script",
+    "--offline",
+    "--native-tls",
+    "--no-config",
+    "--no-progress",
+    "--quiet",
+    "-q",
+    "--verbose",
+    "-v",
+    "--refresh",
+    "--no-cache",
+    "--upgrade",
+    "-U",
+    "--reinstall",
+    "--compile-bytecode",
+    "--no-binary",
+    "--no-build",
+    "--preview",
+];
+
+/// Walk past uv-level options that sit between `uv run` and the wrapped command
+/// (`uv run --no-sync pytest`, `uv run --python 3.12 pytest`). Stops at the
+/// first positional (the command), at `-m`/`--module` (kept for the adapter's
+/// module-run check), or at `--` (consumed: the command follows). Bails on any
+/// unrecognized option so we never skip a value we don't understand and match
+/// the wrong token — fail open, exactly like the rest of the pipeline.
+fn skip_uv_opts(mut rest: &[String]) -> &[String] {
+    while let Some(tok) = rest.first().map(String::as_str) {
+        if tok == "--" {
+            return rest.get(1..).unwrap_or(&[]);
+        }
+        if tok == "-m" || tok == "--module" || !tok.starts_with('-') {
+            return rest;
+        }
+        if tok.contains('=') {
+            rest = &rest[1..]; // --opt=value: a single token
+        } else if UV_VALUE_OPTS.contains(&tok) {
+            rest = rest.get(2..).unwrap_or(&[]); // --opt value: two tokens
+        } else if UV_BOOL_OPTS.contains(&tok) {
+            rest = &rest[1..];
+        } else {
+            return rest; // unknown option: don't guess, leave it for fail-open
+        }
+    }
+    rest
+}
+
+/// Strip a leading `uv run`, `uvx`, or `uv tool run` wrapper (plus any uv-level
+/// options before the command), returning the inner command's argv. uv forwards
+/// everything after the target command straight through to it, and adapters only
+/// *append* their machine-output flags, so the wrapper is transparent to
+/// prepare/parse once detection looks past it. A returned slice strictly shorter
+/// than `argv` signals a wrapper was present. Returns argv unchanged when
+/// there's no uv `run`/`tool run`/`uvx` wrapper (e.g. `uv pip install`).
 pub fn strip_uv_run(argv: &[String]) -> &[String] {
     let arg = |i: usize| argv.get(i).map(String::as_str);
-    match basename(argv.first().map(String::as_str).unwrap_or("")) {
+    let rest = match basename(argv.first().map(String::as_str).unwrap_or("")) {
         "uvx" => &argv[1..],
         "uv" if arg(1) == Some("run") => &argv[2..],
         "uv" if arg(1) == Some("tool") && arg(2) == Some("run") => &argv[3..],
-        _ => argv,
-    }
+        _ => return argv,
+    };
+    skip_uv_opts(rest)
 }
 
 #[cfg(test)]
@@ -195,6 +318,82 @@ mod tests {
             &argv(&["uv", "pip", "install"])[..]
         );
         assert!(strip_uv_run(&[]).is_empty());
+    }
+
+    #[test]
+    fn strip_uv_run_skips_boolean_uv_options() {
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--no-sync", "pytest", "-q"])),
+            &argv(&["pytest", "-q"])[..]
+        );
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--frozen", "--isolated", "pytest"])),
+            &argv(&["pytest"])[..]
+        );
+    }
+
+    #[test]
+    fn strip_uv_run_skips_value_uv_options() {
+        // `--with pkg` / `--python 3.12` consume their value, not the command.
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--with", "pytest-xdist", "pytest"])),
+            &argv(&["pytest"])[..]
+        );
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--python", "3.12", "pytest", "-q"])),
+            &argv(&["pytest", "-q"])[..]
+        );
+        // `--opt=value` is a single token.
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--python=3.12", "pytest"])),
+            &argv(&["pytest"])[..]
+        );
+    }
+
+    #[test]
+    fn strip_uv_run_handles_module_and_separator() {
+        // `-m`/`--module` is kept for the module-run check.
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "-m", "pytest", "tests"])),
+            &argv(&["-m", "pytest", "tests"])[..]
+        );
+        // `--` ends uv options; the command follows.
+        assert_eq!(
+            strip_uv_run(&argv(&["uv", "run", "--", "pytest", "-q"])),
+            &argv(&["pytest", "-q"])[..]
+        );
+    }
+
+    #[test]
+    fn strip_uv_run_bails_on_unknown_option() {
+        // An option we don't model is left in place so detection fails open
+        // rather than skipping a value we can't reason about.
+        let a = argv(&["uv", "run", "--brand-new-flag", "pytest"]);
+        assert_eq!(strip_uv_run(&a), &a[2..]);
+        assert_eq!(strip_uv_run(&a)[0], "--brand-new-flag");
+    }
+
+    #[test]
+    fn is_module_run_matches_uv_dash_m() {
+        assert!(is_module_run(&argv(&["-m", "pytest"]), "pytest"));
+        assert!(is_module_run(&argv(&["--module", "unittest"]), "unittest"));
+        assert!(!is_module_run(&argv(&["-m", "pytest"]), "unittest"));
+        assert!(!is_module_run(&argv(&["pytest"]), "pytest"));
+    }
+
+    #[test]
+    fn find_adapter_matches_robust_uv_forms() {
+        for (a, want) in [
+            (argv(&["uv", "run", "-m", "pytest", "tests"]), "pytest"),
+            (argv(&["uv", "run", "--no-sync", "pytest"]), "pytest"),
+            (argv(&["uv", "run", "--with", "x", "pytest"]), "pytest"),
+            (argv(&["uv", "run", "--", "pytest"]), "pytest"),
+            (argv(&["uv", "run", "-m", "unittest"]), "unittest"),
+        ] {
+            assert_eq!(find_adapter(&a).map(|x| x.name()), Some(want), "argv {a:?}");
+        }
+        // Unknown uv option → fail open (no adapter), not a wrong match.
+        assert!(find_adapter(&argv(&["uv", "run", "--brand-new-flag", "pytest"])).is_none());
     }
 
     #[test]
