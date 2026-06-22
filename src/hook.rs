@@ -62,6 +62,24 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
 /// Runner prefixes: wrap when the NEXT word is itself an ALWAYS tool.
 pub const RUNNERS: &[&str] = &["npx", "bunx", "pnpx"];
 
+/// uv-level boolean flags the hook will skip past (between `uv run` and the
+/// wrapped command) to find the inner tool. Deliberately narrow: a rewrite
+/// auto-APPROVES the call, so value flags (`--with X`, `--python X`, …) — which
+/// can pull in and run extra packages — are intentionally excluded. A uv
+/// command carrying anything not listed here simply isn't auto-wrapped (it runs
+/// through the normal permission flow, unwrapped). The adapter's own
+/// `strip_uv_run` is more permissive because there the user typed the command.
+pub const UV_HOOK_SAFE_FLAGS: &[&str] = &[
+    "--no-sync",
+    "--frozen",
+    "--locked",
+    "--isolated",
+    "--active",
+    "--no-project",
+    "--offline",
+    "--no-dev",
+];
+
 /// Shell builtins that mutate the calling shell's state. The Bash tool
 /// tracks cwd/env across calls; running these inside cartoon's subshell
 /// would silently break that, so such commands pass through.
@@ -293,6 +311,17 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
             crate::adapters::xcodebuild::action(&argv)?;
             continue;
         }
+        // `uv run pytest`, `uvx ruff check`, `uv run -m pytest`, … need to look
+        // several words past the prefix, so the single next-word check can't
+        // gate them either.
+        if base == "uv" || base == "uvx" {
+            let mut argv = vec![first.to_string()];
+            argv.extend(words.map(String::from));
+            if !uv_wraps_noisy(&argv) {
+                return None;
+            }
+            continue;
+        }
         if !is_noisy(base, words.next()) {
             return None;
         }
@@ -317,7 +346,53 @@ fn is_noisy(base: &str, next: Option<&str>) -> bool {
     if base.starts_with("python") {
         return next == Some("-m");
     }
+    // uv's own module form after the prefix is stripped: `-m pytest`.
+    if base == "-m" || base == "--module" {
+        return matches!(next, Some("pytest") | Some("unittest"));
+    }
     false
+}
+
+/// True when a `uv`/`uvx` command runs an allowlisted noisy tool
+/// (`uv run pytest`, `uvx ruff check`, `uv run -m pytest`,
+/// `uv run python -m pytest`). Skips only known-safe boolean uv flags between
+/// the prefix and the command; a value flag, an unknown flag, or a bare
+/// `uv pip|sync|add|build|…` makes it return false so the hook leaves the
+/// command alone (no surprise auto-approval). Mirrors the inner allowlist so a
+/// uv-wrapped run gets the same treatment as the bare tool.
+fn uv_wraps_noisy(argv: &[String]) -> bool {
+    let base0 = argv
+        .first()
+        .map(|s| s.rsplit('/').next().unwrap_or(s))
+        .unwrap_or("");
+    let next = |i: usize| argv.get(i).map(String::as_str);
+    let after_prefix: &[String] = match base0 {
+        "uvx" => &argv[1..],
+        "uv" if next(1) == Some("run") => &argv[2..],
+        "uv" if next(1) == Some("tool") && next(2) == Some("run") => &argv[3..],
+        _ => return false, // `uv pip|sync|add|…` is not a runner wrapper
+    };
+    let mut rest = after_prefix;
+    while let Some(tok) = rest.first().map(String::as_str) {
+        if tok == "--" {
+            rest = rest.get(1..).unwrap_or(&[]);
+            break;
+        }
+        // `-m`/`--module` and the first positional are the command, not a flag.
+        if tok == "-m" || tok == "--module" || !tok.starts_with('-') {
+            break;
+        }
+        if UV_HOOK_SAFE_FLAGS.contains(&tok) {
+            rest = &rest[1..];
+        } else {
+            return false; // value/unknown flag: don't auto-approve
+        }
+    }
+    let base = rest
+        .first()
+        .map(|s| s.rsplit('/').next().unwrap_or(s))
+        .unwrap_or("");
+    is_noisy(base, rest.get(1).map(String::as_str))
 }
 
 /// Split on top-level shell connectors. Coarse (quotes not honored), but
@@ -710,6 +785,44 @@ mod tests {
         assert!(wrap_command("python -m pytest -q").is_some());
         assert!(wrap_command("python3 -m unittest").is_some());
         assert!(wrap_command("python script.py").is_none());
+    }
+
+    #[test]
+    fn uv_run_noisy_tools_wrapped() {
+        assert_eq!(
+            wrap_command("uv run pytest tests -v").as_deref(),
+            Some("cartoon -c 'uv run pytest tests -v'")
+        );
+        assert!(wrap_command("uvx pytest").is_some());
+        assert!(wrap_command("uv tool run pytest").is_some());
+        assert!(wrap_command("uv run ruff check .").is_some());
+        assert!(wrap_command("uv run mypy src").is_some());
+        // module forms
+        assert!(wrap_command("uv run -m pytest tests").is_some());
+        assert!(wrap_command("uv run python -m pytest").is_some());
+        assert!(wrap_command("uv run python -m unittest").is_some());
+        // safe boolean flags between `run` and the command are tolerated
+        assert!(wrap_command("uv run --no-sync pytest").is_some());
+        assert!(wrap_command("uv run --frozen --isolated pytest").is_some());
+        assert!(wrap_command("uv run -- pytest -q").is_some());
+    }
+
+    #[test]
+    fn uv_non_run_and_unsafe_flags_left_alone() {
+        // Non-run uv subcommands mutate state / aren't test runs.
+        assert!(wrap_command("uv pip install foo").is_none());
+        assert!(wrap_command("uv sync").is_none());
+        assert!(wrap_command("uv add requests").is_none());
+        assert!(wrap_command("uv build").is_none());
+        // Running a non-allowlisted target isn't wrapped.
+        assert!(wrap_command("uv run python app.py").is_none());
+        assert!(wrap_command("uv run flask run").is_none());
+        // Value flags can pull in/execute extra packages — never auto-approved,
+        // even though the trailing word is an allowlisted tool.
+        assert!(wrap_command("uv run --with evil-pkg pytest").is_none());
+        assert!(wrap_command("uv run --python 3.12 pytest").is_none());
+        // Unknown flag → fail closed (no auto-wrap), runs through normal prompt.
+        assert!(wrap_command("uv run --brand-new-flag pytest").is_none());
     }
 
     #[test]

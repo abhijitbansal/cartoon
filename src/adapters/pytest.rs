@@ -22,18 +22,22 @@ impl Adapter for Pytest {
         "pytest"
     }
     fn matches(&self) -> &'static str {
-        "pytest | python -m pytest | uv run pytest"
+        "pytest | python -m pytest | uv run [-m] pytest | uvx pytest"
     }
-    fn detect(&self, argv: &[String]) -> bool {
+    fn detect(&self, full: &[String]) -> bool {
         // Look past a `uv run` / `uvx` wrapper: uv forwards our appended flags
         // straight through to pytest, so detection is the only thing that needs
         // to see the inner command.
-        let argv = super::strip_uv_run(argv);
+        let argv = super::strip_uv_run(full);
+        // A shorter slice means a uv wrapper was stripped; only then is a
+        // leading `-m pytest` (uv's own module form) a pytest invocation.
+        let uv_wrapped = argv.len() != full.len();
         let is_pytest = argv
             .first()
             .map(|a| basename(a) == "pytest")
             .unwrap_or(false)
-            || is_python_module(argv, "pytest");
+            || is_python_module(argv, "pytest")
+            || (uv_wrapped && super::is_module_run(argv, "pytest"));
         // Informational invocations run no tests, so pytest exits before
         // writing junit xml — injecting it only buys a parse warning.
         is_pytest && !argv.iter().any(|a| NON_TEST_FLAGS.contains(&a.as_str()))
@@ -215,6 +219,21 @@ mod tests {
         assert!(Pytest.detect(&argv(&["uvx", "pytest"])));
         assert!(Pytest.detect(&argv(&["uv", "tool", "run", "pytest"])));
         assert!(Pytest.detect(&argv(&["uv", "run", "python", "-m", "pytest"])));
+    }
+
+    #[test]
+    fn detects_uv_run_with_options_and_module_form() {
+        // uv's own `-m` module form.
+        assert!(Pytest.detect(&argv(&["uv", "run", "-m", "pytest", "tests"])));
+        // uv-level options between `run` and the command.
+        assert!(Pytest.detect(&argv(&["uv", "run", "--no-sync", "pytest"])));
+        assert!(Pytest.detect(&argv(&["uv", "run", "--with", "pytest-xdist", "pytest"])));
+        assert!(Pytest.detect(&argv(&["uv", "run", "--", "pytest", "-q"])));
+        // A bare `-m pytest` with no uv wrapper is not a real command — don't
+        // treat it as pytest (nothing to exec).
+        assert!(!Pytest.detect(&argv(&["-m", "pytest"])));
+        // Unknown uv option: fail open rather than mis-detect.
+        assert!(!Pytest.detect(&argv(&["uv", "run", "--brand-new-flag", "pytest"])));
     }
 
     #[test]

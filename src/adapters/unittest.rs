@@ -14,11 +14,14 @@ impl Adapter for Unittest {
         "unittest"
     }
     fn matches(&self) -> &'static str {
-        "python -m unittest | uv run python -m unittest"
+        "python -m unittest | uv run [python] -m unittest"
     }
-    fn detect(&self, argv: &[String]) -> bool {
-        // `uv run python -m unittest` is transparent once we strip the wrapper.
-        is_python_module(super::strip_uv_run(argv), "unittest")
+    fn detect(&self, full: &[String]) -> bool {
+        // `uv run python -m unittest` is transparent once we strip the wrapper;
+        // `uv run -m unittest` strips to a bare `-m unittest` module form.
+        let argv = super::strip_uv_run(full);
+        let uv_wrapped = argv.len() != full.len();
+        is_python_module(argv, "unittest") || (uv_wrapped && super::is_module_run(argv, "unittest"))
     }
     fn prepare(&self, argv: Vec<String>) -> Prepared {
         Prepared {
@@ -157,6 +160,26 @@ mod tests {
     #[test]
     fn unrecognized_text_is_error() {
         assert!(parse_text("random program output").is_err());
+    }
+
+    #[test]
+    fn detects_unittest_invocations() {
+        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(Unittest.detect(&argv(&["python", "-m", "unittest"])));
+        assert!(Unittest.detect(&argv(&["uv", "run", "python", "-m", "unittest"])));
+        // uv's own module form.
+        assert!(Unittest.detect(&argv(&["uv", "run", "-m", "unittest"])));
+        assert!(Unittest.detect(&argv(&[
+            "uv",
+            "run",
+            "--no-sync",
+            "python",
+            "-m",
+            "unittest"
+        ])));
+        // Not unittest.
+        assert!(!Unittest.detect(&argv(&["uv", "run", "-m", "pytest"])));
+        assert!(!Unittest.detect(&argv(&["-m", "unittest"])));
     }
 
     #[test]
