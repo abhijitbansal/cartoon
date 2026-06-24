@@ -87,6 +87,81 @@ fn uninstall_deletes_file_when_we_were_its_only_content() {
 }
 
 #[test]
+fn install_prefers_claude_md_when_it_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A Claude Code project signals itself with a CLAUDE.md (here, still empty).
+    fs::write(tmp.path().join("CLAUDE.md"), "").unwrap();
+
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success()
+        .stdout(contains("CLAUDE.md"));
+
+    let body = fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap();
+    assert!(body.contains("BEGIN cartoon instructions"));
+    // AGENTS.md is only the backup; it must not be created when CLAUDE.md wins.
+    assert!(!tmp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn uninstall_auto_detects_claude_md() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("CLAUDE.md"), "# Claude project\n").unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success();
+
+    // No flag on uninstall either: it must resolve to the same CLAUDE.md.
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "uninstall"])
+        .assert()
+        .success()
+        .stdout(contains("removed"));
+
+    let after = fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap();
+    assert!(after.contains("# Claude project"));
+    assert!(!after.contains("BEGIN cartoon instructions"));
+}
+
+#[test]
+fn install_stays_in_agents_md_when_block_already_lives_there() {
+    let tmp = tempfile::tempdir().unwrap();
+    // First install with no CLAUDE.md → lands in AGENTS.md.
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success();
+    assert!(tmp.path().join("AGENTS.md").exists());
+
+    // A CLAUDE.md appears later; re-install must update AGENTS.md in place, not
+    // strand the existing block by writing a second copy into CLAUDE.md.
+    fs::write(tmp.path().join("CLAUDE.md"), "# notes\n").unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success()
+        .stdout(contains("AGENTS.md"));
+
+    assert!(!fs::read_to_string(tmp.path().join("CLAUDE.md"))
+        .unwrap()
+        .contains("BEGIN cartoon instructions"));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("AGENTS.md"))
+            .unwrap()
+            .matches("BEGIN cartoon instructions")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn copilot_flag_targets_the_github_file() {
     let tmp = tempfile::tempdir().unwrap();
     cartoon()
@@ -155,6 +230,23 @@ fn hook_install_with_instructions_writes_the_directive() {
     assert!(body.contains("BEGIN cartoon instructions"));
     // and the hook itself landed in the project settings
     assert!(tmp.path().join(".claude/settings.json").exists());
+}
+
+#[test]
+fn hook_install_instructions_prefers_claude_md_when_present() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("CLAUDE.md"), "").unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--project", "--instructions"])
+        .assert()
+        .success()
+        .stdout(contains("CLAUDE.md"));
+    assert!(fs::read_to_string(tmp.path().join("CLAUDE.md"))
+        .unwrap()
+        .contains("BEGIN cartoon instructions"));
+    // AGENTS.md is the backup; CLAUDE.md present means it stays untouched.
+    assert!(!tmp.path().join("AGENTS.md").exists());
 }
 
 #[test]

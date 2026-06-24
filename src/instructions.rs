@@ -1,6 +1,8 @@
 //! `cartoon instructions` — write the "wrap noisy commands, never pipe them"
 //! directive into an agent's instruction file (`AGENTS.md`,
-//! `.github/copilot-instructions.md`, or `CLAUDE.md`).
+//! `.github/copilot-instructions.md`, or `CLAUDE.md`). With no `--flag` the
+//! target is auto-detected: an existing `CLAUDE.md` is preferred, otherwise
+//! `AGENTS.md` is the cross-agent backup (see `resolve_agent_doc`).
 //!
 //! This is the instruction-layer companion to `cartoon hook`. The hook is
 //! deterministic but has two blind spots the model has to cover itself. First,
@@ -82,8 +84,8 @@ pub enum Outcome {
 
 pub fn run(args: &[String]) -> Result<i32> {
     match args.first().map(String::as_str) {
-        Some("install") => install(parse_doc(&args[1..])?),
-        Some("uninstall") => uninstall(parse_doc(&args[1..])?),
+        Some("install") => install(resolve_doc(&args[1..])?),
+        Some("uninstall") => uninstall(resolve_doc(&args[1..])?),
         Some("status") => status(),
         Some("print") => {
             println!("{}", block());
@@ -95,8 +97,11 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
 }
 
-/// Pick the target file from flags. Default is `AGENTS.md`.
-fn parse_doc(args: &[String]) -> Result<Doc> {
+/// Parse an explicit target flag. `Ok(None)` means the caller named no file and
+/// should fall back to [`default_agent_doc`]. Kept pure (no filesystem) so the
+/// flag grammar stays deterministically unit-testable; the on-disk auto-detect
+/// lives in `default_agent_doc`/`resolve_agent_doc`.
+fn parse_doc(args: &[String]) -> Result<Option<Doc>> {
     let mut doc: Option<Doc> = None;
     for a in args {
         let next = match a.as_str() {
@@ -110,7 +115,45 @@ fn parse_doc(args: &[String]) -> Result<Doc> {
         }
         doc = Some(next);
     }
-    Ok(doc.unwrap_or(Doc::Agents))
+    Ok(doc)
+}
+
+/// Resolve the target file for install/uninstall: an explicit flag wins,
+/// otherwise auto-detect with [`default_agent_doc`].
+fn resolve_doc(args: &[String]) -> Result<Doc> {
+    Ok(parse_doc(args)?.unwrap_or_else(default_agent_doc))
+}
+
+/// Pure target resolution from what's on disk, used when no `--flag` is given.
+/// Priority:
+///
+/// 1. whichever of `CLAUDE.md` / `AGENTS.md` already holds our directive, so a
+///    re-install updates it in place and an uninstall finds it (never a second
+///    stranded copy in the other file);
+/// 2. else `CLAUDE.md` when it exists — a Claude Code project keeps its
+///    instructions there, so prefer it over the generic file;
+/// 3. else `AGENTS.md`, the cross-agent default and backup.
+///
+/// We never *create* `CLAUDE.md`: when it's absent we fall through to
+/// `AGENTS.md` rather than conjuring a Claude-only file.
+fn resolve_agent_doc(claude_present: bool, agents_present: bool, claude_exists: bool) -> Doc {
+    if claude_present {
+        Doc::Claude
+    } else if agents_present {
+        Doc::Agents
+    } else if claude_exists {
+        Doc::Claude
+    } else {
+        Doc::Agents
+    }
+}
+
+/// Auto-detect the cross-agent instruction file (see [`resolve_agent_doc`]),
+/// reading the cwd-relative `CLAUDE.md` / `AGENTS.md`.
+pub fn default_agent_doc() -> Doc {
+    let claude = doc_path(Doc::Claude);
+    let agents = doc_path(Doc::Agents);
+    resolve_agent_doc(is_present(&claude), is_present(&agents), claude.exists())
 }
 
 /// The cwd-relative path for a target file.
@@ -373,15 +416,39 @@ mod tests {
 
     #[test]
     fn parse_doc_defaults_and_validates() {
-        assert_eq!(parse_doc(&[]).unwrap(), Doc::Agents);
-        assert_eq!(parse_doc(&["--copilot".into()]).unwrap(), Doc::Copilot);
-        assert_eq!(parse_doc(&["--claude".into()]).unwrap(), Doc::Claude);
+        // No flag → None: the caller falls back to default_agent_doc().
+        assert_eq!(parse_doc(&[]).unwrap(), None);
+        assert_eq!(
+            parse_doc(&["--copilot".into()]).unwrap(),
+            Some(Doc::Copilot)
+        );
+        assert_eq!(parse_doc(&["--claude".into()]).unwrap(), Some(Doc::Claude));
+        assert_eq!(parse_doc(&["--agents".into()]).unwrap(), Some(Doc::Agents));
         // repeated same flag is fine; conflicting flags and unknown flags error
         assert_eq!(
             parse_doc(&["--copilot".into(), "--copilot".into()]).unwrap(),
-            Doc::Copilot
+            Some(Doc::Copilot)
         );
         assert!(parse_doc(&["--copilot".into(), "--claude".into()]).is_err());
         assert!(parse_doc(&["--nope".into()]).is_err());
+    }
+
+    #[test]
+    fn resolve_agent_doc_prefers_claude_then_existing_block_then_agents() {
+        use Doc::{Agents, Claude};
+        // (claude_present, agents_present, claude_exists)
+        // Nothing on disk → AGENTS.md is the backup default.
+        assert_eq!(resolve_agent_doc(false, false, false), Agents);
+        // A bare CLAUDE.md exists (no block yet) → prefer it.
+        assert_eq!(resolve_agent_doc(false, false, true), Claude);
+        // Our block already lives in CLAUDE.md → update it in place.
+        assert_eq!(resolve_agent_doc(true, false, true), Claude);
+        // Our block already lives in AGENTS.md and CLAUDE.md is absent → stay put.
+        assert_eq!(resolve_agent_doc(false, true, false), Agents);
+        // Even once a CLAUDE.md appears, an existing AGENTS.md block keeps it
+        // there — we never strand the block by writing a second copy.
+        assert_eq!(resolve_agent_doc(false, true, true), Agents);
+        // Block in CLAUDE.md wins over a block in AGENTS.md (claude checked first).
+        assert_eq!(resolve_agent_doc(true, true, true), Claude);
     }
 }

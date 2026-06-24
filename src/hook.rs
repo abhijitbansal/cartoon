@@ -458,13 +458,14 @@ fn uninstall(t: Target) -> Result<i32> {
 }
 
 /// Which instruction file matches a hook target: the Copilot surfaces read
-/// `.github/copilot-instructions.md`; everything else gets `AGENTS.md`, the
-/// cross-agent default that Claude Code also reads.
+/// `.github/copilot-instructions.md`; everything else auto-detects between
+/// `CLAUDE.md` (preferred when present) and `AGENTS.md` (the cross-agent
+/// default that Claude Code also reads), via `instructions::default_agent_doc`.
 fn instructions_doc(t: Target) -> crate::instructions::Doc {
     if t.copilot || t.vscode {
         crate::instructions::Doc::Copilot
     } else {
-        crate::instructions::Doc::Agents
+        crate::instructions::default_agent_doc()
     }
 }
 
@@ -1081,13 +1082,16 @@ mod tests {
     }
 
     #[test]
-    fn instructions_doc_maps_surface_to_file() {
-        let agents = target(&["install".into()]).unwrap();
-        assert_eq!(instructions_doc(agents), crate::instructions::Doc::Agents);
+    fn instructions_doc_maps_copilot_surfaces_to_copilot_file() {
+        // Copilot + VS Code Copilot Chat → the GitHub file, deterministically.
         let cop = target(&["install".into(), "--copilot".into()]).unwrap();
         assert_eq!(instructions_doc(cop), crate::instructions::Doc::Copilot);
         let vsc = target(&["install".into(), "--vscode".into()]).unwrap();
         assert_eq!(instructions_doc(vsc), crate::instructions::Doc::Copilot);
+        // The non-Copilot default auto-detects CLAUDE.md vs AGENTS.md from the
+        // filesystem; that resolution is unit-tested in
+        // `instructions::resolve_agent_doc` and exercised end-to-end in
+        // tests/e2e_instructions.rs.
     }
 
     #[test]

@@ -19,9 +19,9 @@ use clap::Parser;
                                              agents without a hook
   instructions (install|uninstall|status|print)
                                              write the wrap/never-pipe directive
-                                             into AGENTS.md (--copilot / --claude
-                                             pick another file) — covers the
-                                             piped-command case the hook can't
+                                             (CLAUDE.md if present, else AGENTS.md;
+                                             --copilot/--claude/--agents force one)
+                                             — covers the pipe case the hook can't
   ingest (<file> | -)                        compress an existing log file
                                              (or stdin: some-cmd | cartoon -)
 

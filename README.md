@@ -89,11 +89,12 @@ file as an idempotent, marker-delimited block (re-run to update; uninstall
 removes exactly it, never your own text):
 
 ```bash
-cartoon instructions install            # → ./AGENTS.md (cross-agent default)
+cartoon instructions install            # → ./CLAUDE.md if present, else ./AGENTS.md
+cartoon instructions install --agents   # → ./AGENTS.md (force the cross-agent file)
 cartoon instructions install --copilot  # → ./.github/copilot-instructions.md
-cartoon instructions install --claude   # → ./CLAUDE.md
+cartoon instructions install --claude   # → ./CLAUDE.md (force)
 cartoon instructions status             # per-file: installed / not installed
-cartoon instructions uninstall [--copilot | --claude]
+cartoon instructions uninstall [--copilot | --claude | --agents]
 cartoon instructions print              # emit the block (manual paste)
 ```
 
