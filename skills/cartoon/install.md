@@ -79,7 +79,7 @@ an instruction telling the agent to wrap and not pipe. Write it as a managed,
 idempotent block:
 
 ```bash
-cartoon instructions install            # → ./AGENTS.md (or --copilot / --claude)
+cartoon instructions install            # → ./CLAUDE.md if present, else ./AGENTS.md
 cartoon hook install --instructions     # install the hook AND the directive
 ```
 

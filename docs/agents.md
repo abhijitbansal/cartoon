@@ -124,8 +124,9 @@ caught. Tools with non-identifier names (`pre-commit`) and `python -m` /
 
 ## Instructions directive (one command, or copy-paste)
 
-A directive in `AGENTS.md` is not just the no-hook fallback — it's also the
-**only** thing that covers the piped-command case, because the hook won't
+A directive in your instruction file (`CLAUDE.md` / `AGENTS.md`) is not just
+the no-hook fallback — it's also the **only** thing that covers the
+piped-command case, because the hook won't
 rewrite `pytest | tail` (an allowlisted segment must never auto-approve the
 rest of a compound) and VS Code Copilot Chat can only deny, not rewrite. So
 even with a hook installed, the directive earns its place.
@@ -134,9 +135,10 @@ even with a hook installed, the directive earns its place.
 below for you, wrapped in marker comments so it never clobbers your own text:
 
 ```bash
-cartoon instructions install            # → ./AGENTS.md
+cartoon instructions install            # → ./CLAUDE.md if present, else ./AGENTS.md
+cartoon instructions install --agents   # → ./AGENTS.md (force the cross-agent file)
 cartoon instructions install --copilot  # → ./.github/copilot-instructions.md
-cartoon instructions install --claude   # → ./CLAUDE.md
+cartoon instructions install --claude   # → ./CLAUDE.md (force)
 cartoon instructions status | uninstall | print
 ```
 
