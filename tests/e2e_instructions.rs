@@ -1,0 +1,175 @@
+use assert_cmd::Command;
+use predicates::str::contains;
+use std::fs;
+
+fn cartoon() -> Command {
+    Command::cargo_bin("cartoon").unwrap()
+}
+
+#[test]
+fn install_creates_agents_md_with_the_directive() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success()
+        .stdout(contains("AGENTS.md"));
+
+    let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+    assert!(body.contains("BEGIN cartoon instructions"));
+    assert!(body.contains("NEVER pipe"));
+    assert!(body.contains("cartoon logs grep <pattern> --last"));
+}
+
+#[test]
+fn reinstall_is_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    for _ in 0..2 {
+        cartoon()
+            .current_dir(tmp.path())
+            .args(["instructions", "install"])
+            .assert()
+            .success();
+    }
+    let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+    assert_eq!(
+        body.matches("BEGIN cartoon instructions").count(),
+        1,
+        "directive must not be duplicated on re-install"
+    );
+}
+
+#[test]
+fn install_appends_and_uninstall_restores_existing_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agents = tmp.path().join("AGENTS.md");
+    fs::write(&agents, "# My rules\n\nDo the thing.\n").unwrap();
+
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success();
+    let with_block = fs::read_to_string(&agents).unwrap();
+    assert!(with_block.contains("# My rules"));
+    assert!(with_block.contains("BEGIN cartoon instructions"));
+
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "uninstall"])
+        .assert()
+        .success()
+        .stdout(contains("removed"));
+    let after = fs::read_to_string(&agents).unwrap();
+    assert!(after.contains("# My rules"));
+    assert!(after.contains("Do the thing."));
+    assert!(!after.contains("BEGIN cartoon instructions"));
+}
+
+#[test]
+fn uninstall_deletes_file_when_we_were_its_only_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "uninstall"])
+        .assert()
+        .success();
+    assert!(
+        !tmp.path().join("AGENTS.md").exists(),
+        "a file containing only our block should be removed on uninstall"
+    );
+}
+
+#[test]
+fn copilot_flag_targets_the_github_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install", "--copilot"])
+        .assert()
+        .success();
+    assert!(tmp.path().join(".github/copilot-instructions.md").exists());
+    // default AGENTS.md untouched
+    assert!(!tmp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn status_reports_each_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .success();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "status"])
+        .assert()
+        .success()
+        .stdout(contains("AGENTS.md: installed"))
+        .stdout(contains("CLAUDE.md: not installed"));
+}
+
+#[test]
+fn print_emits_the_block_without_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "print"])
+        .assert()
+        .success()
+        .stdout(contains("BEGIN cartoon instructions"))
+        .stdout(contains("NEVER pipe"));
+    assert!(!tmp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn hook_install_hints_about_the_pipe_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    // --project keeps the hook in cwd/.claude, never the real home dir.
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--project"])
+        .assert()
+        .success()
+        .stdout(contains("cartoon instructions install"));
+    // Non-interactive: the directive is only *offered*, not written.
+    assert!(!tmp.path().join("AGENTS.md").exists());
+}
+
+#[test]
+fn hook_install_with_instructions_writes_the_directive() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--project", "--instructions"])
+        .assert()
+        .success();
+    let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+    assert!(body.contains("BEGIN cartoon instructions"));
+    // and the hook itself landed in the project settings
+    assert!(tmp.path().join(".claude/settings.json").exists());
+}
+
+#[test]
+fn hook_install_copilot_instructions_targets_copilot_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args([
+            "hook",
+            "install",
+            "--copilot",
+            "--project",
+            "--instructions",
+        ])
+        .assert()
+        .success();
+    assert!(tmp.path().join(".github/copilot-instructions.md").exists());
+}

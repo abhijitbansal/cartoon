@@ -17,6 +17,11 @@ use clap::Parser;
                                              VS Code Copilot Chat)
   shim (install|uninstall|status|print)      shell-function wrappers for
                                              agents without a hook
+  instructions (install|uninstall|status|print)
+                                             write the wrap/never-pipe directive
+                                             into AGENTS.md (--copilot / --claude
+                                             pick another file) — covers the
+                                             piped-command case the hook can't
   ingest (<file> | -)                        compress an existing log file
                                              (or stdin: some-cmd | cartoon -)
 
@@ -28,8 +33,9 @@ Non-adapter output compresses through the safe tier by default (ANSI,
 progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
-`stats`, `adapters`, `logs`, and `learn` are reserved words; to wrap a \
-binary literally named `stats`, use: cartoon env stats"
+`stats`, `adapters`, `logs`, `learn`, `hook`, `shim`, `instructions`, and \
+`ingest` are reserved words; to wrap a binary literally named `stats`, use: \
+cartoon env stats"
 )]
 pub struct Cli {
     /// Compression level for non-adapter output: safe (default) | aggressive
@@ -88,6 +94,9 @@ pub enum Mode {
         args: Vec<String>,
     },
     Shim {
+        args: Vec<String>,
+    },
+    Instructions {
         args: Vec<String>,
     },
     /// Run an existing log (file or stdin) through the compression flow.
@@ -202,6 +211,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             args: cli.command[1..].to_vec(),
         }),
         "shim" => Ok(Mode::Shim {
+            args: cli.command[1..].to_vec(),
+        }),
+        "instructions" => Ok(Mode::Instructions {
             args: cli.command[1..].to_vec(),
         }),
         "ingest" => match &cli.command[1..] {
@@ -453,6 +465,16 @@ mod tests {
     fn compress_flag_parses() {
         let cli = Cli::parse_from(["cartoon", "--compress", "aggressive", "make"]);
         assert_eq!(cli.compress.as_deref(), Some("aggressive"));
+    }
+
+    #[test]
+    fn instructions_subcommand_collects_args() {
+        assert_eq!(
+            mode(&["cartoon", "instructions", "install", "--copilot"]),
+            Mode::Instructions {
+                args: vec!["install".into(), "--copilot".into()]
+            }
+        );
     }
 
     #[test]

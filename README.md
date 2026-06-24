@@ -75,6 +75,35 @@ Per agent:
   `cartoon hook install --copilot --deny` for the smoother deny-and-suggest
   flow. `cartoon hook rewrite --deny-mode` forces deny anywhere.
 
+### Cover what the hook can't: the instructions directive
+
+The hook deliberately won't rewrite a **piped** command — `pytest | tail` is
+split on `|`, and because a rewrite auto-approves the call, an allowlisted
+segment must never smuggle the rest past the prompt, so the whole compound is
+left raw. That's safe, but it means a piped test run silently escapes cartoon
+(and VS Code Copilot Chat can only deny, never rewrite). The fix the model
+*can* act on is an instruction: wrap, and don't pipe.
+
+`cartoon instructions` writes that directive into your agent's instruction
+file as an idempotent, marker-delimited block (re-run to update; uninstall
+removes exactly it, never your own text):
+
+```bash
+cartoon instructions install            # → ./AGENTS.md (cross-agent default)
+cartoon instructions install --copilot  # → ./.github/copilot-instructions.md
+cartoon instructions install --claude   # → ./CLAUDE.md
+cartoon instructions status             # per-file: installed / not installed
+cartoon instructions uninstall [--copilot | --claude]
+cartoon instructions print              # emit the block (manual paste)
+```
+
+Set up both layers at once — and `hook install` will hint about the pipe gap
+(and on a terminal, offer to write the directive for you):
+
+```bash
+cartoon hook install --instructions     # install the hook AND the directive
+```
+
 ### No hook? Shell shims (any agent)
 
 For agents without hooks — or as a belt-and-suspenders layer — `cartoon

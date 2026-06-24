@@ -122,12 +122,31 @@ tools the agent runs bare; path-invoked binaries (`./gradlew`) aren't
 caught. Tools with non-identifier names (`pre-commit`) and `python -m` /
 `xcodebuild` invocations aren't shimmed either — the hook covers those.
 
-## Tools without skill support (copy-paste)
+## Instructions directive (one command, or copy-paste)
 
-When you can't install a hook or shim, fall back to instructions. Add this
-to your `AGENTS.md`, `.github/copilot-instructions.md`, or system
-instructions — phrased as an unconditional rule so the model treats it as a
-hard directive, not a suggestion:
+A directive in `AGENTS.md` is not just the no-hook fallback — it's also the
+**only** thing that covers the piped-command case, because the hook won't
+rewrite `pytest | tail` (an allowlisted segment must never auto-approve the
+rest of a compound) and VS Code Copilot Chat can only deny, not rewrite. So
+even with a hook installed, the directive earns its place.
+
+`cartoon instructions` writes (and updates, and cleanly removes) the block
+below for you, wrapped in marker comments so it never clobbers your own text:
+
+```bash
+cartoon instructions install            # → ./AGENTS.md
+cartoon instructions install --copilot  # → ./.github/copilot-instructions.md
+cartoon instructions install --claude   # → ./CLAUDE.md
+cartoon instructions status | uninstall | print
+```
+
+`cartoon hook install --instructions` does both layers in one step, and a
+plain `cartoon hook install` hints about the gap (and, on a terminal, offers
+to write the directive for you). Prefer the command over hand-pasting so
+re-running stays idempotent. To paste it yourself, add this to your
+`AGENTS.md`, `.github/copilot-instructions.md`, or system instructions —
+phrased as an unconditional rule so the model treats it as a hard directive,
+not a suggestion:
 
 ```markdown
 ## CLI output: ALWAYS run noisy commands through cartoon
