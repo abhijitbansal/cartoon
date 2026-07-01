@@ -220,6 +220,29 @@ pub fn describe(path: &Path, outcome: Outcome) -> String {
 
 // ---------- pure transforms (unit-tested without touching the filesystem) ----------
 
+/// Locate our managed block as `(begin, end_exclusive)` byte offsets.
+///
+/// `Ok(None)` — no begin marker present, so there is no managed block (a stray
+/// end marker sitting in the user's own prose is *not* a block).
+/// `Err` — a begin marker with no end marker after it: a truncated/half-written
+/// block we must refuse to touch rather than clobber.
+///
+/// The end marker is searched only *after* the begin marker (`s[b..]`), so a
+/// stray copy of the end-marker string appearing above the real block — e.g.
+/// prose that documents the markers — can never be mistaken for the boundary.
+fn find_block(s: &str) -> Result<Option<(usize, usize)>> {
+    let Some(b) = s.find(MARKER_BEGIN) else {
+        return Ok(None);
+    };
+    match s[b..].find(MARKER_END) {
+        Some(rel) => Ok(Some((b, b + rel + MARKER_END.len()))),
+        None => bail!(
+            "cartoon instruction markers are malformed (a begin marker with no \
+             matching end marker after it); fix the file by hand and retry"
+        ),
+    }
+}
+
 /// Compute the new file contents for an install. `existing` is the current
 /// file (None if absent). Replaces our block if present, else appends it.
 fn apply(existing: Option<&str>) -> Result<(String, Outcome)> {
@@ -227,44 +250,30 @@ fn apply(existing: Option<&str>) -> Result<(String, Outcome)> {
     let Some(s) = existing.filter(|s| !s.trim().is_empty()) else {
         return Ok((format!("{blk}\n"), Outcome::Created));
     };
-    match (s.find(MARKER_BEGIN), s.find(MARKER_END)) {
-        (Some(b), Some(e)) if e > b => {
-            let end = e + MARKER_END.len();
-            Ok((format!("{}{}{}", &s[..b], blk, &s[end..]), Outcome::Updated))
-        }
-        (None, None) => {
+    match find_block(s)? {
+        Some((b, end)) => Ok((format!("{}{}{}", &s[..b], blk, &s[end..]), Outcome::Updated)),
+        None => {
             let head = s.trim_end_matches('\n');
             Ok((format!("{head}\n\n{blk}\n"), Outcome::Added))
         }
-        _ => bail!(
-            "cartoon instruction markers are malformed (only one of the begin/end \
-             markers was found); fix the file by hand and retry"
-        ),
     }
 }
 
 /// Compute the file contents after removing our block. `Ok(None)` means no
 /// block was present (nothing to remove).
 fn apply_remove(s: &str) -> Result<Option<String>> {
-    match (s.find(MARKER_BEGIN), s.find(MARKER_END)) {
-        (Some(b), Some(e)) if e > b => {
-            let end = e + MARKER_END.len();
-            let head = s[..b].trim_end_matches('\n');
-            let tail = s[end..].trim_start_matches('\n');
-            let joined = match (head.is_empty(), tail.is_empty()) {
-                (true, true) => String::new(),
-                (false, true) => format!("{head}\n"),
-                (true, false) => format!("{tail}\n"),
-                (false, false) => format!("{head}\n\n{tail}\n"),
-            };
-            Ok(Some(joined))
-        }
-        (None, None) => Ok(None),
-        _ => bail!(
-            "cartoon instruction markers are malformed (only one of the begin/end \
-             markers was found); fix the file by hand and retry"
-        ),
-    }
+    let Some((b, end)) = find_block(s)? else {
+        return Ok(None);
+    };
+    let head = s[..b].trim_end_matches('\n');
+    let tail = s[end..].trim_start_matches('\n');
+    let joined = match (head.is_empty(), tail.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("{head}\n"),
+        (true, false) => format!("{tail}\n"),
+        (false, false) => format!("{head}\n\n{tail}\n"),
+    };
+    Ok(Some(joined))
 }
 
 // ---------- CLI command bodies ----------
@@ -310,8 +319,9 @@ fn status() -> Result<i32> {
     Ok(0)
 }
 
-/// The flag that re-selects a non-default doc (for "remove with:" hints).
-fn doc_flag(doc: Doc) -> &'static str {
+/// The flag that re-selects a non-default doc (for "remove with:" hints and
+/// the hook's piped-gap suggestions). Empty for the `AGENTS.md` default.
+pub fn doc_flag(doc: Doc) -> &'static str {
     match doc {
         Doc::Agents => "",
         Doc::Copilot => " --copilot",
@@ -401,6 +411,27 @@ mod tests {
         let half = format!("# Doc\n{MARKER_BEGIN}\nbody but no end\n");
         assert!(apply(Some(&half)).is_err());
         assert!(apply_remove(&half).is_err());
+    }
+
+    #[test]
+    fn stray_end_marker_above_block_is_not_the_boundary() {
+        // A user documents the markers in prose ABOVE the real installed block.
+        // The stray END must not be mistaken for the block's end (find END only
+        // after BEGIN), so re-install updates in place and uninstall still finds
+        // and removes exactly the managed block.
+        let doc = format!(
+            "# Doc\n\nWe close the block with `{MARKER_END}`.\n\n{}\n",
+            block()
+        );
+        // Re-install replaces the real block in place — not a malformed bail.
+        let (out, o) = apply(Some(&doc)).unwrap();
+        assert_eq!(o, Outcome::Updated);
+        assert_eq!(out.matches(MARKER_BEGIN).count(), 1);
+        assert!(out.contains("We close the block"));
+        // Uninstall removes the managed block, leaving the user's prose intact.
+        let rest = apply_remove(&doc).unwrap().unwrap();
+        assert!(!rest.contains(MARKER_BEGIN));
+        assert!(rest.contains("We close the block"));
     }
 
     #[test]
