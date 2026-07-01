@@ -120,6 +120,9 @@ fn install() -> Result<i32> {
          \n  # environment / devcontainer / CI so `bash -c` picks it up:\n\
          \n      export BASH_ENV={p}\n\
          \n\
+         Shims (like the hook) can't see pipes, so `pytest | tail` runs raw.\n\
+         Tell the agent not to pipe: cartoon instructions install\n\
+         \n\
          Disable anytime with CARTOON_NO_SHIM=1. Re-run after upgrading cartoon."
     );
     Ok(0)

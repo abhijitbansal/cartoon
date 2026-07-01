@@ -71,8 +71,23 @@ export BASH_ENV=~/.config/cartoon/shims.sh   # for the non-interactive shells ag
 
 Functions shadow the bare tool names and beat PATH and venv-local binaries.
 
-Check what's active anytime: `cartoon hook status` (every surface) and
-`cartoon shim status`.
+### Cover piped commands — the instructions directive
+
+Neither the hook nor the shims can rewrite a piped command (`pytest | tail`),
+and VS Code Copilot Chat can only deny. The one thing that closes that gap is
+an instruction telling the agent to wrap and not pipe. Write it as a managed,
+idempotent block:
+
+```bash
+cartoon instructions install            # → ./CLAUDE.md if present, else ./AGENTS.md
+cartoon hook install --instructions     # install the hook AND the directive
+```
+
+`cartoon hook install` alone also hints about this and, on a terminal, offers
+to write it for you.
+
+Check what's active anytime: `cartoon hook status` (every surface),
+`cartoon shim status`, and `cartoon instructions status`.
 
 ## 3. Disabling & uninstalling
 

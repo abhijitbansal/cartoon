@@ -94,7 +94,7 @@ pub fn run(args: &[String]) -> Result<i32> {
         Some("uninstall") => uninstall(target(args)?),
         Some("status") => status(),
         _ => bail!(
-            "usage: cartoon hook (rewrite [--deny-mode] | install [--copilot|--vscode] [--project] [--deny] | uninstall [--copilot|--vscode] [--project] | status)"
+            "usage: cartoon hook (rewrite [--deny-mode] | install [--copilot|--vscode] [--project] [--deny] [--instructions] | uninstall [--copilot|--vscode] [--project] [--instructions] | status)"
         ),
     }
 }
@@ -113,6 +113,9 @@ struct Target {
     /// Bake `--deny-mode` into the installed command (block raw commands and
     /// suggest the wrapped form instead of rewriting transparently).
     deny: bool,
+    /// Also write the matching `cartoon instructions` directive (the
+    /// piped-command case the hook can't catch). Opt-in on install.
+    instructions: bool,
 }
 
 fn target(args: &[String]) -> Result<Target> {
@@ -121,6 +124,7 @@ fn target(args: &[String]) -> Result<Target> {
         vscode: false,
         project: false,
         deny: false,
+        instructions: false,
     };
     for a in &args[1..] {
         match a.as_str() {
@@ -128,9 +132,10 @@ fn target(args: &[String]) -> Result<Target> {
             "--vscode" => t.vscode = true,
             "--project" => t.project = true,
             "--deny" => t.deny = true,
-            other => {
-                bail!("unknown flag {other} (expected --copilot, --vscode, --project, or --deny)")
-            }
+            "--instructions" => t.instructions = true,
+            other => bail!(
+                "unknown flag {other} (expected --copilot, --vscode, --project, --deny, or --instructions)"
+            ),
         }
     }
     if t.copilot && t.vscode {
@@ -423,19 +428,121 @@ fn hook_command(deny: bool) -> String {
 }
 
 fn install(t: Target) -> Result<i32> {
-    if t.copilot {
-        install_copilot(t)
+    let code = if t.copilot {
+        install_copilot(t)?
     } else {
-        install_claude(t)
-    }
+        install_claude(t)?
+    };
+    // The hook can't rewrite piped commands and VS Code Chat can only deny;
+    // the matching instruction closes that gap. Offer it (or write it with
+    // --instructions) after the hook itself is in place.
+    offer_instructions(t)?;
+    Ok(code)
 }
 
 fn uninstall(t: Target) -> Result<i32> {
-    if t.copilot {
-        uninstall_copilot(t)
+    let code = if t.copilot {
+        uninstall_copilot(t)?
     } else {
-        uninstall_claude(t)
+        uninstall_claude(t)?
+    };
+    // Symmetry: `--instructions` on uninstall also removes the directive we
+    // would have written, so the pair leaves nothing behind.
+    if t.instructions {
+        let path = crate::instructions::doc_path(instructions_doc(t));
+        if crate::instructions::uninstall_doc(&path)? {
+            println!("also removed the cartoon directive from {}", path.display());
+        }
     }
+    Ok(code)
+}
+
+/// Which instruction file matches a hook target: the Copilot surfaces read
+/// `.github/copilot-instructions.md`; everything else auto-detects between
+/// `CLAUDE.md` (preferred when present) and `AGENTS.md` (the cross-agent
+/// default that Claude Code also reads), via `instructions::default_agent_doc`.
+fn instructions_doc(t: Target) -> crate::instructions::Doc {
+    if t.copilot || t.vscode {
+        crate::instructions::Doc::Copilot
+    } else {
+        crate::instructions::default_agent_doc()
+    }
+}
+
+/// The `hook install` surface flag that reproduces this target, for the "fold
+/// it in next time" hint — so a Copilot/VS Code user isn't told to run the
+/// bare command (which installs the Claude hook). `--project` is orthogonal
+/// (it only moves the hook between user/project settings, not the instruction
+/// file the hint is about) and is deliberately omitted.
+fn surface_flag(t: Target) -> &'static str {
+    if t.copilot {
+        " --copilot"
+    } else if t.vscode {
+        " --vscode"
+    } else {
+        ""
+    }
+}
+
+/// After a hook install, surface the piped-command gap and the matching
+/// directive. With `--instructions`, write it outright; otherwise print the
+/// hint and — only on an interactive terminal — offer to write it now.
+fn offer_instructions(t: Target) -> Result<()> {
+    let doc = instructions_doc(t);
+    let path = crate::instructions::doc_path(doc);
+    let present = crate::instructions::is_present(&path);
+
+    if t.instructions {
+        // Always (re)write: install_doc is idempotent and refreshes a stale
+        // body in place, matching standalone `cartoon instructions install`.
+        let outcome = crate::instructions::install_doc(&path)?;
+        println!("\n{}", crate::instructions::describe(&path, outcome));
+        return Ok(());
+    }
+
+    // Suggest surface-correct commands: the instruction-file flag so the
+    // directive lands in the file this hint names (bare resolves to AGENTS.md,
+    // never the Copilot file), and the hook surface flag so "fold it in next
+    // time" reinstalls this same hook.
+    let instr_flag = crate::instructions::doc_flag(doc);
+    let hook_flag = surface_flag(t);
+    println!(
+        "\nHeads-up: the hook can't rewrite *piped* commands — `pytest | tail`\n\
+         slips past it (and VS Code Copilot Chat can only deny, not rewrite). A\n\
+         matching instruction closes that gap by telling the agent to wrap and\n\
+         never pipe noisy commands:\n    \
+         cartoon instructions install{instr_flag}        # writes the directive to {p}\n    \
+         (or fold it into install next time: cartoon hook install{hook_flag} --instructions)",
+        p = path.display()
+    );
+    if present {
+        println!("It's already present in {}.", path.display());
+        return Ok(());
+    }
+    if prompt_yes(&format!("Write that directive to {} now?", path.display())) {
+        let outcome = crate::instructions::install_doc(&path)?;
+        println!("{}", crate::instructions::describe(&path, outcome));
+    }
+    Ok(())
+}
+
+/// Ask a yes/no question, but only when attached to an interactive terminal.
+/// Non-interactive callers (agents, scripts, CI) never block and get `false`,
+/// so `cartoon hook install` stays safe to run unattended.
+fn prompt_yes(question: &str) -> bool {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+    print!("{question} [y/N] ");
+    if std::io::stdout().flush().is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 // --- Claude Code / VS Code Copilot Chat (settings.json) ---
@@ -977,6 +1084,34 @@ mod tests {
         std::env::set_var("CARTOON_NO_WRAP", "");
         assert!(!wrap_disabled(), "empty value must not disable");
         std::env::remove_var("CARTOON_NO_WRAP");
+    }
+
+    #[test]
+    fn target_parses_instructions_flag() {
+        let t = target(&["install".into(), "--instructions".into()]).unwrap();
+        assert!(t.instructions);
+        // default off, and it composes with surface flags
+        assert!(!target(&["install".into()]).unwrap().instructions);
+        let c = target(&[
+            "install".into(),
+            "--copilot".into(),
+            "--instructions".into(),
+        ])
+        .unwrap();
+        assert!(c.copilot && c.instructions);
+    }
+
+    #[test]
+    fn instructions_doc_maps_copilot_surfaces_to_copilot_file() {
+        // Copilot + VS Code Copilot Chat → the GitHub file, deterministically.
+        let cop = target(&["install".into(), "--copilot".into()]).unwrap();
+        assert_eq!(instructions_doc(cop), crate::instructions::Doc::Copilot);
+        let vsc = target(&["install".into(), "--vscode".into()]).unwrap();
+        assert_eq!(instructions_doc(vsc), crate::instructions::Doc::Copilot);
+        // The non-Copilot default auto-detects CLAUDE.md vs AGENTS.md from the
+        // filesystem; that resolution is unit-tested in
+        // `instructions::resolve_agent_doc` and exercised end-to-end in
+        // tests/e2e_instructions.rs.
     }
 
     #[test]
