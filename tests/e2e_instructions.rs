@@ -265,3 +265,49 @@ fn hook_install_copilot_instructions_targets_copilot_file() {
         .success();
     assert!(tmp.path().join(".github/copilot-instructions.md").exists());
 }
+
+#[test]
+fn hook_install_copilot_hint_carries_the_copilot_flag() {
+    // Regression: the piped-gap hint for a Copilot install must suggest
+    // `cartoon instructions install --copilot` (not the bare command, which
+    // auto-detects to AGENTS.md — a file Copilot never reads).
+    let tmp = tempfile::tempdir().unwrap();
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--copilot", "--project"])
+        .assert()
+        .success()
+        .stdout(contains("cartoon instructions install --copilot"))
+        .stdout(contains("cartoon hook install --copilot --instructions"));
+}
+
+#[test]
+fn hook_install_instructions_refreshes_a_stale_body() {
+    // Regression: `hook install --instructions` must refresh a stale directive
+    // body in place (like standalone `instructions install`), not short-circuit
+    // when a marker block is merely present.
+    let tmp = tempfile::tempdir().unwrap();
+    // Seed AGENTS.md with a valid marker block but an outdated body.
+    let cur = cartoon::instructions::block();
+    let begin = cur.lines().next().unwrap();
+    let end = cur.lines().last().unwrap();
+    let stale = format!("{begin}\nOLD STALE DIRECTIVE BODY\n{end}\n");
+    fs::write(tmp.path().join("AGENTS.md"), &stale).unwrap();
+
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--project", "--instructions"])
+        .assert()
+        .success()
+        .stdout(contains("updated"));
+
+    let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+    assert!(
+        !body.contains("OLD STALE DIRECTIVE BODY"),
+        "stale body not removed"
+    );
+    assert!(
+        body.contains("NEVER pipe"),
+        "current directive body not written"
+    );
+}

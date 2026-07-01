@@ -469,30 +469,50 @@ fn instructions_doc(t: Target) -> crate::instructions::Doc {
     }
 }
 
+/// The `hook install` surface flag that reproduces this target, for the "fold
+/// it in next time" hint — so a Copilot/VS Code user isn't told to run the
+/// bare command (which installs the Claude hook). `--project` is orthogonal
+/// (it only moves the hook between user/project settings, not the instruction
+/// file the hint is about) and is deliberately omitted.
+fn surface_flag(t: Target) -> &'static str {
+    if t.copilot {
+        " --copilot"
+    } else if t.vscode {
+        " --vscode"
+    } else {
+        ""
+    }
+}
+
 /// After a hook install, surface the piped-command gap and the matching
 /// directive. With `--instructions`, write it outright; otherwise print the
 /// hint and — only on an interactive terminal — offer to write it now.
 fn offer_instructions(t: Target) -> Result<()> {
-    let path = crate::instructions::doc_path(instructions_doc(t));
+    let doc = instructions_doc(t);
+    let path = crate::instructions::doc_path(doc);
     let present = crate::instructions::is_present(&path);
 
     if t.instructions {
-        if present {
-            println!("\ncartoon directive already present in {}", path.display());
-        } else {
-            let outcome = crate::instructions::install_doc(&path)?;
-            println!("\n{}", crate::instructions::describe(&path, outcome));
-        }
+        // Always (re)write: install_doc is idempotent and refreshes a stale
+        // body in place, matching standalone `cartoon instructions install`.
+        let outcome = crate::instructions::install_doc(&path)?;
+        println!("\n{}", crate::instructions::describe(&path, outcome));
         return Ok(());
     }
 
+    // Suggest surface-correct commands: the instruction-file flag so the
+    // directive lands in the file this hint names (bare resolves to AGENTS.md,
+    // never the Copilot file), and the hook surface flag so "fold it in next
+    // time" reinstalls this same hook.
+    let instr_flag = crate::instructions::doc_flag(doc);
+    let hook_flag = surface_flag(t);
     println!(
         "\nHeads-up: the hook can't rewrite *piped* commands — `pytest | tail`\n\
          slips past it (and VS Code Copilot Chat can only deny, not rewrite). A\n\
          matching instruction closes that gap by telling the agent to wrap and\n\
          never pipe noisy commands:\n    \
-         cartoon instructions install        # writes the directive to {p}\n    \
-         (or fold it into install next time: cartoon hook install --instructions)",
+         cartoon instructions install{instr_flag}        # writes the directive to {p}\n    \
+         (or fold it into install next time: cartoon hook install{hook_flag} --instructions)",
         p = path.display()
     );
     if present {
