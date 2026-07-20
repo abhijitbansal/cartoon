@@ -91,7 +91,15 @@ competitive research) merged and prioritized. Items marked ✅ shipped on
   user regexes safe. Pairs with **learn propose** (Drain-mining adapter
   candidates from archived raw logs, replay-scored, `--emit-fixture` for
   upstream contribution) — the community adapter flywheel and long-term
-  moat.
+  moat. ✅ **First slice shipped** (0.5.x, `feat/wrap-scripts-project-config`):
+  `.cartoon.toml` `wrap_scripts` + `cartoon init` — narrowly scoped to "route
+  this project-declared wrapper script through cartoon at all" (deny-only,
+  never auto-approved), not the full user-regex-adapter authoring surface
+  this item originally described. Motivated by a real measurement: an iOS
+  `./build.sh` (wraps `xcodebuild` internally, so the hook's argv0 allowlist
+  never saw it) produced 113,705 raw tokens with 0% saved; the identical
+  content compressed 99.5% at the aggressive tier once actually routed
+  through cartoon. Full regex-adapter authoring remains open.
 - **Reach:** ✅ stdin pipe + file ingest SHIPPED same day (`cartoon
   ingest <file>` / `| cartoon -` — same flow as a wrapped run, shared
   `transform_emit_record` path). Remaining: PATH shim dir (env-gated),

@@ -197,6 +197,7 @@ cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon learn                  # mine your own runs for config suggestions
 cartoon adapters               # list built-in adapters
+cartoon init                   # suggest a .cartoon.toml for project wrapper scripts
 cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
@@ -309,6 +310,48 @@ for aggressive) > `[command.<name>]` > `[compress]` > legacy `heuristic`
 key > safe.
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
+
+## Project config: wrapping build/test scripts
+
+Some projects build through a wrapper script instead of calling a known
+runner directly — an iOS project's `./build.sh` that internally runs
+`xcodegen`, then `xcodebuild build`, then `simctl install`. The hook's
+allowlist matches on the command's own first word, so `./build.sh` never
+matches and its output — including `xcodebuild`'s very verbose compile
+log — reaches the agent completely unwrapped. This is not a hypothetical:
+a real `./build.sh -d` run produced 113,705 raw tokens; the exact same
+content compresses to 518 tokens (99.5% saved) at the aggressive tier once
+it's actually routed through cartoon.
+
+Declare such scripts in a project-local `.cartoon.toml` (repo root, or any
+ancestor up to the `.git` boundary):
+
+```toml
+wrap_scripts = ["./build.sh"]
+
+[command."./build.sh"]
+level = "aggressive"   # required — the default safe tier may compress none
+                        # of this kind of output; see the numbers above
+```
+
+Run `cartoon init` in the repo to scan for `*.sh` files that mention a known
+noisy tool (`xcodebuild`, `swift test`/`build`, `pytest`, `cargo test`/
+`build`, ...) and print this snippet ready to paste.
+
+**A declared script is never auto-approved.** The built-in allowlist
+(`pytest`, `cargo test`, `swift test`, ...) gets a transparent rewrite —
+`permissionDecision: "allow"` — because those are vetted, globally-known,
+read-mostly tools. A project's own script is arbitrary code: an iOS
+`build.sh` can install a build onto a physical device, or push model
+weights to one. `.cartoon.toml` is also repo-committed and agent-writable,
+so treating a declaration as license to bypass the permission prompt would
+turn adding one TOML line into a silent permission-bypass primitive.
+Instead, a `wrap_scripts` match always denies-with-suggestion: the raw
+command is blocked and the agent is told to re-run it as
+`cartoon -c './build.sh -d'`, going through the normal permission flow for
+that explicit call. Want it frictionless? Allowlist that exact string in
+your agent's own permission settings — that's the right layer for that
+decision, not cartoon's.
 
 ## Adapters
 
