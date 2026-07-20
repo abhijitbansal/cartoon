@@ -119,7 +119,10 @@ mod tests {
     #[test]
     fn render_includes_wrap_scripts_and_aggressive_pin() {
         let out = render(&["./build.sh".to_string()]);
-        assert!(out.contains(r#"wrap_scripts = ["./build.sh"]"#), "got:\n{out}");
+        assert!(
+            out.contains(r#"wrap_scripts = ["./build.sh"]"#),
+            "got:\n{out}"
+        );
         assert!(out.contains(r#"[command."./build.sh"]"#), "got:\n{out}");
         assert!(out.contains("level = \"aggressive\""), "got:\n{out}");
     }

@@ -862,18 +862,14 @@ mod tests {
 
     #[test]
     fn policy_leaves_undeclared_scripts_untouched() {
-        assert!(
-            wrap_command_with_policy("./deploy.sh", &["./build.sh".to_string()]).is_none()
-        );
+        assert!(wrap_command_with_policy("./deploy.sh", &["./build.sh".to_string()]).is_none());
     }
 
     #[test]
     fn policy_wraps_compound_of_project_script_and_builtin_noisy() {
-        let (wrapped, force_deny) = wrap_command_with_policy(
-            "./build.sh -d && pytest -q",
-            &["./build.sh".to_string()],
-        )
-        .unwrap();
+        let (wrapped, force_deny) =
+            wrap_command_with_policy("./build.sh -d && pytest -q", &["./build.sh".to_string()])
+                .unwrap();
         assert_eq!(wrapped, "cartoon -c './build.sh -d && pytest -q'");
         assert!(force_deny);
     }
@@ -893,7 +889,10 @@ mod tests {
     fn policy_built_in_noisy_alone_never_forces_deny() {
         let (_, force_deny) =
             wrap_command_with_policy("pytest -q", &["./build.sh".to_string()]).unwrap();
-        assert!(!force_deny, "built-in allowlist matches keep their allow eligibility");
+        assert!(
+            !force_deny,
+            "built-in allowlist matches keep their allow eligibility"
+        );
     }
 
     #[test]
