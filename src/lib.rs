@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod fallback;
 pub mod hook;
+pub mod init;
 pub mod instructions;
 pub mod ladder;
 pub mod learn;

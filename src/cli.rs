@@ -8,6 +8,9 @@ use clap::Parser;
     after_help = "Subcommands:
   stats [--since <7d|24h|30m>]               tokens saved, per adapter
   adapters                                   list built-in adapters
+  init                                        scan for wrapper scripts (e.g.
+                                             build.sh) and suggest a
+                                             .cartoon.toml wrap_scripts pin
   logs [--tag <t>]                           list archived raw runs
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
@@ -33,9 +36,9 @@ Non-adapter output compresses through the safe tier by default (ANSI,
 progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
-`stats`, `adapters`, `logs`, `learn`, `hook`, `shim`, `instructions`, and \
-`ingest` are reserved words; to wrap a binary literally named `stats`, use: \
-cartoon env stats"
+`stats`, `adapters`, `init`, `logs`, `learn`, `hook`, `shim`, `instructions`, \
+and `ingest` are reserved words; to wrap a binary literally named `stats`, \
+use: cartoon env stats"
 )]
 pub struct Cli {
     /// Compression level for non-adapter output: safe (default) | aggressive
@@ -86,6 +89,7 @@ pub enum Mode {
         since: Option<String>,
     },
     Adapters,
+    Init,
     Logs(LogsQuery),
     Learn {
         since: Option<String>,
@@ -203,6 +207,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             since: parse_since(&cli.command[1..])?,
         }),
         "adapters" => Ok(Mode::Adapters),
+        "init" => Ok(Mode::Init),
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
         "learn" => Ok(Mode::Learn {
             since: parse_since(&cli.command[1..])?,
@@ -356,6 +361,11 @@ mod tests {
     #[test]
     fn adapters_subcommand() {
         assert_eq!(mode(&["cartoon", "adapters"]), Mode::Adapters);
+    }
+
+    #[test]
+    fn init_subcommand() {
+        assert_eq!(mode(&["cartoon", "init"]), Mode::Init);
     }
 
     #[test]

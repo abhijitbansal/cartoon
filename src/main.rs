@@ -40,6 +40,13 @@ fn main() {
             }
             0
         }
+        Ok(cartoon::cli::Mode::Init) => std::env::current_dir()
+            .map_err(anyhow::Error::from)
+            .and_then(|cwd| cartoon::init::run(&cwd))
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
         Ok(cartoon::cli::Mode::Logs(query)) => cartoon::logs_cmd::run(query).unwrap_or_else(|e| {
             eprintln!("cartoon: {e}");
             2
