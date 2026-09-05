@@ -82,6 +82,9 @@ pub fn parse_junit(xml: &str) -> Result<TestReport> {
 
 pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> {
     let doc = roxmltree::Document::parse(xml).context("invalid junit xml")?;
+    // pytest's junit-xml writes a 0-based `line`; every other producer
+    // (phpunit, gradle, swift) follows the spec's 1-based convention.
+    let line_offset: i64 = if runner == "pytest" { 1 } else { 0 };
     let mut duration_s = 0.0;
     for suite in doc.descendants().filter(|n| n.has_tag_name("testsuite")) {
         duration_s += suite
@@ -98,7 +101,7 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
         let line = case
             .attribute("line")
             .and_then(|l| l.parse::<i64>().ok())
-            .map(|l| l + 1); // junit line attr is 0-based
+            .map(|l| l + line_offset);
         let id = if file.is_empty() {
             format!("{}.{}", case.attribute("classname").unwrap_or(""), name)
         } else {
@@ -122,6 +125,15 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
             if msg.is_empty() || msg == "collection failure" {
                 if let Some(e) = trace.iter().find(|l| l.starts_with("E ")) {
                     msg = e[1..].trim_start().to_string();
+                }
+            }
+            // Producers without a `message` attribute (phpunit, some JVM
+            // runners) put the message in the element text, often after a
+            // `Class::method` header line: use the first line that is not it.
+            if msg.is_empty() {
+                let header_suffix = format!("::{name}");
+                if let Some(first) = trace.iter().find(|l| !l.ends_with(&header_suffix)) {
+                    msg = first.clone();
                 }
             }
             let loc = match line {

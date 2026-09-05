@@ -1,5 +1,4 @@
 use assert_cmd::Command;
-use predicates::str::contains;
 
 fn cartoon() -> Command {
     Command::cargo_bin("cartoon").unwrap()
@@ -96,20 +95,42 @@ fn e2e_jest_failing_suite() {
 }
 
 #[test]
-fn e2e_adapters_lists_three() {
-    cartoon()
-        .args(["adapters"])
-        .assert()
-        .success()
-        .stdout(contains("pytest"))
-        .stdout(contains("unittest"))
-        .stdout(contains("jest"));
+fn e2e_adapters_lists_every_registered_adapter() {
+    let assert = cartoon().args(["adapters"]).assert().success();
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    for name in [
+        "pytest",
+        "unittest",
+        "jest",
+        "vitest",
+        "swift-test",
+        "xcodebuild-test",
+        "ruff",
+        "eslint",
+        "tsc",
+        "swift-build",
+        "xcodebuild-build",
+        "pre-commit",
+        "cargo-test",
+        "cargo-build",
+        "go-test",
+        "mypy",
+        "phpunit",
+        "rspec",
+        "swiftlint",
+    ] {
+        assert!(
+            out.lines().any(|l| l.starts_with(&format!("{name}: "))),
+            "missing {name}:\n{out}"
+        );
+    }
 }
 
 #[test]
 fn e2e_parse_failure_passes_through() {
     // A binary named `pytest` that emits garbage and no junit xml: the
-    // adapter must fall back to the original output with a stderr warning.
+    // adapter must fall back to the original output (tiny, so the generic
+    // ladder cannot pay for itself either) with a stderr warning.
     let tmp = tempfile::tempdir().unwrap();
     let fake_dir = tmp.path().join("bin");
     std::fs::create_dir(&fake_dir).unwrap();
@@ -128,7 +149,7 @@ fn e2e_parse_failure_passes_through() {
     let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let err = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(out.contains("not a real pytest run"), "got:\n{out}");
-    assert!(err.contains("passing through"), "got:\n{err}");
+    assert!(err.contains("failed to parse"), "got:\n{err}");
 }
 
 #[test]

@@ -1,11 +1,19 @@
+pub mod cargo_build;
+pub mod cargo_test;
 pub mod diagnostics;
 pub mod eslint;
+pub mod go_test;
 pub mod jest;
+pub mod mypy;
+pub mod phpunit;
+pub mod pre_commit;
 pub mod pytest;
 pub mod report;
+pub mod rspec;
 pub mod ruff;
 pub mod swift_build;
 pub mod swift_test;
+pub mod swiftlint;
 pub mod tsc;
 pub mod unittest;
 pub mod vitest;
@@ -102,6 +110,14 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(tsc::Tsc),
         Box::new(swift_build::SwiftBuild),
         Box::new(xcodebuild_build::XcodebuildBuild),
+        Box::new(pre_commit::PreCommit),
+        Box::new(cargo_test::CargoTest),
+        Box::new(cargo_build::CargoBuild),
+        Box::new(go_test::GoTest),
+        Box::new(mypy::Mypy),
+        Box::new(phpunit::Phpunit),
+        Box::new(rspec::Rspec),
+        Box::new(swiftlint::Swiftlint),
     ]
 }
 
@@ -441,7 +457,15 @@ mod tests {
                 "eslint",
                 "tsc",
                 "swift-build",
-                "xcodebuild-build"
+                "xcodebuild-build",
+                "pre-commit",
+                "cargo-test",
+                "cargo-build",
+                "go-test",
+                "mypy",
+                "phpunit",
+                "rspec",
+                "swiftlint",
             ]
         );
     }

@@ -1254,6 +1254,7 @@ mod tests {
         assert!(wrap_command("xcodebuild clean test -scheme App").is_some());
         assert!(wrap_command("xcodebuild build -scheme App").is_some());
         assert!(wrap_command("xcodebuild archive -scheme App").is_none());
+        assert!(wrap_command("xcodebuild -exportArchive -archivePath A.xcarchive").is_none());
         assert!(wrap_command("xcodebuild -list").is_none());
     }
 

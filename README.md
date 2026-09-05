@@ -430,10 +430,21 @@ decision, not cartoon's.
 | eslint | `eslint`, `npx eslint` | injected `--format json` |
 | tsc | `tsc`, `npx tsc` (not `--watch`) | injected `--pretty false` |
 | swift-build | `swift build` | stdout/stderr text parse |
-| xcodebuild-build | `xcodebuild build` (no test action) | stdout/stderr diagnostics parse |
+| xcodebuild-build | `xcodebuild build` / `archive` / `-exportArchive` (no test action) | stdout/stderr diagnostics parse |
+| pre-commit | `pre-commit`, `pre-commit run …` | stdout text parse (`--color=never` injected) |
+| cargo-test | `cargo test`, `cargo nextest run` | stable text parse (never nightly JSON) |
+| cargo-build | `cargo build`, `cargo check`, `cargo clippy` | injected `--message-format=json` (before `--`) |
+| go-test | `go test` | injected `-json` |
+| mypy | `mypy`, `python -m mypy`, `uv run mypy` | injected `--output json` |
+| phpunit | `phpunit`, `vendor/bin/phpunit` | injected `--log-junit` |
+| rspec | `rspec`, `bundle exec rspec` | injected `--format json --out <file>` |
+| swiftlint | `swiftlint`, `swiftlint lint` (never `--fix`/`autocorrect`) | injected `--reporter json` |
 
-No adapter match → JSON auto-detection → compression ladder (safe tier by
-default, aggressive opt-in) → passthrough when nothing pays for itself.
+No adapter match → content sniffing (xcodebuild / XCTest / JUnit shapes) →
+JSON auto-detection → compression ladder (safe tier by default, aggressive
+opt-in) → passthrough when nothing pays for itself. Hook-allowlisted tools
+with no adapter (`make`, `gradle`, `mvn`, `dotnet`, `npm test`, …) get the
+ladder only; `cartoon doctor` lists them.
 
 Want another runner (cargo test, go test, rspec)? See
 [CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.

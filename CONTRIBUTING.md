@@ -31,5 +31,8 @@ your real `~/.local/state/cartoon` archive — every e2e test points
 ## Rules
 
 - TDD: failing test first.
-- Never remove or reorder user-provided args in `prepare`.
+- Never remove or reorder user-provided args in `prepare`. Inject by
+  appending, or by inserting before the first `--` separator (cargo, mypy,
+  phpunit) or before `-args` (go test) — the tokens after those belong to
+  the wrapped program, not the runner.
 - Exit codes are sacred.

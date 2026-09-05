@@ -135,33 +135,19 @@ fn emit_candidate(
     // Reserve the archive slot first so the raw_log footer (part of the
     // emitted output) can be counted in the net-savings guard below.
     let reserved = archive::reserve(cfg);
-    // Tokenize each stream exactly once; the guard and the stats record
-    // share these counts (a 1M-token log used to be tokenized four times).
-    let tok = cfg.tokenizer.as_str();
-    let in_tokens = stats::estimate_tokens(&captured.stdout, tok);
-    let err_tokens = stats::estimate_tokens(&captured.stderr, tok);
-    let (out, mode, out_tokens) = if tmode == "passthrough" {
-        (candidate, tmode, in_tokens)
-    } else {
-        let footer = reserved
-            .as_ref()
-            .map(|r| {
-                format!(
-                    "\n{}",
-                    toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
-                )
-            })
-            .unwrap_or_default();
-        let with_footer = format!("{candidate}{footer}");
-        // Net-savings guard: a transform must pay for itself, footer
-        // included — otherwise emit the original untouched (still archived).
-        let cand_tokens = stats::estimate_tokens(&with_footer, tok);
-        if pays_for_itself(cand_tokens, in_tokens) {
-            (with_footer, tmode, cand_tokens)
-        } else {
-            (captured.stdout.clone(), "passthrough", in_tokens)
-        }
-    };
+    let Guarded {
+        out,
+        mode,
+        in_tokens,
+        err_tokens,
+        out_tokens,
+    } = guard_with_footer(
+        candidate,
+        tmode,
+        captured,
+        reserved.as_ref().map(|r| r.dir.as_path()),
+        cfg,
+    );
     let run =
         reserved.and_then(|r| archive::write_reserved(r, argv, mode, captured, code, tags, cfg));
     let run_id = run.as_ref().map(|r| r.id.as_str());
@@ -183,6 +169,59 @@ fn emit_candidate(
         run_id,
     );
     Ok(code)
+}
+
+/// Result of the net-savings guard: what to emit, how to label it in stats,
+/// and the token counts the guard already computed (reused by stats).
+struct Guarded {
+    out: String,
+    mode: &'static str,
+    in_tokens: usize,
+    err_tokens: usize,
+    out_tokens: usize,
+}
+
+/// Append the `raw_log` footer to a transformed candidate and apply the
+/// net-savings guard against the captured stdout. Each stream is tokenized
+/// exactly once (a 1M-token log used to be tokenized four times).
+fn guard_with_footer(
+    candidate: String,
+    tmode: &'static str,
+    captured: &runner::Captured,
+    raw_log_dir: Option<&Path>,
+    cfg: &Config,
+) -> Guarded {
+    let tok = cfg.tokenizer.as_str();
+    let in_tokens = stats::estimate_tokens(&captured.stdout, tok);
+    let err_tokens = stats::estimate_tokens(&captured.stderr, tok);
+    let (out, mode, out_tokens) = if tmode == "passthrough" {
+        (candidate, tmode, in_tokens)
+    } else {
+        let footer = raw_log_dir
+            .map(|d| {
+                format!(
+                    "\n{}",
+                    toon::encode(&json!({ "raw_log": d.display().to_string() }))
+                )
+            })
+            .unwrap_or_default();
+        let with_footer = format!("{candidate}{footer}");
+        // A transform must pay for itself, footer included — otherwise the
+        // original is emitted untouched (still archived).
+        let cand_tokens = stats::estimate_tokens(&with_footer, tok);
+        if pays_for_itself(cand_tokens, in_tokens) {
+            (with_footer, tmode, cand_tokens)
+        } else {
+            (captured.stdout.clone(), "passthrough", in_tokens)
+        }
+    };
+    Guarded {
+        out,
+        mode,
+        in_tokens,
+        err_tokens,
+        out_tokens,
+    }
 }
 
 /// Enforce `max_tokens` when set; returns the (possibly cut) text and its
@@ -309,13 +348,44 @@ fn run_with_adapter(
             Ok(code)
         }
         Err(e) => {
-            // Safety rule: never lose information. Emit original output, NO footer.
+            // Safety rule: never lose information. The captured streams still
+            // carry the injected machine format, so fall back to the generic
+            // ladder + guard rather than dumping them raw: the guard emits the
+            // original byte-identically when nothing pays for itself.
             eprintln!(
-                "cartoon: {} adapter failed to parse ({e}); passing through",
+                "cartoon: {} adapter failed to parse ({e}); compressing generically",
                 adapter.name()
             );
-            print!("{}", captured.stdout);
-            eprint!("{}", captured.stderr);
+            let (candidate, tmode) = transform(&captured.stdout, opts.level);
+            let Guarded {
+                out,
+                mode,
+                in_tokens,
+                err_tokens,
+                out_tokens,
+            } = guard_with_footer(
+                candidate,
+                tmode,
+                &captured,
+                run.as_ref().map(|r| r.dir.as_path()),
+                cfg,
+            );
+            let run_id = run.as_ref().map(|r| r.id.as_str());
+            let (out, out_tokens) = capped(out, out_tokens, cfg, run_id);
+            if mode == "passthrough" {
+                print!("{out}");
+                eprint!("{}", captured.stderr);
+            } else {
+                emit(&out, &captured.stderr);
+            }
+            stats::record_counts(
+                argv,
+                mode,
+                in_tokens + err_tokens,
+                out_tokens + err_tokens,
+                code,
+                run_id,
+            );
             Ok(code)
         }
     }

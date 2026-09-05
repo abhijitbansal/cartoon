@@ -10,6 +10,9 @@ pub enum Action {
     Test,
     /// Produces compiler diagnostics only.
     Build,
+    /// `archive` / `-exportArchive`: same diagnostics as a build, but the
+    /// action signs and packages — the hook never auto-approves it.
+    Archive,
 }
 
 /// Flags whose following token is a VALUE, not an action — so a scheme or
@@ -34,9 +37,10 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 
 /// Classify an `xcodebuild` invocation. `Test` wins when any test action is
-/// present (e.g. `clean test`); `Build` only when a build action appears with
-/// no test action. Returns `None` for non-xcodebuild commands or actions we
-/// don't summarize (`archive`, `clean`-only, `analyze`, `-list`, ...).
+/// present (e.g. `clean test`); `Archive` when `archive`/`-exportArchive`
+/// appears with no test action; `Build` only when a build action appears
+/// alone. Returns `None` for non-xcodebuild commands or actions we don't
+/// summarize (`clean`-only, `analyze`, `-list`, ...).
 pub fn action(argv: &[String]) -> Option<Action> {
     let argv = super::strip_xcrun(argv);
     let first = argv.first()?;
@@ -44,10 +48,15 @@ pub fn action(argv: &[String]) -> Option<Action> {
         return None;
     }
     let mut has_build = false;
+    let mut has_archive = false;
     let mut skip_next = false;
     for tok in &argv[1..] {
         if skip_next {
             skip_next = false;
+            continue;
+        }
+        if tok == "-exportArchive" {
+            has_archive = true;
             continue;
         }
         if tok.starts_with('-') {
@@ -60,8 +69,12 @@ pub fn action(argv: &[String]) -> Option<Action> {
         match tok.as_str() {
             "test" | "test-without-building" => return Some(Action::Test),
             "build" | "build-for-testing" => has_build = true,
+            "archive" => has_archive = true,
             _ => {}
         }
+    }
+    if has_archive {
+        return Some(Action::Archive);
     }
     has_build.then_some(Action::Build)
 }
@@ -83,6 +96,27 @@ mod tests {
         );
         assert_eq!(
             action(&argv(&["/usr/bin/xcodebuild", "test", "-scheme", "App"])),
+            Some(Action::Test)
+        );
+    }
+
+    #[test]
+    fn archive_and_export_archive_classify_as_archive() {
+        assert_eq!(
+            action(&argv(&["xcodebuild", "archive", "-scheme", "App"])),
+            Some(Action::Archive)
+        );
+        assert_eq!(
+            action(&argv(&[
+                "xcodebuild",
+                "-exportArchive",
+                "-archivePath",
+                "A.xcarchive"
+            ])),
+            Some(Action::Archive)
+        );
+        assert_eq!(
+            action(&argv(&["xcodebuild", "clean", "archive", "test"])),
             Some(Action::Test)
         );
     }
@@ -144,7 +178,6 @@ mod tests {
 
     #[test]
     fn non_summarized_actions_return_none() {
-        assert_eq!(action(&argv(&["xcodebuild", "archive"])), None);
         assert_eq!(action(&argv(&["xcodebuild", "clean"])), None);
         assert_eq!(action(&argv(&["xcodebuild", "analyze"])), None);
         assert_eq!(action(&argv(&["xcodebuild", "-list"])), None);
