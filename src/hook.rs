@@ -21,6 +21,20 @@
 //! linters, typecheckers, builds) and is subcommand-aware for tools whose
 //! other subcommands mutate state. Infra CLIs (docker, kubectl, terraform,
 //! gh, aws) are deliberately excluded even though they are noisy.
+//!
+//! Allowlist decisions (2026-09-05):
+//!   - `make` and `pre-commit` execute project-defined recipes yet stay
+//!     allowlisted: they are the canonical dev-loop entry points and the
+//!     agent already has write access to the repo. Install with `--deny` to
+//!     turn every rewrite into a suggestion instead.
+//!   - Tools with a mutating *mode* (`ruff format`, `--fix`, `swiftlint
+//!     autocorrect`) or that load code from an arbitrary path (`eslint -c`)
+//!     are gated per token in `MUTATING_TOKENS`; such a command is left
+//!     alone entirely (no rewrite, no deny).
+//!   - A leading `NAME=value` prefix rides along only for the benign names in
+//!     `SAFE_ENV_PREFIXES`; PATH, LD_PRELOAD, RUSTC_WRAPPER, NODE_OPTIONS,
+//!     DEVELOPER_DIR, ... change what executes, so they end eligibility.
+//!   - `npx`/`bunx`/`pnpx` launch only the JS tools in `RUNNER_TOOLS`.
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::io::Read;
@@ -33,8 +47,8 @@ pub const ALWAYS: &[&str] = &[
     "vitest",
     "tsc",
     "eslint",
-    "ruff",
     "mypy",
+    "swiftlint",
     "make",
     "phpunit",
     "rspec",
@@ -57,6 +71,64 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
     ("gradlew", &["test", "build", "check"]),
     ("mvn", &["test", "verify", "package"]),
     ("swift", &["test", "build"]),
+    ("ruff", &["check"]),
+];
+
+/// Tools a JS package runner (`npx`, `bunx`, `pnpx`) may launch and still be
+/// auto-wrapped. Deliberately not the whole ALWAYS list: `npx pytest` is not
+/// something a vetted dev loop does.
+pub const RUNNER_TOOLS: &[&str] = &["jest", "vitest", "tsc", "eslint"];
+
+/// `NAME=value` prefixes the hook may skip past. Anything else that looks
+/// like an assignment makes the whole command ineligible: PATH, LD_PRELOAD,
+/// RUSTC_WRAPPER, NODE_OPTIONS, DEVELOPER_DIR, ... change what executes, and
+/// a rewrite auto-approves the call.
+pub const SAFE_ENV_PREFIXES: &[&str] = &[
+    "CI",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "DEBUG",
+    "RUST_LOG",
+    "RUST_BACKTRACE",
+    "CARGO_TERM_COLOR",
+    "NODE_ENV",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONUNBUFFERED",
+    "PYTEST_ADDOPTS",
+];
+
+/// Tokens (flags or subcommands) that turn an otherwise read-mostly tool
+/// into one that rewrites files or loads code from an arbitrary path. Any
+/// segment containing one is left alone entirely (`None`): no rewrite, no
+/// deny — the user's normal permission flow decides.
+pub const MUTATING_TOKENS: &[(&str, &[&str])] = &[
+    (
+        "ruff",
+        &[
+            "--fix",
+            "--fix-only",
+            "--unsafe-fixes",
+            "--add-noqa",
+            "format",
+        ],
+    ),
+    (
+        "eslint",
+        &[
+            "--fix",
+            "--fix-dry-run",
+            "--fix-type",
+            "-c",
+            "--config",
+            "--rulesdir",
+            "--resolve-plugins-relative-to",
+        ],
+    ),
+    ("swiftlint", &["--fix", "autocorrect"]),
 ];
 
 /// Runner prefixes: wrap when the NEXT word is itself an ALWAYS tool.
@@ -325,42 +397,61 @@ pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(S
     }
     let mut force_deny = false;
     for segment in &segments {
-        let mut words = segment.split_whitespace().peekable();
-        // skip leading VAR=value assignments
-        while words
-            .peek()
-            .is_some_and(|w| w.contains('=') && !w.starts_with('='))
-        {
-            words.next();
+        let toks: Vec<&str> = segment.split_whitespace().collect();
+        // Leading NAME=value assignments: only benign names may ride along.
+        let mut i = 0;
+        while let Some(name) = toks.get(i).and_then(|w| env_assignment_name(w)) {
+            if !SAFE_ENV_PREFIXES.contains(&name) {
+                return None;
+            }
+            i += 1;
         }
-        let first = words.next()?;
-        let base = first.rsplit('/').next().unwrap_or(first);
+        let first = *toks.get(i)?;
+        let rest = &toks[i + 1..];
+        let base = basename(first);
         if STATE_BUILTINS.contains(&first) || STATE_BUILTINS.contains(&base) {
             return None;
         }
         // xcodebuild actions (test/build) float among flags, so the single
         // next-word check can't gate them — reuse the adapter's full-argv scan.
+        // Only the summarizable read-mostly actions are eligible.
         if base == "xcodebuild" {
-            let mut argv = vec![first.to_string()];
-            argv.extend(words.map(String::from));
-            crate::adapters::xcodebuild::action(&argv)?;
+            let argv = full_argv(first, rest);
+            use crate::adapters::xcodebuild::Action;
+            if !matches!(
+                crate::adapters::xcodebuild::action(&argv),
+                Some(Action::Test) | Some(Action::Build)
+            ) {
+                return None;
+            }
             continue;
         }
         // `uv run pytest`, `uvx ruff check`, `uv run -m pytest`, … need to look
         // several words past the prefix, so the single next-word check can't
         // gate them either.
         if base == "uv" || base == "uvx" {
-            let mut argv = vec![first.to_string()];
-            argv.extend(words.map(String::from));
-            if !uv_wraps_noisy(&argv) {
+            if !uv_wraps_noisy(&full_argv(first, rest)) {
                 return None;
             }
             continue;
         }
-        if is_noisy(base, words.next()) {
+        // Resolve the tool a runner prefix launches so the mutating-token
+        // scan sees the real tool (`npx eslint --fix`).
+        let (tool, tool_rest) = if RUNNERS.contains(&base) {
+            match rest.split_first() {
+                Some((t, r)) => (basename(t), r),
+                None => return None,
+            }
+        } else {
+            (base, rest)
+        };
+        if has_mutating_token(tool, tool_rest) {
+            return None;
+        }
+        if is_noisy(base, rest.first().copied()) {
             continue;
         }
-        if wrap_scripts.iter().any(|s| s == first || s == base) {
+        if matches_wrap_script(first, rest.first().copied(), wrap_scripts) {
             force_deny = true;
             continue;
         }
@@ -370,6 +461,54 @@ pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(S
     Some((format!("cartoon -c '{escaped}'"), force_deny))
 }
 
+fn basename(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
+}
+
+fn full_argv(first: &str, rest: &[&str]) -> Vec<String> {
+    std::iter::once(first)
+        .chain(rest.iter().copied())
+        .map(String::from)
+        .collect()
+}
+
+/// `NAME` when `word` is a shell env assignment (`NAME=value`), else None.
+fn env_assignment_name(word: &str) -> Option<&str> {
+    let (name, _) = word.split_once('=')?;
+    let valid = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    valid.then_some(name)
+}
+
+/// True when `rest` carries a token that makes `tool` mutate files or load
+/// code from an arbitrary path (see `MUTATING_TOKENS`). `--flag=value` forms
+/// match on the flag name.
+fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
+    let Some((_, toks)) = MUTATING_TOKENS.iter().find(|(t, _)| *t == tool) else {
+        return false;
+    };
+    rest.iter().any(|w| {
+        let w = w.as_ref();
+        toks.iter()
+            .any(|t| w == *t || w.strip_prefix(t).is_some_and(|r| r.starts_with('=')))
+    })
+}
+
+/// A declared `wrap_scripts` entry matches its bare, `./`, absolute-path and
+/// interpreter-prefixed (`sh`/`bash`/`zsh` <script>) invocation forms. Only
+/// ever leads to deny-with-suggestion, so a basename collision is harmless.
+fn matches_wrap_script(first: &str, next: Option<&str>, wrap_scripts: &[String]) -> bool {
+    let target = match basename(first) {
+        "sh" | "bash" | "zsh" => match next {
+            Some(n) => n,
+            None => return false,
+        },
+        _ => first,
+    };
+    wrap_scripts.iter().any(|s| basename(s) == basename(target))
+}
+
 fn is_noisy(base: &str, next: Option<&str>) -> bool {
     if ALWAYS.contains(&base) {
         return true;
@@ -377,7 +516,7 @@ fn is_noisy(base: &str, next: Option<&str>) -> bool {
     if RUNNERS.contains(&base) {
         return next
             .map(|n| n.rsplit('/').next().unwrap_or(n))
-            .is_some_and(|n| ALWAYS.contains(&n) || n == "vitest" || n == "jest");
+            .is_some_and(|n| RUNNER_TOOLS.contains(&n));
     }
     if let Some((_, subs)) = SUBCOMMAND.iter().find(|(c, _)| *c == base) {
         return next.is_some_and(|n| subs.contains(&n));
@@ -432,6 +571,9 @@ fn uv_wraps_noisy(argv: &[String]) -> bool {
         .first()
         .map(|s| s.rsplit('/').next().unwrap_or(s))
         .unwrap_or("");
+    if has_mutating_token(base, rest.get(1..).unwrap_or(&[])) {
+        return false;
+    }
     is_noisy(base, rest.get(1).map(String::as_str))
 }
 
@@ -615,6 +757,39 @@ fn is_our_entry(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Outcome of inserting our entry into a settings `PreToolUse` array.
+#[derive(Debug, PartialEq, Eq)]
+enum Upsert {
+    Added,
+    Unchanged,
+    /// Our entry was present with a different command (other mode, or an
+    /// older shape) and has been replaced in place.
+    ModeUpdated,
+}
+
+fn upsert_claude_entry(arr: &mut Vec<Value>, deny: bool) -> Upsert {
+    let want = claude_entry(deny);
+    match arr.iter_mut().find(|e| is_our_entry(e)) {
+        None => {
+            arr.push(want);
+            Upsert::Added
+        }
+        Some(existing) if *existing == want => Upsert::Unchanged,
+        Some(existing) => {
+            *existing = want;
+            Upsert::ModeUpdated
+        }
+    }
+}
+
+fn mode_label(deny: bool) -> &'static str {
+    if deny {
+        "deny-with-suggestion mode"
+    } else {
+        "transparent rewrite mode"
+    }
+}
+
 fn install_claude(t: Target) -> Result<i32> {
     let path = claude_settings_path(t.project)?;
     let mut root: Value = match std::fs::read_to_string(&path) {
@@ -635,15 +810,23 @@ fn install_claude(t: Target) -> Result<i32> {
     let arr = pre
         .as_array_mut()
         .ok_or_else(|| anyhow::anyhow!("settings `hooks.PreToolUse` is not an array"))?;
-    if arr.iter().any(is_our_entry) {
+    let outcome = upsert_claude_entry(arr, t.deny);
+    if outcome == Upsert::Unchanged {
         println!("cartoon hook already installed in {}", path.display());
         return Ok(0);
     }
-    arr.push(claude_entry(t.deny));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
+    if outcome == Upsert::ModeUpdated {
+        println!(
+            "cartoon hook entry updated in {} — now {}. Restart the agent (or run /hooks) to load it.",
+            path.display(),
+            mode_label(t.deny)
+        );
+        return Ok(0);
+    }
     if t.vscode {
         println!(
             "cartoon hook installed for VS Code Copilot Chat in {}\n\
@@ -823,6 +1006,87 @@ fn yes_no(installed: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_prefix_only_benign_names_are_auto_wrapped() {
+        assert!(wrap_command("CI=1 pytest -q").is_some());
+        assert!(wrap_command("RUST_BACKTRACE=1 cargo test").is_some());
+        // Anything that changes what gets executed falls through to the prompt.
+        assert!(wrap_command("PATH=/tmp/evil:$PATH pytest").is_none());
+        assert!(wrap_command("LD_PRELOAD=/tmp/x.so cargo test").is_none());
+        assert!(wrap_command("RUSTC_WRAPPER=/tmp/w cargo build").is_none());
+        assert!(wrap_command("NODE_OPTIONS=--require=/tmp/x.js jest").is_none());
+        assert!(wrap_command("DEVELOPER_DIR=/tmp xcodebuild test -scheme A").is_none());
+    }
+
+    #[test]
+    fn mutating_lint_invocations_are_never_auto_approved() {
+        assert!(wrap_command("ruff check .").is_some());
+        assert!(wrap_command("ruff format .").is_none());
+        assert!(wrap_command("ruff check --fix .").is_none());
+        assert!(wrap_command("ruff check --fix-only .").is_none());
+        assert!(wrap_command("uvx ruff format .").is_none());
+        assert!(wrap_command("uvx ruff check --fix .").is_none());
+        assert!(wrap_command("eslint src/").is_some());
+        assert!(wrap_command("eslint --fix src/").is_none());
+        assert!(wrap_command("npx eslint --fix src/").is_none());
+        assert!(wrap_command("eslint -c /tmp/evil.js src/").is_none());
+        assert!(wrap_command("eslint --rulesdir /tmp/r src/").is_none());
+        assert!(wrap_command("swiftlint").is_some());
+        assert!(wrap_command("swiftlint --fix").is_none());
+        assert!(wrap_command("swiftlint autocorrect").is_none());
+    }
+
+    #[test]
+    fn make_and_pre_commit_stay_allowlisted_by_decision() {
+        // Deliberate: both are the canonical dev-loop entry points and the
+        // agent already holds write access to the repo. Users who disagree
+        // install with --deny. See the module doc.
+        assert!(wrap_command("make -j4").is_some());
+        assert!(wrap_command("pre-commit run --all-files").is_some());
+    }
+
+    #[test]
+    fn runner_prefix_only_wraps_js_tools() {
+        assert!(wrap_command("npx jest").is_some());
+        assert!(wrap_command("npx vitest run").is_some());
+        assert!(wrap_command("npx tsc --noEmit").is_some());
+        assert!(wrap_command("npx pytest").is_none());
+        assert!(wrap_command("npx make").is_none());
+        assert!(wrap_command("bunx pre-commit run").is_none());
+    }
+
+    #[test]
+    fn install_switches_mode_when_entry_exists_with_other_mode() {
+        let mut arr = vec![claude_entry(false)];
+        assert_eq!(upsert_claude_entry(&mut arr, true), Upsert::ModeUpdated);
+        assert!(arr[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--deny-mode"));
+        assert_eq!(upsert_claude_entry(&mut arr, true), Upsert::Unchanged);
+        assert_eq!(arr.len(), 1);
+        let mut empty = Vec::new();
+        assert_eq!(upsert_claude_entry(&mut empty, false), Upsert::Added);
+    }
+
+    #[test]
+    fn wrap_scripts_matches_common_invocation_forms() {
+        let scripts = ["./build.sh".to_string()];
+        for cmd in [
+            "./build.sh -d",
+            "build.sh -d",
+            "bash ./build.sh -d",
+            "sh build.sh",
+            "/Users/me/repo/build.sh --no-launch",
+        ] {
+            let (_, force_deny) = wrap_command_with_policy(cmd, &scripts)
+                .unwrap_or_else(|| panic!("{cmd} should match"));
+            assert!(force_deny, "{cmd} must be deny-only");
+        }
+        assert!(wrap_command_with_policy("./deploy.sh", &scripts).is_none());
+        assert!(wrap_command_with_policy("bash ./deploy.sh", &scripts).is_none());
+    }
 
     #[test]
     fn wraps_noisy_simple_command() {
