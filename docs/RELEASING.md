@@ -30,7 +30,11 @@ Single source of truth is the **git tag** (`vX.Y.Z`):
   `npm-platform-packages.mjs`); the committed `package.json` stays `0.0.0`.
 - PyPI version comes from the tag via maturin (`dynamic = ["version"]`).
 - **Cargo.toml `version` must be bumped manually to match the tag** before
-  tagging — `cargo publish` uses it verbatim.
+  tagging — `cargo publish` uses it verbatim. Then run
+  `node scripts/check-versions.mjs --write` to propagate it to
+  `.claude-plugin/plugin.json` and the site; `cargo test`
+  (tests/version_sync.rs) fails on drift, and the release workflow's first
+  job runs `check-versions.mjs --tag $GITHUB_REF_NAME` before publishing.
 - The marketing site (`docs/index.html`) shows the version from a marker kept
   in sync with Cargo.toml by `scripts/sync-site-version.mjs`. CI runs it with
   `--check`, so a Cargo.toml bump that forgets the site fails on main/PR.

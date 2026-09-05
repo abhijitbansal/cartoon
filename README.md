@@ -162,6 +162,27 @@ change shell state (`cd`, `export`, `source`) pass through untouched, and
 anything unrecognized is left alone (fail-open). The net-savings guard
 still applies — worst case the output is byte-identical.
 
+### What the hook will not auto-approve (0.6.0)
+
+Because a rewrite is emitted with `permissionDecision: "allow"`, the
+allowlist tightened in 0.6.0 — some previously auto-approved commands now
+reach your normal permission prompt instead:
+
+- A leading `NAME=value` prefix rides along only for benign names (`CI`,
+  `RUST_LOG`, `NO_COLOR`, …). `PATH=… pytest`, `LD_PRELOAD=… cargo test`,
+  `NODE_OPTIONS=… jest` are left alone.
+- `ruff` is gated to `ruff check`; `ruff format`, `--fix`, `eslint --fix`,
+  `eslint -c <path>`, `swiftlint --fix` / `autocorrect` are never wrapped.
+- `npx`/`bunx`/`pnpx` launch only `jest`, `vitest`, `tsc`, `eslint`.
+- `make` and `pre-commit` stay allowlisted by explicit decision: they are
+  the canonical dev-loop entry points and the agent already has write
+  access to the repo. Install with `--deny` if you disagree.
+- `cartoon hook install --deny` on an existing install switches the mode
+  in place (and back without the flag).
+
+`cartoon doctor` shows what is installed where and which allowlisted tools
+still have no adapter.
+
 ### Disabling & overhead
 
 - **Disable for a session** — set in the environment your agent runs in:

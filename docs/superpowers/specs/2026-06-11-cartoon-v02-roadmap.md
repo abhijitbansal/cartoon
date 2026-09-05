@@ -33,6 +33,33 @@ competitive research) merged and prioritized. Items marked ✅ shipped on
    failures of the same command get a "read the archived log instead of
    re-running" loop-breaker. All local, no telemetry.
 
+## Shipped 2026-09-05 (review branch, one PR) ✅
+
+From the whole-repo review
+(`2026-09-05-cartoon-repo-review-improvement-plan.md`), all on
+`feat/wrap-scripts-project-config`:
+
+- ✅ Routing: quote-aware `-c` tokenizing (adapters fire for
+  `xcodebuild … -destination '…'`), project `.cartoon.toml` pins applied at
+  run time, `xcrun` prefix, `wrap_scripts` default aggressive,
+  `-c '<cmd> | tail'` pipe-filter elision (#12).
+- ✅ Hook security: env-prefix allowlist, mutating-token gate (ruff/eslint/
+  swiftlint), JS-only `npx` scope, `--deny` mode switching.
+- ✅ Guarantees: adapter-path net-savings guard, prune floor, atomic ledger
+  append + tolerant reader, archive-failure warnings, safe-tier progress
+  collapse fixed, CRLF preserved, diagnostics survive near-dup templating.
+- ✅ Mechanisms: `cartoon doctor`, content sniffing (xcodebuild / XCTest /
+  JUnit shapes), `--junit` harvester, `--max-tokens` hard ceiling.
+- ✅ Adapter wave 2: pre-commit (#11), cargo test/nextest, cargo
+  build/check/clippy JSON, go test -json, mypy JSON, phpunit, rspec,
+  xcodebuild archive, swiftlint.
+- ✅ Release hygiene: version gate across manifests + release job, `hook.rs`
+  split, docs drift.
+
+Still open from the lists below: `--diff` / `cartoon last`, BENCHMARKS.md,
+StatRecord `intended_adapter` (partially: `inner_cmd` shipped), learn v2,
+downstream-accuracy benchmark, TOML regex adapters, MCP server mode.
+
 ## NOW (next session)
 
 1. ✅ **PreToolUse auto-wrap hook** — SHIPPED same day: `cartoon hook
@@ -118,6 +145,12 @@ competitive research) merged and prioritized. Items marked ✅ shipped on
   numbers from real-world fixtures.
 
 ## KILLED (deliberately not doing)
+
+- **GitHub CI runs** — disabled since 2026-06-15 and kept disabled by
+  decision (2026-09-05): Actions runner minutes cost money the maintainer
+  does not want to pay. The local gate (`cargo fmt --check`, `cargo clippy
+  --all-targets -- -D warnings`, `cargo test`) replaces it; only the
+  tag-triggered release workflow runs on GitHub, now behind a version gate.
 
 - **shellenv preexec rewriting** — bash DEBUG-trap rewriting is fragile;
   hook + shims + pipe mode cover every reach scenario with less breakage.

@@ -1,7 +1,14 @@
 # cartoon — TOON wrapper for any CLI (design)
 
+> **Frozen v0.1 draft (2026-06-09).** Several items below marked out of scope
+> have since shipped (compression ladder, auto-wrap hook, ingest, learn,
+> raw-log archive, adapters for 19 tools, doctor, content sniffing, `--junit`,
+> `--max-tokens`). The living documents are the roadmap,
+> `superpowers/specs/2026-06-11-cartoon-v02-roadmap.md`, and the 2026-09-05
+> review plan, `superpowers/specs/2026-09-05-cartoon-repo-review-improvement-plan.md`.
+
 Date: 2026-06-09
-Status: draft for review
+Status: frozen historical draft (see banner)
 Owner: Abhijit Bansal
 
 ## Problem

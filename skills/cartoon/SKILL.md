@@ -132,3 +132,11 @@ when the command finishes, not live). To turn it off when asked:
 After a session with several wrapped runs, `cartoon stats` shows
 cumulative tokens saved — worth surfacing when the user asks about
 cost or token usage.
+
+## Something not shrinking? Run `cartoon doctor`
+
+`cartoon doctor` prints one report: whether the hook is installed per agent
+surface, whether the global and project config parse, `wrap_scripts` entries
+that do not exist on disk, allowlisted tools that only get ladder
+compression (no adapter yet), and ledger health. Run it before filing an
+issue and paste the output.

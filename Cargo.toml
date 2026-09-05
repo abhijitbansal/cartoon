@@ -1,6 +1,6 @@
 [package]
 name = "cartoon"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Token-optimized TOON output wrapper for any CLI"
 license = "MIT"

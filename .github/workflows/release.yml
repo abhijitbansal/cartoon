@@ -4,7 +4,20 @@ on:
     tags: ["v*"]
 
 jobs:
+  # Every manifest (Cargo.toml, plugin.json, docs/index.html) must agree with
+  # the tag before anything is published anywhere. Cheap, and the only gate
+  # left on GitHub since ci.yml is disabled by decision.
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - run: node scripts/check-versions.mjs --tag "$GITHUB_REF_NAME"
+
   build:
+    needs: verify-version
     strategy:
       matrix:
         include:
@@ -65,6 +78,7 @@ jobs:
           files: cartoon-*.tar.gz
 
   pypi-wheels:
+    needs: verify-version
     strategy:
       matrix:
         include:
