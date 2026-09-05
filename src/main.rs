@@ -11,7 +11,7 @@ fn main() {
             tags,
             fast,
         }) => {
-            let cfg = cartoon::config::load();
+            let cfg = cartoon::config::load_for_cwd();
             match cartoon::config::resolve_level(compress.as_deref(), heuristic, &argv[0], &cfg) {
                 Ok(level) => cartoon::app::run_wrap(&argv, level, raw, &tags, fast, &cfg)
                     .unwrap_or_else(|e| {
@@ -74,7 +74,7 @@ fn main() {
             compress,
             tags,
         }) => {
-            let cfg = cartoon::config::load();
+            let cfg = cartoon::config::load_for_cwd();
             match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
                 Ok(level) => {
                     cartoon::app::run_ingest(&source, level, &tags, &cfg).unwrap_or_else(|e| {

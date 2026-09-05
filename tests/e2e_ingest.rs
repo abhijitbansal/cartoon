@@ -6,6 +6,13 @@ fn cartoon_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cartoon")
 }
 
+/// Every run archives into XDG_STATE_HOME; point it at a per-test temp dir so
+/// `cargo test` never writes into (or prunes) the developer's real archive.
+fn isolated_state() -> &'static tempfile::TempDir {
+    static STATE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| tempfile::tempdir().expect("temp state dir"))
+}
+
 fn noisy_log() -> String {
     let mut s = String::from("\x1b[32mbuild started\x1b[0m\n");
     for _ in 0..60 {
@@ -21,6 +28,7 @@ fn ingest_file_compresses_like_a_wrapped_run() {
     let path = dir.path().join("build.log");
     std::fs::write(&path, noisy_log()).unwrap();
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args(["ingest", path.to_str().unwrap()])
         .output()
         .expect("run cartoon");
@@ -34,6 +42,7 @@ fn ingest_file_compresses_like_a_wrapped_run() {
 #[test]
 fn stdin_dash_ingests_piped_log() {
     let mut child = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -55,6 +64,7 @@ fn stdin_dash_ingests_piped_log() {
 #[test]
 fn ingest_missing_file_exits_2() {
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args(["ingest", "/no/such/file.log"])
         .output()
         .expect("run cartoon");

@@ -9,6 +9,13 @@
 use std::fs;
 use std::process::Command;
 
+/// Every run archives into XDG_STATE_HOME; point it at a per-test temp dir so
+/// `cargo test` never writes into (or prunes) the developer's real archive.
+fn isolated_state() -> &'static tempfile::TempDir {
+    static STATE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| tempfile::tempdir().expect("temp state dir"))
+}
+
 #[test]
 #[ignore = "requires Xcode; run with --ignored on macOS"]
 fn xcodebuild_test_emits_toon_summary() {
@@ -50,6 +57,7 @@ final class LibTests: XCTestCase {
     .unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_cartoon"))
+        .env("XDG_STATE_HOME", isolated_state().path())
         .current_dir(root)
         .args([
             "xcodebuild",

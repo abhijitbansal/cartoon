@@ -99,3 +99,31 @@ fn raw_mode_writes_no_stats() {
         .success();
     assert!(!tmp.path().join("cartoon/stats.jsonl").exists());
 }
+
+#[test]
+fn project_cartoon_toml_pin_changes_the_tier_at_run_time() {
+    // A project pin for argv0 `sh` set to aggressive must filter INFO lines;
+    // the default safe tier keeps them. Proves main.rs reads the merged config.
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repo.path().join(".cartoon.toml"),
+        "[command.sh]\nlevel = \"aggressive\"\n",
+    )
+    .unwrap();
+    let mut script = String::from("i=0; while [ $i -lt 120 ]; do echo \"2026-06-11 INFO item $i\"; i=$((i+1)); done; echo '2026-06-11 ERROR boom'");
+    script.push(';');
+    let out = cartoon()
+        .current_dir(repo.path())
+        .env("XDG_STATE_HOME", state.path())
+        .env("XDG_CONFIG_HOME", state.path())
+        .args(["sh", "-c", &script])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("INFO item 3"),
+        "aggressive pin from .cartoon.toml applied: {stdout}"
+    );
+    assert!(stdout.contains("ERROR boom"), "{stdout}");
+}

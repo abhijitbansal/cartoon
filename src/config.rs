@@ -74,6 +74,16 @@ pub fn load_merged(cwd: &std::path::Path) -> Config {
     }
 }
 
+/// The config a wrapped run should use: global + the project-local
+/// `.cartoon.toml` for the current directory. Falls back to global-only
+/// when the cwd is unreadable (fail-open).
+pub fn load_for_cwd() -> Config {
+    match std::env::current_dir() {
+        Ok(cwd) => load_merged(&cwd),
+        Err(_) => load(),
+    }
+}
+
 /// Level precedence: CLI --compress > CLI --heuristic > config
 /// [command.<argv0>] > config [compress] > legacy `heuristic = true` > Safe.
 pub fn resolve_level(
