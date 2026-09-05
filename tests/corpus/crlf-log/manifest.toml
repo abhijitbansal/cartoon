@@ -1,0 +1,5 @@
+# Windows-style CRLF log. The safe tier collapses the 40 repeats but must
+# keep the CRLF terminators instead of silently rewriting them to LF.
+must_survive = ["build started\r\n", "warning: asset 7 skipped\r\n", "build finished"]
+min_reduction_safe = 0.50
+min_reduction_aggressive = 0.50

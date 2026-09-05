@@ -1,0 +1,46 @@
+build started
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+copying asset bundle to staging area
+warning: asset 7 skipped
+
+
+
+build finished

@@ -8,12 +8,23 @@ pub fn strip_ansi(text: &str) -> String {
     ansi.replace_all(text, "").into_owned()
 }
 
-/// Collapse runs of blank lines (after trailing-whitespace trim) to one.
+/// The line terminator to re-join with: CRLF input stays CRLF (Windows tools,
+/// some CI logs) so the safe tier never silently rewrites line endings.
+pub(crate) fn line_sep(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Collapse runs of blank lines (after trailing space/tab trim) to one.
 pub fn collapse_blanks(text: &str) -> String {
+    let sep = line_sep(text);
     let mut out: Vec<&str> = Vec::new();
     let mut blank_run = 0usize;
     for raw in text.lines() {
-        let line = raw.trim_end();
+        let line = raw.trim_end_matches([' ', '\t']);
         if line.is_empty() {
             blank_run += 1;
             if blank_run > 1 {
@@ -24,13 +35,14 @@ pub fn collapse_blanks(text: &str) -> String {
         }
         out.push(line);
     }
-    out.join("\n")
+    out.join(sep)
 }
 
 /// Collapse exact consecutive duplicate lines to `line` + `  (xN)`.
 /// Blank lines participate in tracking, so duplicates separated by a
 /// blank are intentionally NOT collapsed across the gap.
 pub fn collapse_repeats(text: &str) -> String {
+    let sep = line_sep(text);
     let mut out: Vec<String> = Vec::new();
     let mut prev: Option<&str> = None;
     let mut repeat = 0usize;
@@ -49,7 +61,7 @@ pub fn collapse_repeats(text: &str) -> String {
     if repeat > 0 {
         out.push(format!("  (x{})", repeat + 1));
     }
-    out.join("\n")
+    out.join(sep)
 }
 
 #[cfg(test)]
@@ -93,5 +105,11 @@ mod tests {
     #[test]
     fn trims_trailing_whitespace() {
         assert_eq!(collapse_blanks("line   \nnext"), "line\nnext");
+    }
+
+    #[test]
+    fn crlf_input_keeps_crlf_output() {
+        assert_eq!(collapse_blanks("a\r\n\r\n\r\nb"), "a\r\n\r\nb");
+        assert_eq!(collapse_repeats("x\r\nx\r\ny"), "x\r\n  (x2)\r\ny");
     }
 }

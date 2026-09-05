@@ -231,8 +231,10 @@ stage that understands the content wins:
    machine-readable format injected and re-rendered as a compact report.
 2. **JSON detection** — any JSON document in stdout is TOON-encoded.
 3. **Ladder, safe tier (default)** — ANSI stripping, progress-bar
-   collapse, duplicate-line collapse, blank-run collapse. Deterministic
-   and non-lossy in practice.
+   collapse (only frames that redraw or share one indicator — table rows
+   with percentages are never folded), duplicate-line collapse, blank-run
+   collapse. Deterministic and non-lossy in practice: CRLF line endings
+   are preserved, trailing spaces and tabs are trimmed.
 4. **Ladder, aggressive tier (opt-in)** — log-level filtering (INFO/DEBUG
    to counts, WARN+ kept with context), near-duplicate templating,
    compiler-diagnostic extraction into a TOON table (gcc/clang one-liners

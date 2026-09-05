@@ -48,8 +48,13 @@ fn transform_emit_record(
     // emitted output) can be counted in the net-savings guard below.
     let reserved = archive::reserve(cfg);
     let (candidate, tmode) = transform(&captured.stdout, level);
-    let (out, mode) = if tmode == "passthrough" {
-        (candidate, tmode)
+    // Tokenize each stream exactly once; the guard and the stats record
+    // share these counts (a 1M-token log used to be tokenized four times).
+    let tok = cfg.tokenizer.as_str();
+    let in_tokens = stats::estimate_tokens(&captured.stdout, tok);
+    let err_tokens = stats::estimate_tokens(&captured.stderr, tok);
+    let (out, mode, out_tokens) = if tmode == "passthrough" {
+        (candidate, tmode, in_tokens)
     } else {
         let footer = reserved
             .as_ref()
@@ -63,10 +68,11 @@ fn transform_emit_record(
         let with_footer = format!("{candidate}{footer}");
         // Net-savings guard: a transform must pay for itself, footer
         // included — otherwise emit the original untouched (still archived).
-        if pays_for_itself(&with_footer, &captured.stdout, &cfg.tokenizer) {
-            (with_footer, tmode)
+        let cand_tokens = stats::estimate_tokens(&with_footer, tok);
+        if pays_for_itself(cand_tokens, in_tokens) {
+            (with_footer, tmode, cand_tokens)
         } else {
-            (captured.stdout.clone(), "passthrough")
+            (captured.stdout.clone(), "passthrough", in_tokens)
         }
     };
     let run =
@@ -78,15 +84,12 @@ fn transform_emit_record(
     } else {
         emit(&out, &captured.stderr);
     }
-    let original = format!("{}{}", captured.stdout, captured.stderr);
-    let emitted = format!("{}{}", out, captured.stderr);
-    stats::record_call(
+    stats::record_counts(
         argv,
         mode,
-        &original,
-        &emitted,
+        in_tokens + err_tokens,
+        out_tokens + err_tokens,
         code,
-        &cfg.tokenizer,
         run.as_ref().map(|r| r.id.as_str()),
     );
     Ok(code)
@@ -167,23 +170,20 @@ fn run_with_adapter(
             }
             let extra_out = passthrough_stdout.unwrap_or_default();
             let extra_err = passthrough_stderr.unwrap_or_default();
-            let original = format!("{}{}", captured.stdout, captured.stderr);
-            let emitted = format!("{}{}{}", out, extra_out, extra_err);
+            let tok = cfg.tokenizer.as_str();
+            let in_tokens = stats::estimate_tokens(&captured.stdout, tok)
+                + stats::estimate_tokens(&captured.stderr, tok);
+            let emitted_tokens = stats::estimate_tokens(&out, tok)
+                + stats::estimate_tokens(&extra_out, tok)
+                + stats::estimate_tokens(&extra_err, tok);
+            let run_id = run.as_ref().map(|r| r.id.as_str());
             // Net-savings guard, same rule as the ladder path: a report that
             // costs more tokens than the raw output (tiny suites, `-q` runs)
             // is replaced by the original streams, byte-identical.
-            if !pays_for_itself(&emitted, &original, &cfg.tokenizer) {
+            if !pays_for_itself(emitted_tokens, in_tokens) {
                 print!("{}", captured.stdout);
                 eprint!("{}", captured.stderr);
-                stats::record_call(
-                    argv,
-                    "passthrough",
-                    &original,
-                    &original,
-                    code,
-                    &cfg.tokenizer,
-                    run.as_ref().map(|r| r.id.as_str()),
-                );
+                stats::record_counts(argv, "passthrough", in_tokens, in_tokens, code, run_id);
                 return Ok(code);
             }
             emit(&out, "");
@@ -191,14 +191,13 @@ fn run_with_adapter(
                 print!("{extra_out}");
             }
             eprint!("{extra_err}");
-            stats::record_call(
+            stats::record_counts(
                 argv,
                 adapter.name(),
-                &original,
-                &emitted,
+                in_tokens,
+                emitted_tokens,
                 code,
-                &cfg.tokenizer,
-                run.as_ref().map(|r| r.id.as_str()),
+                run_id,
             );
             Ok(code)
         }
@@ -245,8 +244,8 @@ fn not_found_or_err(e: anyhow::Error, argv: &[String]) -> Result<i32> {
 
 /// The net-savings guard: a candidate rendering must beat the original's
 /// token count, or the original is emitted byte-identically.
-pub fn pays_for_itself(candidate: &str, original: &str, tokenizer: &str) -> bool {
-    stats::estimate_tokens(candidate, tokenizer) < stats::estimate_tokens(original, tokenizer)
+pub fn pays_for_itself(candidate_tokens: usize, original_tokens: usize) -> bool {
+    candidate_tokens < original_tokens
 }
 
 fn emit(out: &str, err: &str) {
@@ -306,13 +305,9 @@ mod tests {
 
     #[test]
     fn guard_rejects_candidates_that_do_not_shrink() {
-        let original = "a much longer original output line\n".repeat(20);
-        assert!(pays_for_itself("ok", &original, "approx"));
-        assert!(!pays_for_itself(&"x".repeat(400), "short", "approx"));
-        assert!(
-            !pays_for_itself("same", "same", "approx"),
-            "equal is not a win"
-        );
+        assert!(pays_for_itself(10, 100));
+        assert!(!pays_for_itself(100, 10));
+        assert!(!pays_for_itself(50, 50), "equal is not a win");
     }
 
     #[test]

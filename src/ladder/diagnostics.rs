@@ -29,6 +29,14 @@ fn rustc_arrow_pat() -> &'static Regex {
     PAT.get_or_init(|| Regex::new(r"^\s*-->\s+(?P<loc>\S+:\d+(?::\d+)?)\s*$").unwrap())
 }
 
+/// True for a line the extractor would treat as a compiler diagnostic
+/// (single-line gcc/clang shape or a rustc `error[E…]:` header). Used by
+/// `collapse_near_dups` so three same-message diagnostics that differ only
+/// by line number are never templated into one before extraction sees them.
+pub fn is_diagnostic_line(line: &str) -> bool {
+    gcc_pat().is_match(line) || rustc_header_pat().is_match(line)
+}
+
 struct Diag {
     loc: String,
     sev: String,
@@ -42,6 +50,7 @@ struct Diag {
 /// are elided: the aggressive tier is lossy and raw_log keeps them.
 /// No-op below MIN_DIAGNOSTICS total.
 pub fn extract_diagnostics(text: &str) -> String {
+    let sep = super::safe::line_sep(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut diags: Vec<Diag> = Vec::new();
     let mut rest: Vec<&str> = Vec::new();
@@ -92,11 +101,11 @@ pub fn extract_diagnostics(text: &str) -> String {
         .map(|d| json!({ "loc": d.loc, "severity": d.sev, "msg": d.msg }))
         .collect();
     let table = crate::toon::encode(&json!({ "diagnostics": rows }));
-    let body = rest.join("\n");
+    let body = rest.join(sep);
     if body.trim().is_empty() {
         table
     } else {
-        format!("{body}\n{table}")
+        format!("{body}{sep}{table}")
     }
 }
 

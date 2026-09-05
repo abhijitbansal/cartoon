@@ -8,6 +8,11 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Manifest {
     must_survive: Vec<String>,
+    /// Lines the SAFE tier must keep verbatim but the (lossy, disclosed)
+    /// aggressive tier may fold — e.g. rows of a table that differ only by
+    /// numbers, which near-dup templating legitimately collapses.
+    #[serde(default)]
+    must_survive_safe: Vec<String>,
     min_reduction_safe: f64,
     min_reduction_aggressive: f64,
 }
@@ -42,6 +47,14 @@ fn corpus_signal_retention_and_token_floor() {
             let out = compress(&log, level);
             for line in &manifest.must_survive {
                 assert!(out.contains(line), "{name}@{level:?}: signal lost: {line}");
+            }
+            if level == CompressLevel::Safe {
+                for line in &manifest.must_survive_safe {
+                    assert!(
+                        out.contains(line),
+                        "{name}@Safe: non-lossy tier lost: {line}"
+                    );
+                }
             }
             let r = reduction(&log, &out);
             eprintln!("{name}@{level:?}: reduction {r:.3} (floor {floor:.3})");

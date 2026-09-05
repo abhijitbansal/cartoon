@@ -1,0 +1,5 @@
+# A traceback whose only error marker is the exception name glued to the
+# message (`KeyError: 'email'`). The aggressive window must anchor on it.
+must_survive = ["KeyError: 'email'", "handlers/user.py"]
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.60
