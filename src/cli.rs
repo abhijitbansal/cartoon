@@ -8,6 +8,8 @@ use clap::Parser;
     after_help = "Subcommands:
   stats [--since <7d|24h|30m>]               tokens saved, per adapter
   adapters                                   list built-in adapters
+  doctor                                     health report: hook, config,
+                                             allowlist gaps, ledger damage
   init                                        scan for wrapper scripts (e.g.
                                              build.sh) and suggest a
                                              .cartoon.toml wrap_scripts pin
@@ -36,8 +38,8 @@ Non-adapter output compresses through the safe tier by default (ANSI,
 progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
-`stats`, `adapters`, `init`, `logs`, `learn`, `hook`, `shim`, `instructions`, \
-and `ingest` are reserved words; to wrap a binary literally named `stats`, \
+`stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, `shim`, \
+`instructions`, and `ingest` are reserved words; to wrap a binary literally named `stats`, \
 use: cartoon env stats"
 )]
 pub struct Cli {
@@ -66,9 +68,21 @@ pub struct Cli {
 
     /// Wrap a shell command string (like sh -c). Simple commands are
     /// adapter-detected; strings with shell operators run via the shell
-    /// and compress through the generic ladder.
+    /// and compress through the generic ladder. `<adapter cmd> | head|tail|
+    /// grep …` runs the adapter and drops the filter (disclosed).
     #[arg(short = 'c', long = "shell", value_name = "STRING")]
     pub shell: Option<String>,
+
+    /// JUnit XML file (or directory of them) the command writes; rendered
+    /// as a test report after the run. Works for any runner (gradle, mvn,
+    /// dotnet --logger junit, phpunit --log-junit, …).
+    #[arg(long, value_name = "PATH")]
+    pub junit: Option<String>,
+
+    /// Hard ceiling on emitted tokens: head + tail kept, middle replaced by
+    /// one disclosed marker. Also: CARTOON_MAX_TOKENS env, `max_tokens` config.
+    #[arg(long, value_name = "N")]
+    pub max_tokens: Option<usize>,
 
     /// Command to wrap plus its args (or: stats | adapters)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -84,7 +98,13 @@ pub enum Mode {
         raw: bool,
         tags: Vec<String>,
         fast: bool,
+        junit: Option<String>,
+        max_tokens: Option<usize>,
+        /// A pure output filter (`tail -5`) dropped from a `-c` pipeline
+        /// because the adapter report already shrinks the output.
+        dropped_filter: Option<String>,
     },
+    Doctor,
     Stats {
         since: Option<String>,
     },
@@ -147,26 +167,34 @@ pub enum StreamSel {
 /// them so adapters still see the real argv0 (`xcodebuild test -destination
 /// 'platform=iOS Simulator,name=iPhone 17'` must reach the xcodebuild adapter).
 fn needs_shell(s: &str) -> bool {
-    let has_operator = s.chars().any(|c| {
-        matches!(
-            c,
-            '|' | '&'
-                | ';'
-                | '<'
-                | '>'
-                | '('
-                | ')'
-                | '$'
-                | '`'
-                | '\n'
-                | '*'
-                | '?'
-                | '['
-                | '{'
-                | '~'
-        )
-    });
-    has_operator || leading_env_assignment(s)
+    has_unquoted_operator(s) || leading_env_assignment(s)
+}
+
+/// Shell metacharacters count only outside quotes: `pytest -k 'a|b'` is a
+/// plain argument, `pytest | tail` is a pipeline.
+fn has_unquoted_operator(s: &str) -> bool {
+    let (mut in_single, mut in_double, mut escaped) = (false, false, false);
+    for c in s.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if !in_single => escaped = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '\n' => return true,
+            // `$` and backtick expand inside double quotes too.
+            '$' | '`' if !in_single => return true,
+            '|' | '&' | ';' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | '{' | '~'
+                if !in_single && !in_double =>
+            {
+                return true
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn leading_env_assignment(s: &str) -> bool {
@@ -194,6 +222,44 @@ pub fn shell_argv(s: &str) -> Vec<String> {
         Ok(argv) if !argv.is_empty() => argv,
         _ => via_shell(s),
     }
+}
+
+/// Output filters whose only job is to shrink text — which the adapter
+/// report already does better. `tee`, `xargs`, `sort` and friends change or
+/// redirect the data and keep today's `sh -c` behavior.
+const PURE_FILTERS: &[&str] = &["head", "tail", "grep", "wc", "cat", "less", "more"];
+
+/// `<adapter cmd> | <pure output filter>` → run the adapter and drop the
+/// filter (disclosed in the report as `pipe_filter_dropped`). Anything else
+/// goes through `shell_argv` unchanged. Closes the `cartoon -c 'pytest | tail'`
+/// gap (issue #12).
+pub fn shell_argv_with_filter(s: &str) -> (Vec<String>, Option<String>) {
+    if let Ok(tokens) = shell_words::split(s) {
+        let bars: Vec<usize> = tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| *t == "|")
+            .map(|(i, _)| i)
+            .collect();
+        if let [i] = bars[..] {
+            let (lhs, rhs) = (&tokens[..i], &tokens[i + 1..]);
+            let lhs_str = shell_words::join(lhs.iter().map(String::as_str));
+            let filter_ok = rhs
+                .first()
+                .is_some_and(|f| PURE_FILTERS.contains(&f.as_str()));
+            if !lhs.is_empty()
+                && filter_ok
+                && !needs_shell(&lhs_str)
+                && crate::adapters::find_adapter(lhs).is_some()
+            {
+                return (
+                    lhs.to_vec(),
+                    Some(shell_words::join(rhs.iter().map(String::as_str))),
+                );
+            }
+        }
+    }
+    (shell_argv(s), None)
 }
 
 /// For a shell-string argv (`sh -c <string>` / `cmd /C <string>`), the first
@@ -224,7 +290,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         if !cli.command.is_empty() {
             anyhow::bail!("-c/--shell takes the whole command as one string; drop the extra args");
         }
-        let argv = shell_argv(&s);
+        let (argv, dropped_filter) = shell_argv_with_filter(&s);
         if argv.is_empty() {
             anyhow::bail!("-c/--shell got an empty command string");
         }
@@ -235,6 +301,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             raw: cli.raw,
             tags: cli.tags,
             fast: cli.fast,
+            junit: cli.junit,
+            max_tokens: cli.max_tokens,
+            dropped_filter,
         });
     }
     if cli.command.is_empty() {
@@ -245,6 +314,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             since: parse_since(&cli.command[1..])?,
         }),
         "adapters" => Ok(Mode::Adapters),
+        "doctor" => Ok(Mode::Doctor),
         "init" => Ok(Mode::Init),
         "logs" => Ok(Mode::Logs(parse_logs(&cli.command[1..])?)),
         "learn" => Ok(Mode::Learn {
@@ -280,6 +350,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             raw: cli.raw,
             tags: cli.tags,
             fast: cli.fast,
+            junit: cli.junit,
+            max_tokens: cli.max_tokens,
+            dropped_filter: None,
         }),
     }
 }
@@ -387,6 +460,17 @@ mod tests {
     }
 
     #[test]
+    fn operators_inside_quotes_are_arguments() {
+        assert_eq!(shell_argv("pytest -k 'a|b'"), sv(&["pytest", "-k", "a|b"]));
+        assert_eq!(
+            shell_argv(r#"grep -E "x|y" f"#),
+            sv(&["grep", "-E", "x|y", "f"])
+        );
+        // Expansion still happens inside double quotes: shell it is.
+        assert_eq!(&shell_argv(r#"echo "$HOME""#)[..2], &sv(&["sh", "-c"])[..]);
+    }
+
+    #[test]
     fn real_shell_syntax_still_forces_sh_c() {
         for s in [
             "pytest | tail -5",
@@ -417,6 +501,58 @@ mod tests {
     }
 
     #[test]
+    fn adapter_command_piped_to_a_pure_filter_drops_the_filter() {
+        let (argv, dropped) = shell_argv_with_filter("pytest -v | tail -5");
+        assert_eq!(argv, sv(&["pytest", "-v"]));
+        assert_eq!(dropped.as_deref(), Some("tail -5"));
+        let (argv, dropped) = shell_argv_with_filter("npx jest src/ | grep -i fail");
+        assert_eq!(argv, sv(&["npx", "jest", "src/"]));
+        assert_eq!(dropped.as_deref(), Some("grep -i fail"));
+    }
+
+    #[test]
+    fn pipes_that_are_not_pure_filters_or_not_adapters_keep_the_shell() {
+        assert_eq!(
+            &shell_argv_with_filter("pytest | tee out.txt").0[..2],
+            &sv(&["sh", "-c"])[..]
+        );
+        assert_eq!(
+            &shell_argv_with_filter("echo hi | tail -1").0[..2],
+            &sv(&["sh", "-c"])[..]
+        );
+        assert_eq!(
+            &shell_argv_with_filter("pytest | head | tail").0[..2],
+            &sv(&["sh", "-c"])[..]
+        );
+        // A pipe inside quotes is an argument, not a pipeline.
+        assert_eq!(
+            shell_argv_with_filter("pytest -k 'a|b'").0,
+            sv(&["pytest", "-k", "a|b"])
+        );
+    }
+
+    #[test]
+    fn doctor_subcommand() {
+        assert_eq!(mode(&["cartoon", "doctor"]), Mode::Doctor);
+    }
+
+    #[test]
+    fn junit_and_max_tokens_flags_parse() {
+        let m = mode(&[
+            "cartoon",
+            "--junit",
+            "build/test-results",
+            "--max-tokens",
+            "1500",
+            "gradle",
+            "test",
+        ]);
+        assert!(
+            matches!(m, Mode::Wrap { junit: Some(ref j), max_tokens: Some(1500), .. } if j == "build/test-results")
+        );
+    }
+
+    #[test]
     fn wrap_mode_passes_args_verbatim() {
         let m = mode(&["cartoon", "pytest", "-q", "--maxfail=1"]);
         assert_eq!(
@@ -427,7 +563,10 @@ mod tests {
                 heuristic: false,
                 raw: false,
                 tags: vec![],
-                fast: false
+                fast: false,
+                junit: None,
+                max_tokens: None,
+                dropped_filter: None
             }
         );
     }
@@ -492,7 +631,10 @@ mod tests {
                 heuristic: false,
                 raw: false,
                 tags: vec!["api".into(), "ci".into()],
-                fast: false
+                fast: false,
+                junit: None,
+                max_tokens: None,
+                dropped_filter: None
             }
         );
     }

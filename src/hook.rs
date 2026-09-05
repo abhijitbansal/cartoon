@@ -984,22 +984,34 @@ fn claude_entry_present(path: &Path) -> bool {
 
 // --- status across every surface ---
 
-fn status() -> Result<i32> {
+/// (path, surface, installed) for every hook location, user and project
+/// scope. Shared by `hook status` and `cartoon doctor`.
+pub fn status_rows() -> Vec<(String, &'static str, bool)> {
+    let mut rows = Vec::new();
     for project in [false, true] {
-        let path = claude_settings_path(project)?;
-        println!(
-            "{} (Claude Code / VS Code Copilot Chat): {}",
-            path.display(),
-            yes_no(claude_entry_present(&path))
-        );
+        if let Ok(path) = claude_settings_path(project) {
+            rows.push((
+                path.display().to_string(),
+                "Claude Code / VS Code Copilot Chat",
+                claude_entry_present(&path),
+            ));
+        }
     }
     for project in [false, true] {
-        let path = copilot_path(project)?;
-        println!(
-            "{} (Copilot CLI): {}",
-            path.display(),
-            yes_no(is_our_copilot_file(&path))
-        );
+        if let Ok(path) = copilot_path(project) {
+            rows.push((
+                path.display().to_string(),
+                "Copilot CLI",
+                is_our_copilot_file(&path),
+            ));
+        }
+    }
+    rows
+}
+
+fn status() -> Result<i32> {
+    for (path, surface, installed) in status_rows() {
+        println!("{path} ({surface}): {}", yes_no(installed));
     }
     Ok(0)
 }

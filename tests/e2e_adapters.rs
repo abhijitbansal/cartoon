@@ -160,3 +160,23 @@ fn tiny_pytest_run_passes_through_when_report_would_be_bigger() {
         "report would not pay for itself: {stdout}"
     );
 }
+
+#[test]
+fn shell_string_pipe_to_tail_still_gets_the_adapter_report() {
+    // Issue #12: `cartoon -c 'pytest -v | tail -5'` used to print the raw
+    // tail. The pure filter is dropped (disclosed) and the adapter fires.
+    if !have("pytest") {
+        eprintln!("SKIP: pytest not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cmd = format!("pytest -v {} | tail -5", fixture("pyproj"));
+    let assert = cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .args(["-c", &cmd])
+        .assert()
+        .code(1);
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(out.contains("runner: pytest"), "got:\n{out}");
+    assert!(out.contains("pipe_filter_dropped: tail -5"), "got:\n{out}");
+}

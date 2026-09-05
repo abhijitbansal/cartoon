@@ -1,8 +1,10 @@
 pub mod adapters;
 pub mod app;
 pub mod archive;
+pub mod budget;
 pub mod cli;
 pub mod config;
+pub mod doctor;
 pub mod fallback;
 pub mod hook;
 pub mod init;
@@ -13,5 +15,6 @@ pub mod logs_cmd;
 pub mod paths;
 pub mod runner;
 pub mod shim;
+pub mod sniff;
 pub mod stats;
 pub mod toon;

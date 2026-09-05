@@ -203,7 +203,58 @@ cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
 cartoon logs grep ERROR --last # search a raw log instead of re-reading it
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
+cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
+cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
+cartoon -c 'pytest -v | tail -5'     # pure output filters are dropped; the report replaces them
+cartoon doctor                 # health report: hook, config, allowlist gaps, ledger damage
 ```
+
+### Pipes inside `-c`
+
+Agents write `pytest -v | tail -5` because they want less output — which is
+cartoon's whole job. When the string is `<adapter-detected command> | <pure
+output filter>` (`head`, `tail`, `grep`, `wc`, `cat`, `less`, `more`),
+cartoon runs the adapter and drops the filter, disclosing it as
+`pipe_filter_dropped: "tail -5"` in the report. Anything else (`tee`,
+`xargs`, `sort`, redirections, two pipes, a non-adapter command) keeps the
+plain `sh -c` behavior. The hook still never auto-approves a piped compound;
+this applies only when `cartoon -c` is invoked explicitly.
+
+### `--junit`: any runner that writes JUnit XML
+
+`cartoon --junit <file-or-dir> <cmd>` (or `[command.<cmd>] junit = "path"`
+in config) renders the XML the command wrote as the same test report pytest
+gets — gradle, maven, `dotnet test --logger junit`, phpunit `--log-junit`,
+anything. A directory means every `*.xml` inside, merged. A file older than
+the run is stale (the build failed before tests ran) and is ignored with a
+warning so a green report never hides a red build.
+
+### `--max-tokens`: a hard ceiling
+
+`cartoon --max-tokens N <cmd>` (or `CARTOON_MAX_TOKENS=N`, or `max_tokens`
+in config) guarantees no result exceeds N tokens: the head and tail are kept
+in whole lines and the middle is replaced by one marker that is itself a
+ready-to-run `cartoon logs grep` command. Opt-in, because with a ceiling set
+even passthrough output may be cut — that is the point. The raw log is
+archived as always.
+
+### Content sniffing
+
+Output that arrives without a matching adapter — a `./build.sh` that runs
+xcodebuild internally, fastlane's gym log, a runner printing JUnit XML to
+stdout — is recognized by shape: xcodebuild build/archive banners get the
+diagnostics table, XCTest's `Test Case … passed/failed` protocol gets the
+test report, JUnit XML gets the test report. Parse-only, never changes the
+command, and the net-savings guard applies as always.
+
+### `cartoon doctor`
+
+One report for the ways an integration quietly stops saving tokens: hook
+installed or not per surface, whether the global and project config parse,
+`wrap_scripts` entries that do not exist on disk, allowlisted tools that
+have no adapter (ladder compression only), and ledger health (malformed
+lines, negative-saved runs, the biggest uncompressed commands). Paste it into
+a bug report.
 
 Failing test run, before (pytest, ~4800 tokens) vs after (~300 tokens):
 
@@ -299,12 +350,16 @@ tokenizer = "o200k"  # or "approx" (bytes/4) for zero-cost estimates
 trace_lines = 20     # per-failure traceback cap
 keep_runs = 50       # archived raw logs to keep (0 disables)
 max_archive_mb = 50  # max total archive size
+# max_tokens = 1500  # hard output ceiling (see --max-tokens); unset = none
 
 [compress]
 level = "safe"       # default for non-adapter output: safe | aggressive
 
 [command.docker]
 level = "aggressive" # per-command pin; CLI --compress wins over config
+
+[command.gradle]
+junit = "build/test-results/test"   # render the JUnit XML gradle writes
 ```
 
 Compression precedence: `--compress` flag > `--heuristic` (deprecated alias

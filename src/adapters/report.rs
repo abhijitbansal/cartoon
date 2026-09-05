@@ -19,6 +19,22 @@ pub struct Failure {
     pub trace: Vec<String>,
 }
 
+/// Sum several reports (one JUnit file per module, gradle-style) into one.
+/// Runner label comes from the first. None for an empty list.
+pub fn merge(reports: Vec<TestReport>) -> Option<TestReport> {
+    let mut iter = reports.into_iter();
+    let mut acc = iter.next()?;
+    for r in iter {
+        acc.total += r.total;
+        acc.passed += r.passed;
+        acc.failed += r.failed;
+        acc.skipped += r.skipped;
+        acc.duration_s += r.duration_s;
+        acc.failures.extend(r.failures);
+    }
+    Some(acc)
+}
+
 /// Asymmetric rendering: passes cost one summary block; failures keep
 /// id/loc/msg rows plus trimmed traces. `fast_note` discloses injected
 /// acceleration args (e.g. "-n auto") right after the runner line.
@@ -145,6 +161,32 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn merge_sums_reports() {
+        let a = TestReport {
+            runner: "junit",
+            total: 2,
+            passed: 1,
+            failed: 1,
+            skipped: 0,
+            duration_s: 1.0,
+            failures: vec![],
+        };
+        let b = TestReport {
+            runner: "junit",
+            total: 3,
+            passed: 3,
+            failed: 0,
+            skipped: 0,
+            duration_s: 0.5,
+            failures: vec![],
+        };
+        let m = merge(vec![a, b]).unwrap();
+        assert_eq!((m.total, m.passed, m.failed), (5, 4, 1));
+        assert!((m.duration_s - 1.5).abs() < 1e-9);
+        assert!(merge(vec![]).is_none());
     }
 
     #[test]

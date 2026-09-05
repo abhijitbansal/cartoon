@@ -72,3 +72,30 @@ fn ingest_missing_file_exits_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("cannot read"), "{stderr}");
 }
+
+#[test]
+fn ingest_sniffs_xcodebuild_shaped_wrapper_script_logs() {
+    // A ./build.sh log: no argv0 to match, but the content is xcodebuild's.
+    let mut log = String::from("Build settings from command line:\n    SDKROOT = iphoneos\n");
+    for i in 0..80 {
+        log.push_str(&format!(
+            "CompileSwift normal arm64 /Users/d/App/Sources/File{i}.swift\n"
+        ));
+    }
+    log.push_str("/Users/d/App/Sources/Auth.swift:18:9: error: cannot find 'tokn' in scope\n        tokn = refresh()\n        ^~~~\n** BUILD FAILED **\n");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("build.log");
+    std::fs::write(&path, log).unwrap();
+    let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
+        .args(["ingest", path.to_str().unwrap()])
+        .output()
+        .expect("run cartoon");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("runner: xcodebuild-build"),
+        "sniffed: {stdout}"
+    );
+    assert!(stdout.contains("Auth.swift:18:9"), "{stdout}");
+    assert!(stdout.contains("errors: 1"), "{stdout}");
+}

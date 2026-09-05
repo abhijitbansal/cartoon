@@ -11,6 +11,9 @@ pub struct CompressCfg {
 #[serde(default)]
 pub struct CommandCfg {
     pub level: Option<String>,
+    /// JUnit XML file (or directory of them) the command writes; rendered as
+    /// a test report after the run (`--junit` on the CLI does the same).
+    pub junit: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +26,9 @@ pub struct Config {
     pub max_archive_mb: u64,
     pub compress: CompressCfg,
     pub command: HashMap<String, CommandCfg>,
+    /// Hard ceiling on emitted tokens (`--max-tokens` / `CARTOON_MAX_TOKENS`
+    /// override). None = no ceiling.
+    pub max_tokens: Option<usize>,
     /// Project-scoped scripts (e.g. `./build.sh`) the hook should always
     /// route through cartoon, matched by argv0 basename. Populated from
     /// a global and/or project-local config; see `merge`.
@@ -39,6 +45,7 @@ impl Default for Config {
             max_archive_mb: 50,
             compress: CompressCfg::default(),
             command: HashMap::new(),
+            max_tokens: None,
             wrap_scripts: Vec::new(),
         }
     }
@@ -126,6 +133,13 @@ pub fn load() -> Config {
         Ok(s) => parse_or_default(&s, &path.display().to_string()),
         Err(_) => Config::default(), // no config file is normal
     }
+}
+
+/// Parse without falling back — for `cartoon doctor`, which wants the error.
+pub fn check(s: &str) -> Result<(), String> {
+    toml::from_str::<Config>(s)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn parse_or_default(s: &str, path: &str) -> Config {

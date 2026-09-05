@@ -1,41 +1,110 @@
 use crate::adapters::{self, ParseOutcome};
 use crate::ladder::CompressLevel;
-use crate::{archive, config::Config, fallback, runner, stats, toon};
+use crate::{archive, budget, config::Config, fallback, runner, sniff, stats, toon};
 use anyhow::Result;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 
-pub fn run_wrap(
-    argv: &[String],
-    level: CompressLevel,
-    raw: bool,
-    tags: &[String],
-    fast: bool,
-    cfg: &Config,
-) -> Result<i32> {
+/// Per-run options for `run_wrap` (everything except the command itself).
+pub struct WrapOpts {
+    pub level: CompressLevel,
+    pub raw: bool,
+    pub tags: Vec<String>,
+    pub fast: bool,
+    /// JUnit XML file or directory to render as a test report after the run.
+    pub junit: Option<PathBuf>,
+    /// A pure output filter dropped from a `-c` pipeline (disclosed).
+    pub dropped_filter: Option<String>,
+}
+
+pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
     // Adapter path: detect first, because prepare() must extend argv.
-    if !raw {
+    if !opts.raw {
         if let Some(adapter) = adapters::find_adapter(argv) {
-            return run_with_adapter(adapter.as_ref(), argv, tags, fast, cfg);
+            return run_with_adapter(adapter.as_ref(), argv, opts, cfg);
         }
     }
+    let started = std::time::SystemTime::now();
     let captured = match runner::run(argv) {
         Ok(c) => c,
         Err(e) => return not_found_or_err(e, argv),
     };
     let code = runner::exit_code(&captured.status);
-    if raw {
+    if opts.raw {
         // Escape hatch: byte-identical output, no footer, no stats — but archived.
-        archive::record(argv, "raw", &captured, code, tags, cfg);
+        archive::record(argv, "raw", &captured, code, &opts.tags, cfg);
         print!("{}", captured.stdout);
         eprint!("{}", captured.stderr);
         return Ok(code);
     }
-    transform_emit_record(argv, &captured, code, level, tags, cfg)
+    if let Some(path) = &opts.junit {
+        if let Some(rendered) = harvest_junit(path, &argv[0], started, cfg) {
+            return emit_candidate(argv, &captured, code, (rendered, "junit"), &opts.tags, cfg);
+        }
+    }
+    transform_emit_record(argv, &captured, code, opts.level, &opts.tags, cfg)
 }
 
-/// Shared tail of the non-adapter flow: transform under the ladder, apply
-/// the net-savings guard (footer included), archive, emit, record stats.
-/// Used by wrapped runs and by `ingest` (existing logs, synthetic capture).
+/// `--junit <path>` / `[command.X] junit`: render the JUnit XML the command
+/// wrote as a test report. A directory means every `*.xml` in it (gradle
+/// writes one per class), merged. A file older than this run is stale (the
+/// command failed before writing it) and is ignored with a warning.
+fn harvest_junit(
+    path: &Path,
+    runner_name: &str,
+    started: std::time::SystemTime,
+    cfg: &Config,
+) -> Option<String> {
+    let files: Vec<PathBuf> = if path.is_dir() {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(path)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("xml"))
+            .collect();
+        v.sort();
+        v
+    } else if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        eprintln!(
+            "cartoon: --junit path {} not found; using the compression ladder instead",
+            path.display()
+        );
+        return None;
+    };
+    let fresh: Vec<&PathBuf> = files
+        .iter()
+        .filter(|f| {
+            std::fs::metadata(f)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t >= started)
+        })
+        .collect();
+    if fresh.is_empty() {
+        eprintln!(
+            "cartoon: no JUnit file under {} was written by this run (stale results ignored); using the compression ladder instead",
+            path.display()
+        );
+        return None;
+    }
+    // The report carries the wrapped command's name as its runner label.
+    let runner: &'static str = Box::leak(runner_name.to_string().into_boxed_str());
+    let reports: Vec<_> = fresh
+        .iter()
+        .filter_map(|f| {
+            let xml = std::fs::read_to_string(f).ok()?;
+            adapters::pytest::parse_junit_named(&xml, runner)
+                .map_err(|e| eprintln!("cartoon: skipping {}: {e}", f.display()))
+                .ok()
+        })
+        .collect();
+    let merged = adapters::report::merge(reports)?;
+    Some(adapters::report::render(&merged, cfg.trace_lines, None))
+}
+
+/// Shared tail of the non-adapter flow: content-sniff or transform under the
+/// ladder, then `emit_candidate`. Used by wrapped runs and by `ingest`.
 fn transform_emit_record(
     argv: &[String],
     captured: &runner::Captured,
@@ -44,10 +113,28 @@ fn transform_emit_record(
     tags: &[String],
     cfg: &Config,
 ) -> Result<i32> {
+    // Output that arrived without a matching argv0 (a wrapper script running
+    // xcodebuild, JUnit XML on stdout) still gets a structured rendering.
+    let candidate = match sniff::sniff(&captured.stdout, &captured.stderr, code) {
+        Some(c) => c,
+        None => transform(&captured.stdout, level),
+    };
+    emit_candidate(argv, captured, code, candidate, tags, cfg)
+}
+
+/// Apply the net-savings guard (footer included), archive, emit under the
+/// optional token ceiling, record stats.
+fn emit_candidate(
+    argv: &[String],
+    captured: &runner::Captured,
+    code: i32,
+    (candidate, tmode): (String, &'static str),
+    tags: &[String],
+    cfg: &Config,
+) -> Result<i32> {
     // Reserve the archive slot first so the raw_log footer (part of the
     // emitted output) can be counted in the net-savings guard below.
     let reserved = archive::reserve(cfg);
-    let (candidate, tmode) = transform(&captured.stdout, level);
     // Tokenize each stream exactly once; the guard and the stats record
     // share these counts (a 1M-token log used to be tokenized four times).
     let tok = cfg.tokenizer.as_str();
@@ -77,8 +164,11 @@ fn transform_emit_record(
     };
     let run =
         reserved.and_then(|r| archive::write_reserved(r, argv, mode, captured, code, tags, cfg));
+    let run_id = run.as_ref().map(|r| r.id.as_str());
+    let (out, out_tokens) = capped(out, out_tokens, cfg, run_id);
     if mode == "passthrough" {
-        // Byte-identical guarantee: no trailing-newline normalization.
+        // Byte-identical guarantee (unless a --max-tokens ceiling is set):
+        // no trailing-newline normalization.
         print!("{out}");
         eprint!("{}", captured.stderr);
     } else {
@@ -90,9 +180,22 @@ fn transform_emit_record(
         in_tokens + err_tokens,
         out_tokens + err_tokens,
         code,
-        run.as_ref().map(|r| r.id.as_str()),
+        run_id,
     );
     Ok(code)
+}
+
+/// Enforce `max_tokens` when set; returns the (possibly cut) text and its
+/// token count so stats stay honest. Identity when no ceiling is configured.
+fn capped(out: String, out_tokens: usize, cfg: &Config, run_id: Option<&str>) -> (String, usize) {
+    match cfg.max_tokens {
+        Some(max) if out_tokens > max => {
+            let cut = budget::cap_tokens(&out, max, &cfg.tokenizer, run_id);
+            let n = stats::estimate_tokens(&cut, &cfg.tokenizer);
+            (cut, n)
+        }
+        _ => (out, out_tokens),
+    }
 }
 
 /// `cartoon ingest (<file> | -)` — run an EXISTING log through the same
@@ -123,10 +226,11 @@ pub fn run_ingest(
 fn run_with_adapter(
     adapter: &dyn adapters::Adapter,
     argv: &[String],
-    tags: &[String],
-    fast: bool,
+    opts: &WrapOpts,
     cfg: &Config,
 ) -> Result<i32> {
+    let tags = &opts.tags;
+    let fast = opts.fast;
     let prepared = adapter.prepare(argv.to_vec());
     let fast_args = if fast {
         adapter.fast_args()
@@ -168,6 +272,14 @@ fn run_with_adapter(
                     toon::encode(&json!({ "raw_log": r.dir.display().to_string() }))
                 ));
             }
+            if let Some(f) = &opts.dropped_filter {
+                // `cartoon -c 'pytest | tail -5'`: the report replaces the
+                // filter's job; say so rather than silently ignoring it.
+                out.push_str(&format!(
+                    "\n{}",
+                    toon::encode(&json!({ "pipe_filter_dropped": f }))
+                ));
+            }
             let extra_out = passthrough_stdout.unwrap_or_default();
             let extra_err = passthrough_stderr.unwrap_or_default();
             let tok = cfg.tokenizer.as_str();
@@ -181,24 +293,19 @@ fn run_with_adapter(
             // costs more tokens than the raw output (tiny suites, `-q` runs)
             // is replaced by the original streams, byte-identical.
             if !pays_for_itself(emitted_tokens, in_tokens) {
-                print!("{}", captured.stdout);
+                let (raw_out, n) = capped(captured.stdout.clone(), in_tokens, cfg, run_id);
+                print!("{raw_out}");
                 eprint!("{}", captured.stderr);
-                stats::record_counts(argv, "passthrough", in_tokens, in_tokens, code, run_id);
+                stats::record_counts(argv, "passthrough", in_tokens, n, code, run_id);
                 return Ok(code);
             }
+            let (out, report_tokens) = capped(out, emitted_tokens, cfg, run_id);
             emit(&out, "");
             if !extra_out.is_empty() {
                 print!("{extra_out}");
             }
             eprint!("{extra_err}");
-            stats::record_counts(
-                argv,
-                adapter.name(),
-                in_tokens,
-                emitted_tokens,
-                code,
-                run_id,
-            );
+            stats::record_counts(argv, adapter.name(), in_tokens, report_tokens, code, run_id);
             Ok(code)
         }
         Err(e) => {
