@@ -85,7 +85,7 @@ Artifacts are retained ~90 days; after that, rebuild from the tag.
 
 ## Release checklist
 
-1. CI green on main; `cargo test` locally.
+1. Local gate green on main: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (GitHub CI is disabled by decision — runner minutes cost; see CONTRIBUTING.md).
 2. Bump `Cargo.toml` version to match the tag, then
    `node scripts/sync-site-version.mjs` to update the site; commit both.
 3. Tag + push (TL;DR above); watch the run.
