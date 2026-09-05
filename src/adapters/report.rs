@@ -105,8 +105,10 @@ pub fn trim_trace(raw: &str) -> Vec<String> {
         if is_frame_header {
             skip_frame = NOISE.iter().any(|n| l.contains(n));
         }
-        let is_caret_line = !t.is_empty() && t.chars().all(|c| c == '^');
-        if !skip_frame && !t.is_empty() && !is_caret_line {
+        // Python 3.11+ marks the failing expression with `~~~~^^^^` runs.
+        let is_caret_line = !t.is_empty() && t.chars().all(|c| c == '^' || c == '~' || c == ' ');
+        let is_traceback_header = t == "Traceback (most recent call last):";
+        if !skip_frame && !t.is_empty() && !is_caret_line && !is_traceback_header {
             lines.push(t.to_string());
         }
     }
@@ -199,6 +201,15 @@ mod tests {
     fn zero_trace_lines_omits_traces_section() {
         let out = render(&sample(), 0, None);
         assert!(!out.contains("traces"));
+    }
+
+    #[test]
+    fn trim_trace_drops_tilde_caret_marker_lines_and_traceback_header() {
+        let raw = "Traceback (most recent call last):\n  File \"/p/t.py\", line 2, in f\n    g(x)\n    ~^^^\nValueError: bad\n";
+        assert_eq!(
+            trim_trace(raw),
+            vec!["File \"/p/t.py\", line 2, in f", "g(x)", "ValueError: bad"]
+        );
     }
 
     #[test]

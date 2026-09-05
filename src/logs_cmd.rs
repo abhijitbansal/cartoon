@@ -91,6 +91,15 @@ pub fn render_grep(
     out
 }
 
+/// `sh -c xcodebuild` instead of a bare `sh` for shell-string runs.
+fn display_cmd(argv: &[String]) -> String {
+    let head = argv.first().cloned().unwrap_or_default();
+    match crate::cli::inner_command(argv) {
+        Some(inner) => format!("{head} -c {inner}"),
+        None => head,
+    }
+}
+
 pub fn render_list(metas: &[RunMeta]) -> String {
     let rows: Vec<serde_json::Value> = metas
         .iter()
@@ -98,7 +107,7 @@ pub fn render_list(metas: &[RunMeta]) -> String {
             json!({
                 "id": m.id,
                 "ts": m.ts,
-                "cmd": m.argv.first().cloned().unwrap_or_default(),
+                "cmd": display_cmd(&m.argv),
                 "mode": m.mode,
                 "exit": m.exit,
                 "tags": m.tags.join(","),
@@ -154,6 +163,14 @@ mod tests {
         );
         assert!(out.contains("20260610-051203-ab12"));
         assert!(out.contains("\"api,ci\""));
+    }
+
+    #[test]
+    fn list_shows_inner_command_for_shell_strings() {
+        let mut m = meta("id2", "sh", &[]);
+        m.argv = vec!["sh".into(), "-c".into(), "xcodebuild test -scheme A".into()];
+        let out = render_list(&[m]);
+        assert!(out.contains("sh -c xcodebuild"), "got:\n{out}");
     }
 
     #[test]

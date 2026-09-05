@@ -408,6 +408,15 @@ pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(S
         }
         let first = *toks.get(i)?;
         let rest = &toks[i + 1..];
+        // `xcrun <tool>` only locates the Xcode toolchain binary; judge the tool.
+        let (first, rest) = if basename(first) == "xcrun" {
+            match rest.split_first() {
+                Some((f, r)) => (*f, r),
+                None => return None,
+            }
+        } else {
+            (first, rest)
+        };
         let base = basename(first);
         if STATE_BUILTINS.contains(&first) || STATE_BUILTINS.contains(&base) {
             return None;
@@ -1035,6 +1044,14 @@ mod tests {
         assert!(wrap_command("swiftlint").is_some());
         assert!(wrap_command("swiftlint --fix").is_none());
         assert!(wrap_command("swiftlint autocorrect").is_none());
+    }
+
+    #[test]
+    fn xcrun_prefixed_apple_tools_wrap() {
+        assert!(wrap_command("xcrun xcodebuild test -scheme A").is_some());
+        assert!(wrap_command("xcrun swift test").is_some());
+        assert!(wrap_command("xcrun simctl list").is_none());
+        assert!(wrap_command("xcrun").is_none());
     }
 
     #[test]

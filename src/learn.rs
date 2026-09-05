@@ -13,11 +13,46 @@ const MIN_AVG_TOKENS_IN: usize = 500;
 const UNCOMPRESSED_MODES: &[&str] = &["passthrough", "safe", "heuristic"];
 /// Same command failing this many times in a row is a loop worth breaking.
 const REPEAT_FAIL_RUN: usize = 3;
+/// argv0 values that mean "a shell ran a command string" — the interesting
+/// command is `inner_cmd`, and pinning the shell itself would be wrong.
+const SHELL_HEADS: &[&str] = &["sh", "bash", "zsh", "dash", "cmd"];
 
 pub fn run(since: Option<&str>) -> Result<i32> {
     let recs = crate::stats::read_records(since)?;
     println!("{}", render(&recs, since));
     Ok(0)
+}
+
+/// One `shell_string` suggestion per distinct inner command that reached the
+/// agent uncompressed through `sh -c`: the adapter never saw it because a
+/// pipe or shell operator forced the shell.
+fn shell_string_suggestions(recs: &[StatRecord], shell: &str, out: &mut Vec<Value>) {
+    let mut by_inner: Vec<(String, usize, usize)> = Vec::new();
+    for r in recs
+        .iter()
+        .filter(|r| r.cmd == shell && UNCOMPRESSED_MODES.contains(&r.adapter.as_str()))
+    {
+        let inner = r.inner_cmd.clone().unwrap_or_else(|| "(unknown)".into());
+        match by_inner.iter_mut().find(|(i, _, _)| *i == inner) {
+            Some(e) => {
+                e.1 += 1;
+                e.2 += r.tokens_in;
+            }
+            None => by_inner.push((inner, 1, r.tokens_in)),
+        }
+    }
+    by_inner.sort_by_key(|(_, _, t)| std::cmp::Reverse(*t));
+    for (inner, calls, tokens_in) in by_inner {
+        out.push(json!({
+            "kind": "shell_string",
+            "inner_cmd": inner,
+            "calls": calls,
+            "avg_tokens_in": tokens_in / calls.max(1),
+            "action": format!(
+                "`{inner}` ran through `{shell} -c` (a pipe or shell operator in the command string), so its adapter never fired. Run it without the pipe — cartoon already shrinks the output — or drop the operator."
+            ),
+        }));
+    }
 }
 
 struct CmdAgg {
@@ -55,6 +90,12 @@ pub fn render(recs: &[StatRecord], since: Option<&str>) -> String {
     aggs.sort_by_key(|a| std::cmp::Reverse(a.tokens_in));
     for a in &aggs {
         let avg = a.tokens_in / a.calls;
+        if SHELL_HEADS.contains(&a.cmd.as_str()) {
+            // A `[command.sh]` pin would apply to EVERY future shell-string
+            // run regardless of what is inside; explain the real cause instead.
+            shell_string_suggestions(recs, &a.cmd, &mut suggestions);
+            continue;
+        }
         suggestions.push(json!({
             "kind": "token_waster",
             "cmd": a.cmd,
@@ -127,7 +168,22 @@ mod tests {
             saved: 0,
             exit,
             run_id: None,
+            inner_cmd: None,
         }
+    }
+
+    #[test]
+    fn shell_string_runs_get_an_explanation_not_a_sh_pin() {
+        let mut recs: Vec<StatRecord> = (0..4)
+            .map(|_| rec("sh", "passthrough", 40_000, 0))
+            .collect();
+        for r in &mut recs {
+            r.inner_cmd = Some("xcodebuild".into());
+        }
+        let out = render(&recs, None);
+        assert!(!out.contains("[command.sh]"), "got:\n{out}");
+        assert!(out.contains("shell_string"), "got:\n{out}");
+        assert!(out.contains("xcodebuild"), "got:\n{out}");
     }
 
     #[test]

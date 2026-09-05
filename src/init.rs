@@ -1,11 +1,10 @@
 //! `cartoon init` — scan a repo root for wrapper scripts that call a known
 //! noisy dev-loop tool directly (`./build.sh` calling `xcodebuild`, etc.) and
-//! print a ready-to-paste `.cartoon.toml` snippet: a `wrap_scripts` entry
-//! plus the aggressive-tier pin each one needs — the hook alone only routes
-//! the command through cartoon, the default safe tier does not compress this
-//! kind of output (see README's "Project config" section for why both are
-//! required). Not recursive and content-sniffing only happens here, as a
-//! one-time suggestion — never in the hook's hot PreToolUse path.
+//! print a ready-to-paste `.cartoon.toml` snippet: a `wrap_scripts` entry.
+//! Declared scripts default to the aggressive tier (the safe tier does not
+//! compress this kind of output). Not recursive, and content-sniffing only
+//! happens here as a one-time suggestion — never in the hook's hot
+//! PreToolUse path.
 use anyhow::Result;
 use std::path::Path;
 
@@ -56,23 +55,18 @@ pub fn render(scripts: &[String]) -> String {
         return "init: no wrapper scripts found in this directory — nothing to suggest".into();
     }
     let quoted: Vec<String> = scripts.iter().map(|s| format!("\"{s}\"")).collect();
-    let mut out = format!(
+    format!(
         "init: found {} script(s) invoking a noisy dev-loop tool directly\n\n\
          # paste into .cartoon.toml (repo root):\n\
-         wrap_scripts = [{}]\n",
+         wrap_scripts = [{}]\n\n\
+         Declared scripts compress at the aggressive tier by default (the safe tier \
+         compresses none of this kind of output). Override per script with \
+         [command.\"{}\"] level = \"safe\". The hook routes them deny-with-suggestion, \
+         never auto-approved — a project script isn't a vetted read-mostly tool.\n",
         scripts.len(),
-        quoted.join(", ")
-    );
-    for s in scripts {
-        out.push_str(&format!("\n[command.\"{s}\"]\nlevel = \"aggressive\"\n"));
-    }
-    out.push_str(
-        "\nBoth lines matter: wrap_scripts only routes the command through cartoon \
-         (always deny-with-suggestion, never auto-approved — a project script isn't \
-         a vetted read-mostly tool); without the aggressive pin the default safe tier \
-         may compress none of it.\n",
-    );
-    out
+        quoted.join(", "),
+        scripts[0]
+    )
 }
 
 #[cfg(test)]
@@ -117,13 +111,14 @@ mod tests {
     }
 
     #[test]
-    fn render_includes_wrap_scripts_and_aggressive_pin() {
+    fn render_includes_wrap_scripts_and_explains_the_default_tier() {
         let out = render(&["./build.sh".to_string()]);
         assert!(
             out.contains(r#"wrap_scripts = ["./build.sh"]"#),
             "got:\n{out}"
         );
-        assert!(out.contains(r#"[command."./build.sh"]"#), "got:\n{out}");
-        assert!(out.contains("level = \"aggressive\""), "got:\n{out}");
+        assert!(out.contains("aggressive tier by default"), "got:\n{out}");
+        // No per-script pin block: the default already covers it.
+        assert!(!out.contains("level = \"aggressive\""), "got:\n{out}");
     }
 }

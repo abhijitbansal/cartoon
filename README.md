@@ -306,8 +306,13 @@ level = "aggressive" # per-command pin; CLI --compress wins over config
 ```
 
 Compression precedence: `--compress` flag > `--heuristic` (deprecated alias
-for aggressive) > `[command.<name>]` > `[compress]` > legacy `heuristic`
-key > safe.
+for aggressive) > `[command.<name>]` > `wrap_scripts` member (aggressive) >
+`[compress]` > legacy `heuristic` key > safe.
+
+`cartoon stats` reports `malformed_lines` when the ledger holds lines it
+could not parse (older versions could interleave two concurrent writes);
+`cartoon learn` sees through `sh -c` runs and explains why a piped command
+missed its adapter instead of suggesting a `[command.sh]` pin.
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
 
@@ -328,15 +333,16 @@ ancestor up to the `.git` boundary):
 
 ```toml
 wrap_scripts = ["./build.sh"]
-
-[command."./build.sh"]
-level = "aggressive"   # required — the default safe tier may compress none
-                        # of this kind of output; see the numbers above
 ```
 
-Run `cartoon init` in the repo to scan for `*.sh` files that mention a known
-noisy tool (`xcodebuild`, `swift test`/`build`, `pytest`, `cargo test`/
-`build`, ...) and print this snippet ready to paste.
+A declared script compresses at the **aggressive** tier by default — the
+safe tier compresses none of this kind of output (see the numbers above).
+Pin `[command."./build.sh"] level = "safe"` to override. Run `cartoon init`
+in the repo to scan for `*.sh` files that mention a known noisy tool
+(`xcodebuild`, `swift test`/`build`, `pytest`, `cargo test`/`build`, ...)
+and print this snippet ready to paste. The hook matches the script whether
+you invoke it as `./build.sh`, `build.sh`, `bash ./build.sh`, or by absolute
+path.
 
 **A declared script is never auto-approved.** The built-in allowlist
 (`pytest`, `cargo test`, `swift test`, ...) gets a transparent rewrite —

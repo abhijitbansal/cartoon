@@ -113,6 +113,15 @@ pub fn basename(arg: &str) -> &str {
     arg.rsplit(['/', '\\']).next().unwrap_or(arg)
 }
 
+/// `xcrun <tool> …` is transparent: xcrun only locates the Xcode toolchain
+/// binary and forwards every argument, so detection looks past it.
+pub fn strip_xcrun(argv: &[String]) -> &[String] {
+    match argv.first() {
+        Some(f) if basename(f) == "xcrun" && argv.len() > 1 => &argv[1..],
+        _ => argv,
+    }
+}
+
 pub fn is_python_module(argv: &[String], module: &str) -> bool {
     let first = argv.first().map(String::as_str).unwrap_or("");
     basename(first).starts_with("python") && argv.windows(2).any(|w| w[0] == "-m" && w[1] == module)

@@ -19,6 +19,7 @@ impl Adapter for SwiftTest {
         "swift test (injects --parallel: SwiftPM only writes XCTest xunit in parallel mode)"
     }
     fn detect(&self, argv: &[String]) -> bool {
+        let argv = super::strip_xcrun(argv);
         let is_swift_test = matches!(argv, [first, second, ..]
             if basename(first) == "swift" && second == "test");
         // `list` is only a subcommand in position 2 — a filter value like
@@ -144,6 +145,7 @@ mod tests {
     fn detects_swift_test_invocations() {
         assert!(SwiftTest.detect(&argv(&["swift", "test"])));
         assert!(SwiftTest.detect(&argv(&["/usr/bin/swift", "test", "--filter", "Auth"])));
+        assert!(SwiftTest.detect(&argv(&["xcrun", "swift", "test"])));
         assert!(!SwiftTest.detect(&argv(&["swift", "build"])));
         assert!(!SwiftTest.detect(&argv(&["swift", "run"])));
         assert!(!SwiftTest.detect(&argv(&["swiftc", "test"])));

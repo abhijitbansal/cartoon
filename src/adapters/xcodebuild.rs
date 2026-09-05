@@ -38,6 +38,7 @@ const VALUE_FLAGS: &[&str] = &[
 /// no test action. Returns `None` for non-xcodebuild commands or actions we
 /// don't summarize (`archive`, `clean`-only, `analyze`, `-list`, ...).
 pub fn action(argv: &[String]) -> Option<Action> {
+    let argv = super::strip_xcrun(argv);
     let first = argv.first()?;
     if basename(first) != "xcodebuild" {
         return None;
@@ -84,6 +85,15 @@ mod tests {
             action(&argv(&["/usr/bin/xcodebuild", "test", "-scheme", "App"])),
             Some(Action::Test)
         );
+    }
+
+    #[test]
+    fn xcrun_prefix_is_transparent() {
+        assert_eq!(
+            action(&argv(&["xcrun", "xcodebuild", "test", "-scheme", "A"])),
+            Some(Action::Test)
+        );
+        assert_eq!(action(&argv(&["xcrun", "simctl", "list"])), None);
     }
 
     #[test]

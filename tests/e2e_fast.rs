@@ -32,7 +32,22 @@ cat > "$junit" <<'XML'
 <testcase classname="t" name="test_b" file="tests/t.py" line="5" time="0.005"/>
 </testsuite></testsuites>
 XML
-echo "2 passed"
+# Realistic verbose pytest chatter: the TOON report must beat THIS (the
+# net-savings guard passes tiny outputs through untouched, by design).
+echo "============================= test session starts =============================="
+echo "platform linux -- Python 3.12.3, pytest-8.2.0, pluggy-1.5.0 -- /usr/bin/python3"
+echo "cachedir: .pytest_cache"
+echo "rootdir: /home/user/proj"
+echo "configfile: pyproject.toml"
+echo "plugins: anyio-4.3.0, cov-5.0.0, mock-3.14.0"
+echo "collected 2 items"
+i=0
+while [ $i -lt 20 ]; do
+  echo "tests/t.py::test_a[param-$i] PASSED                                       [ 50%]"
+  echo "tests/t.py::test_b[param-$i] PASSED                                       [100%]"
+  i=$((i+1))
+done
+echo "============================== 2 passed in 0.01s ==============================="
 exit 0
 "#;
 

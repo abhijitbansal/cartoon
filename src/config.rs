@@ -85,7 +85,8 @@ pub fn load_for_cwd() -> Config {
 }
 
 /// Level precedence: CLI --compress > CLI --heuristic > config
-/// [command.<argv0>] > config [compress] > legacy `heuristic = true` > Safe.
+/// [command.<argv0>] > `wrap_scripts` member (Aggressive) > config [compress]
+/// > legacy `heuristic = true` > Safe.
 pub fn resolve_level(
     flag: Option<&str>,
     heuristic_flag: bool,
@@ -102,6 +103,11 @@ pub fn resolve_level(
     }
     if let Some(s) = cfg.command.get(argv0).and_then(|c| c.level.as_deref()) {
         return parse(s);
+    }
+    // A declared wrapper script is, by definition, noisy build/test output
+    // the safe tier does nothing for; default it to aggressive.
+    if cfg.wrap_scripts.iter().any(|s| s == argv0) {
+        return Ok(CompressLevel::Aggressive);
     }
     if let Some(s) = cfg.compress.level.as_deref() {
         return parse(s);
@@ -136,6 +142,28 @@ mod tests {
     #[test]
     fn wrap_scripts_defaults_to_empty() {
         assert!(Config::default().wrap_scripts.is_empty());
+    }
+
+    #[test]
+    fn wrap_script_defaults_to_aggressive_without_explicit_pin() {
+        use crate::ladder::CompressLevel;
+        let cfg: Config = toml::from_str(r#"wrap_scripts = ["./build.sh"]"#).unwrap();
+        assert_eq!(
+            resolve_level(None, false, "./build.sh", &cfg).unwrap(),
+            CompressLevel::Aggressive
+        );
+        assert_eq!(
+            resolve_level(None, false, "pytest", &cfg).unwrap(),
+            CompressLevel::Safe
+        );
+        let pinned: Config = toml::from_str(
+            "wrap_scripts = [\"./build.sh\"]\n[command.\"./build.sh\"]\nlevel = \"safe\"",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_level(None, false, "./build.sh", &pinned).unwrap(),
+            CompressLevel::Safe
+        );
     }
 
     #[test]

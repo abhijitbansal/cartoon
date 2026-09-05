@@ -141,10 +141,13 @@ pub enum StreamSel {
     Stderr,
 }
 
-/// Shell metacharacters that force `sh -c` execution; a string without
-/// any of these is split into argv so adapters can detect the command.
+/// True shell syntax that needs `sh -c`: operators, substitution, globbing,
+/// brace/tilde expansion, and a leading `NAME=value` env assignment. Quotes
+/// and `=` inside an argument are NOT shell syntax — `shell_words` tokenizes
+/// them so adapters still see the real argv0 (`xcodebuild test -destination
+/// 'platform=iOS Simulator,name=iPhone 17'` must reach the xcodebuild adapter).
 fn needs_shell(s: &str) -> bool {
-    s.chars().any(|c| {
+    let has_operator = s.chars().any(|c| {
         matches!(
             c,
             '|' | '&'
@@ -155,30 +158,65 @@ fn needs_shell(s: &str) -> bool {
                 | ')'
                 | '$'
                 | '`'
-                | '\\'
-                | '"'
-                | '\''
+                | '\n'
                 | '*'
                 | '?'
                 | '['
-                | ']'
                 | '{'
-                | '}'
                 | '~'
-                | '\n'
-                | '='
         )
+    });
+    has_operator || leading_env_assignment(s)
+}
+
+fn leading_env_assignment(s: &str) -> bool {
+    s.split_whitespace().next().is_some_and(|w| {
+        w.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
     })
 }
 
+fn via_shell(s: &str) -> Vec<String> {
+    let sh = if cfg!(windows) { "cmd" } else { "sh" };
+    let flag = if cfg!(windows) { "/C" } else { "-c" };
+    vec![sh.to_string(), flag.to_string(), s.to_string()]
+}
+
+/// Turn a `-c` string into argv: real shell syntax runs via `sh -c`; anything
+/// else is word-split (quote-aware) so adapter detection works. Unbalanced
+/// quotes fail open to the shell rather than guess.
 pub fn shell_argv(s: &str) -> Vec<String> {
     if needs_shell(s) {
-        let sh = if cfg!(windows) { "cmd" } else { "sh" };
-        let flag = if cfg!(windows) { "/C" } else { "-c" };
-        vec![sh.to_string(), flag.to_string(), s.to_string()]
-    } else {
-        s.split_whitespace().map(String::from).collect()
+        return via_shell(s);
     }
+    match shell_words::split(s) {
+        Ok(argv) if !argv.is_empty() => argv,
+        _ => via_shell(s),
+    }
+}
+
+/// For a shell-string argv (`sh -c <string>` / `cmd /C <string>`), the first
+/// word of the string that is not an env assignment — the command the user
+/// actually meant. Recorded in stats/logs so `learn` can see through `sh`.
+pub fn inner_command(argv: &[String]) -> Option<String> {
+    let first = argv.first()?;
+    let is_shell = matches!(
+        crate::adapters::basename(first),
+        "sh" | "bash" | "zsh" | "dash" | "cmd"
+    );
+    let is_c = matches!(argv.get(1)?.as_str(), "-c" | "/C" | "/c");
+    if !is_shell || !is_c {
+        return None;
+    }
+    argv.get(2)?
+        .split_whitespace()
+        .find(|w| {
+            !w.split_once('=').is_some_and(|(name, _)| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        })
+        .map(String::from)
 }
 
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
@@ -317,6 +355,65 @@ mod tests {
 
     fn mode(args: &[&str]) -> Mode {
         parse_mode(Cli::parse_from(args)).unwrap()
+    }
+
+    fn sv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn quoted_args_and_equals_do_not_force_a_shell() {
+        assert_eq!(
+            shell_argv(
+                "xcodebuild test -destination 'platform=iOS Simulator,name=iPhone 17' -scheme App"
+            ),
+            sv(&[
+                "xcodebuild",
+                "test",
+                "-destination",
+                "platform=iOS Simulator,name=iPhone 17",
+                "-scheme",
+                "App"
+            ])
+        );
+        assert_eq!(
+            shell_argv("swift build -Xswiftc -strict-concurrency=complete"),
+            sv(&["swift", "build", "-Xswiftc", "-strict-concurrency=complete"])
+        );
+        assert_eq!(
+            shell_argv(r#"pytest -k "a and b" tests/"#),
+            sv(&["pytest", "-k", "a and b", "tests/"])
+        );
+    }
+
+    #[test]
+    fn real_shell_syntax_still_forces_sh_c() {
+        for s in [
+            "pytest | tail -5",
+            "FOO=1 pytest",
+            "cargo test && echo ok",
+            "ls *.py",
+            "echo $HOME",
+            "pytest > out.txt",
+        ] {
+            assert_eq!(&shell_argv(s)[..2], &sv(&["sh", "-c"])[..], "{s}");
+        }
+        // Unbalanced quote: fail open to the shell rather than guess.
+        assert_eq!(&shell_argv("pytest -k 'oops")[..2], &sv(&["sh", "-c"])[..]);
+    }
+
+    #[test]
+    fn inner_command_reads_through_sh_c() {
+        assert_eq!(
+            inner_command(&sv(&["sh", "-c", "xcodebuild test -scheme A | tail -3"])),
+            Some("xcodebuild".into())
+        );
+        assert_eq!(
+            inner_command(&sv(&["sh", "-c", "FOO=1 ./build.sh -d"])),
+            Some("./build.sh".into())
+        );
+        assert_eq!(inner_command(&sv(&["pytest", "-q"])), None);
+        assert_eq!(inner_command(&sv(&["sh", "script.sh"])), None);
     }
 
     #[test]

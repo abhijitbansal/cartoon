@@ -63,12 +63,10 @@ fn transform_emit_record(
         let with_footer = format!("{candidate}{footer}");
         // Net-savings guard: a transform must pay for itself, footer
         // included — otherwise emit the original untouched (still archived).
-        if stats::estimate_tokens(&with_footer, &cfg.tokenizer)
-            >= stats::estimate_tokens(&captured.stdout, &cfg.tokenizer)
-        {
-            (captured.stdout.clone(), "passthrough")
-        } else {
+        if pays_for_itself(&with_footer, &captured.stdout, &cfg.tokenizer) {
             (with_footer, tmode)
+        } else {
+            (captured.stdout.clone(), "passthrough")
         }
     };
     let run =
@@ -169,13 +167,30 @@ fn run_with_adapter(
             }
             let extra_out = passthrough_stdout.unwrap_or_default();
             let extra_err = passthrough_stderr.unwrap_or_default();
+            let original = format!("{}{}", captured.stdout, captured.stderr);
+            let emitted = format!("{}{}{}", out, extra_out, extra_err);
+            // Net-savings guard, same rule as the ladder path: a report that
+            // costs more tokens than the raw output (tiny suites, `-q` runs)
+            // is replaced by the original streams, byte-identical.
+            if !pays_for_itself(&emitted, &original, &cfg.tokenizer) {
+                print!("{}", captured.stdout);
+                eprint!("{}", captured.stderr);
+                stats::record_call(
+                    argv,
+                    "passthrough",
+                    &original,
+                    &original,
+                    code,
+                    &cfg.tokenizer,
+                    run.as_ref().map(|r| r.id.as_str()),
+                );
+                return Ok(code);
+            }
             emit(&out, "");
             if !extra_out.is_empty() {
                 print!("{extra_out}");
             }
             eprint!("{extra_err}");
-            let original = format!("{}{}", captured.stdout, captured.stderr);
-            let emitted = format!("{}{}{}", out, extra_out, extra_err);
             stats::record_call(
                 argv,
                 adapter.name(),
@@ -226,6 +241,12 @@ fn not_found_or_err(e: anyhow::Error, argv: &[String]) -> Result<i32> {
         return Ok(127);
     }
     Err(e)
+}
+
+/// The net-savings guard: a candidate rendering must beat the original's
+/// token count, or the original is emitted byte-identically.
+pub fn pays_for_itself(candidate: &str, original: &str, tokenizer: &str) -> bool {
+    stats::estimate_tokens(candidate, tokenizer) < stats::estimate_tokens(original, tokenizer)
 }
 
 fn emit(out: &str, err: &str) {
@@ -281,6 +302,17 @@ mod tests {
             "some other exit-4 error",
             &args(&["-n", "auto"])
         ));
+    }
+
+    #[test]
+    fn guard_rejects_candidates_that_do_not_shrink() {
+        let original = "a much longer original output line\n".repeat(20);
+        assert!(pays_for_itself("ok", &original, "approx"));
+        assert!(!pays_for_itself(&"x".repeat(400), "short", "approx"));
+        assert!(
+            !pays_for_itself("same", "same", "approx"),
+            "equal is not a win"
+        );
     }
 
     #[test]
