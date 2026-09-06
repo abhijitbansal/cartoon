@@ -1,0 +1,7 @@
+# GitHub Pages builds docs/ with Jekyll. The site is the self-contained
+# index.html; the markdown under superpowers/ (design specs and implementation
+# plans) is engineering documentation that Jekyll must not render — code
+# samples there legitimately contain `{{`, which Liquid treats as a template
+# variable and aborts the whole build on (2026-09-06, after the 0.6.0 merge).
+exclude:
+  - superpowers/
