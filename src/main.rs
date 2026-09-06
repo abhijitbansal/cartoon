@@ -10,20 +10,45 @@ fn main() {
             raw,
             tags,
             fast,
+            junit,
+            max_tokens,
+            dropped_filter,
         }) => {
-            let cfg = cartoon::config::load();
+            let mut cfg = cartoon::config::load_for_cwd();
+            // Ceiling precedence: flag > CARTOON_MAX_TOKENS > config.
+            cfg.max_tokens = max_tokens
+                .or_else(|| {
+                    std::env::var("CARTOON_MAX_TOKENS")
+                        .ok()
+                        .and_then(|v| v.trim().parse().ok())
+                })
+                .or(cfg.max_tokens);
+            let junit = junit.or_else(|| cfg.command.get(&argv[0]).and_then(|c| c.junit.clone()));
             match cartoon::config::resolve_level(compress.as_deref(), heuristic, &argv[0], &cfg) {
-                Ok(level) => cartoon::app::run_wrap(&argv, level, raw, &tags, fast, &cfg)
-                    .unwrap_or_else(|e| {
+                Ok(level) => {
+                    let opts = cartoon::app::WrapOpts {
+                        level,
+                        raw,
+                        tags,
+                        fast,
+                        junit: junit.map(std::path::PathBuf::from),
+                        dropped_filter,
+                    };
+                    cartoon::app::run_wrap(&argv, &opts, &cfg).unwrap_or_else(|e| {
                         eprintln!("cartoon: {e}");
                         2
-                    }),
+                    })
+                }
                 Err(e) => {
                     eprintln!("cartoon: {e}");
                     2
                 }
             }
         }
+        Ok(cartoon::cli::Mode::Doctor) => cartoon::doctor::run().unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Ok(cartoon::cli::Mode::Stats { since }) => match cartoon::stats::report(since.as_deref()) {
             Ok(s) => {
                 println!("{s}");
@@ -40,6 +65,13 @@ fn main() {
             }
             0
         }
+        Ok(cartoon::cli::Mode::Init) => std::env::current_dir()
+            .map_err(anyhow::Error::from)
+            .and_then(|cwd| cartoon::init::run(&cwd))
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
         Ok(cartoon::cli::Mode::Logs(query)) => cartoon::logs_cmd::run(query).unwrap_or_else(|e| {
             eprintln!("cartoon: {e}");
             2
@@ -67,7 +99,11 @@ fn main() {
             compress,
             tags,
         }) => {
-            let cfg = cartoon::config::load();
+            let mut cfg = cartoon::config::load_for_cwd();
+            cfg.max_tokens = std::env::var("CARTOON_MAX_TOKENS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .or(cfg.max_tokens);
             match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
                 Ok(level) => {
                     cartoon::app::run_ingest(&source, level, &tags, &cfg).unwrap_or_else(|e| {

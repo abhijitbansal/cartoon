@@ -16,6 +16,7 @@ fn normalize(line: &str) -> String {
 /// numeric/id normalization into the first line + `  (xN similar)`.
 /// Shorter runs are emitted verbatim.
 pub fn collapse_near_dups(text: &str) -> String {
+    let sep = super::safe::line_sep(text);
     let mut out: Vec<String> = Vec::new();
     let mut run: Vec<String> = Vec::new();
     let mut run_norm = String::new();
@@ -31,6 +32,12 @@ pub fn collapse_near_dups(text: &str) -> String {
     }
 
     for raw in text.lines() {
+        // Diagnostics are data, not noise: emit verbatim, never template.
+        if super::diagnostics::is_diagnostic_line(raw) {
+            flush(&mut run, &mut out);
+            out.push(raw.to_string());
+            continue;
+        }
         let norm = normalize(raw);
         if !run.is_empty() && norm == run_norm {
             run.push(raw.to_string());
@@ -41,7 +48,7 @@ pub fn collapse_near_dups(text: &str) -> String {
         }
     }
     flush(&mut run, &mut out);
-    out.join("\n")
+    out.join(sep)
 }
 
 #[cfg(test)]
@@ -66,6 +73,12 @@ mod tests {
     #[test]
     fn distinct_lines_unchanged() {
         let input = "alpha\nbeta\ngamma";
+        assert_eq!(collapse_near_dups(input), input);
+    }
+
+    #[test]
+    fn diagnostics_differing_only_by_line_are_kept() {
+        let input = "src/a.c:10:5: error: expected ';'\nsrc/a.c:20:5: error: expected ';'\nsrc/a.c:30:5: error: expected ';'\ndone";
         assert_eq!(collapse_near_dups(input), input);
     }
 

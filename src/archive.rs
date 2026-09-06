@@ -161,8 +161,13 @@ fn write_at(
         std::fs::write(dir.join("meta.json"), json)?;
         Ok(())
     };
-    if write_all().is_err() {
-        // Partial write: best-effort cleanup, then report failure.
+    if let Err(e) = write_all() {
+        // Partial write: best-effort cleanup, then report failure — loudly,
+        // because a missing archive breaks the raw_log escape hatch.
+        eprintln!(
+            "cartoon: could not archive raw output to {}: {e}",
+            dir.display()
+        );
         let _ = std::fs::remove_dir_all(&dir);
         return None;
     }
@@ -248,11 +253,20 @@ fn prune_at(root: &Path, cfg: &Config) {
     let mut total: u64 = sizes.iter().sum();
     let max_bytes = cfg.max_archive_mb * 1024 * 1024;
 
+    // Never prune the newest entry: it is the run whose raw_log footer was
+    // just emitted. A single run over max_archive_mb is kept and disclosed.
     let mut i = 0;
-    while i < dirs.len() && (dirs.len() - i > cfg.keep_runs || total > max_bytes) {
+    while i + 1 < dirs.len() && (dirs.len() - i > cfg.keep_runs || total > max_bytes) {
         let _ = std::fs::remove_dir_all(&dirs[i]);
         total = total.saturating_sub(sizes[i]);
         i += 1;
+    }
+    if total > max_bytes {
+        eprintln!(
+            "cartoon: archive is {} MB, over max_archive_mb = {}; keeping the newest run so raw_log stays valid",
+            total / (1024 * 1024),
+            cfg.max_archive_mb
+        );
     }
 }
 
@@ -416,6 +430,31 @@ mod tests {
         }
         let all = list_at(tmp.path(), None);
         assert!(all.len() <= 2, "size cap enforced, got {}", all.len());
+    }
+
+    #[test]
+    fn prune_keeps_the_run_just_written_even_over_the_size_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.max_archive_mb = 0; // every byte is over the cap
+        let big = "x".repeat(4096);
+        let cap = captured(&big, "");
+        let first = record_at(tmp.path(), &["a".to_string()], "safe", &cap, 0, &[], &c).unwrap();
+        let second = record_at(tmp.path(), &["b".to_string()], "safe", &cap, 0, &[], &c).unwrap();
+        assert!(!first.dir.exists(), "older run pruned");
+        assert!(
+            second.dir.exists(),
+            "newest run must survive so raw_log never dangles"
+        );
+    }
+
+    #[test]
+    fn unwritable_root_yields_none_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let not_a_dir = tmp.path().join("file");
+        std::fs::write(&not_a_dir, "x").unwrap();
+        let cap = captured("out", "");
+        assert!(record_at(&not_a_dir, &["a".to_string()], "safe", &cap, 0, &[], &cfg()).is_none());
     }
 
     #[test]

@@ -30,7 +30,11 @@ Single source of truth is the **git tag** (`vX.Y.Z`):
   `npm-platform-packages.mjs`); the committed `package.json` stays `0.0.0`.
 - PyPI version comes from the tag via maturin (`dynamic = ["version"]`).
 - **Cargo.toml `version` must be bumped manually to match the tag** before
-  tagging — `cargo publish` uses it verbatim.
+  tagging — `cargo publish` uses it verbatim. Then run
+  `node scripts/check-versions.mjs --write` to propagate it to
+  `.claude-plugin/plugin.json` and the site; `cargo test`
+  (tests/version_sync.rs) fails on drift, and the release workflow's first
+  job runs `check-versions.mjs --tag $GITHUB_REF_NAME` before publishing.
 - The marketing site (`docs/index.html`) shows the version from a marker kept
   in sync with Cargo.toml by `scripts/sync-site-version.mjs`. CI runs it with
   `--check`, so a Cargo.toml bump that forgets the site fails on main/PR.
@@ -85,7 +89,7 @@ Artifacts are retained ~90 days; after that, rebuild from the tag.
 
 ## Release checklist
 
-1. CI green on main; `cargo test` locally.
+1. Local gate green on main: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (GitHub CI is disabled by decision — runner minutes cost; see CONTRIBUTING.md).
 2. Bump `Cargo.toml` version to match the tag, then
    `node scripts/sync-site-version.mjs` to update the site; commit both.
 3. Tag + push (TL;DR above); watch the run.

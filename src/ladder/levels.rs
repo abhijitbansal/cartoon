@@ -35,6 +35,7 @@ fn is_noise(level: &str) -> bool {
 /// +-CONTEXT_LINES of surrounding context. No-op unless leveled lines
 /// dominate the input (see MIN_* thresholds).
 pub fn filter_levels(text: &str) -> String {
+    let sep = super::safe::line_sep(text);
     let lines: Vec<&str> = text.lines().collect();
     let levels: Vec<Option<&'static str>> = lines.iter().map(|l| level_of(l)).collect();
     let non_blank = lines.iter().filter(|l| !l.trim().is_empty()).count();
@@ -90,7 +91,7 @@ pub fn filter_levels(text: &str) -> String {
         }
     }
     flush(&mut dropped, &mut out);
-    out.join("\n")
+    out.join(sep)
 }
 
 #[cfg(test)]

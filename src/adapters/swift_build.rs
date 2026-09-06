@@ -15,6 +15,7 @@ impl Adapter for SwiftBuild {
         "swift build"
     }
     fn detect(&self, argv: &[String]) -> bool {
+        let argv = super::strip_xcrun(argv);
         matches!(argv, [first, second, ..]
             if basename(first) == "swift" && second == "build")
             && !argv.iter().any(|a| NON_BUILD_ARGS.contains(&a.as_str()))
@@ -81,6 +82,7 @@ mod tests {
     fn detects_swift_build_invocations() {
         assert!(SwiftBuild.detect(&argv(&["swift", "build"])));
         assert!(SwiftBuild.detect(&argv(&["/usr/bin/swift", "build", "-c", "release"])));
+        assert!(SwiftBuild.detect(&argv(&["xcrun", "swift", "build"])));
         assert!(!SwiftBuild.detect(&argv(&["swift", "test"])));
         assert!(!SwiftBuild.detect(&argv(&["swift", "run"])));
         assert!(!SwiftBuild.detect(&argv(&["swift", "build", "--help"])));

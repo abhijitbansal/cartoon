@@ -1,7 +1,7 @@
 {
   "name": "cartoon",
   "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens. Includes a PreToolUse hook that auto-wraps noisy dev commands (requires the cartoon binary; no-op without it)",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": {
     "name": "Abhijit Bansal",
     "email": "contact@abhijitbansal.com"
@@ -9,5 +9,13 @@
   "homepage": "https://github.com/abhijitbansal/cartoon",
   "repository": "https://github.com/abhijitbansal/cartoon",
   "license": "MIT",
-  "keywords": ["tokens", "toon", "test-output", "pytest", "jest", "swift", "cli"]
+  "keywords": [
+    "tokens",
+    "toon",
+    "test-output",
+    "pytest",
+    "jest",
+    "swift",
+    "cli"
+  ]
 }

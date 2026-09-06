@@ -102,6 +102,21 @@ mod tests {
     }
 
     #[test]
+    fn three_same_message_diagnostics_all_reach_the_table() {
+        let mut log = String::new();
+        for i in 0..90 {
+            log.push_str(&format!("compiling unit {i}\n"));
+        }
+        for l in [10, 20, 30] {
+            log.push_str(&format!("src/a.c:{l}:5: error: expected ';'\n"));
+        }
+        let out = compress(&log, CompressLevel::Aggressive);
+        for l in [10, 20, 30] {
+            assert!(out.contains(&format!("src/a.c:{l}:5")), "{out}");
+        }
+    }
+
+    #[test]
     fn prose_survives_both_levels_unchanged() {
         let prose = "Compiling cartoon v0.1.0\nFinished release in 2.41s";
         assert_eq!(compress(prose, CompressLevel::Safe), prose);

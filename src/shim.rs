@@ -17,7 +17,7 @@
 //! way the hook does — keep shims to the test/build tools the agent runs
 //! bare. Path-invoked binaries (`./gradlew`, `./node_modules/.bin/jest`)
 //! bypass function lookup entirely. Disable per-shell with `CARTOON_NO_SHIM=1`.
-use crate::hook::{ALWAYS, RUNNERS, SUBCOMMAND};
+use crate::hook::{ALWAYS, RUNNERS, RUNNER_TOOLS, SUBCOMMAND};
 use anyhow::{bail, Result};
 
 pub fn run(args: &[String]) -> Result<i32> {
@@ -70,11 +70,12 @@ __cartoon_run() {
             "{tool}() {{ case \"${{1:-}}\" in {pat}) __cartoon_run {tool} \"$@\" ;; *) command {tool} \"$@\" ;; esac; }}\n"
         ));
     }
-    // Runner prefixes (npx/bunx/pnpx): wrap when the target is a noisy tool.
+    // Runner prefixes (npx/bunx/pnpx): wrap when the target is a JS dev tool.
     let targets = ALWAYS.join("|");
+    let js_targets = RUNNER_TOOLS.join("|");
     for r in RUNNERS {
         s.push_str(&format!(
-            "{r}() {{ case \"${{1:-}}\" in {targets}) __cartoon_run {r} \"$@\" ;; *) command {r} \"$@\" ;; esac; }}\n"
+            "{r}() {{ case \"${{1:-}}\" in {js_targets}) __cartoon_run {r} \"$@\" ;; *) command {r} \"$@\" ;; esac; }}\n"
         ));
     }
     // uv/uvx: wrap a test/lint tool run through uv — `uv run pytest`,
@@ -179,7 +180,8 @@ mod tests {
     #[test]
     fn runners_wrap_only_noisy_targets() {
         let s = script();
-        assert!(s.contains("npx() { case \"${1:-}\" in pytest|jest|vitest"));
+        assert!(s.contains("npx() { case \"${1:-}\" in jest|vitest|tsc|eslint)"));
+        assert!(!s.contains("npx() { case \"${1:-}\" in pytest"));
     }
 
     #[test]

@@ -1,0 +1,6 @@
+# Three same-message diagnostics that differ only by line number, after 90
+# near-duplicate compile lines. Near-dup templating must not merge the
+# diagnostics before the extractor tabulates them.
+must_survive = ["src/a.c:10:5", "src/a.c:20:5", "src/a.c:30:5"]
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.50

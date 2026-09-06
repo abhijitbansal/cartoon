@@ -162,6 +162,27 @@ change shell state (`cd`, `export`, `source`) pass through untouched, and
 anything unrecognized is left alone (fail-open). The net-savings guard
 still applies — worst case the output is byte-identical.
 
+### What the hook will not auto-approve (0.6.0)
+
+Because a rewrite is emitted with `permissionDecision: "allow"`, the
+allowlist tightened in 0.6.0 — some previously auto-approved commands now
+reach your normal permission prompt instead:
+
+- A leading `NAME=value` prefix rides along only for benign names (`CI`,
+  `RUST_LOG`, `NO_COLOR`, …). `PATH=… pytest`, `LD_PRELOAD=… cargo test`,
+  `NODE_OPTIONS=… jest` are left alone.
+- `ruff` is gated to `ruff check`; `ruff format`, `--fix`, `eslint --fix`,
+  `eslint -c <path>`, `swiftlint --fix` / `autocorrect` are never wrapped.
+- `npx`/`bunx`/`pnpx` launch only `jest`, `vitest`, `tsc`, `eslint`.
+- `make` and `pre-commit` stay allowlisted by explicit decision: they are
+  the canonical dev-loop entry points and the agent already has write
+  access to the repo. Install with `--deny` if you disagree.
+- `cartoon hook install --deny` on an existing install switches the mode
+  in place (and back without the flag).
+
+`cartoon doctor` shows what is installed where and which allowlisted tools
+still have no adapter.
+
 ### Disabling & overhead
 
 - **Disable for a session** — set in the environment your agent runs in:
@@ -197,12 +218,64 @@ cartoon --raw pytest           # escape hatch: no transformation
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon learn                  # mine your own runs for config suggestions
 cartoon adapters               # list built-in adapters
+cartoon init                   # suggest a .cartoon.toml for project wrapper scripts
 cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
 cartoon logs grep ERROR --last # search a raw log instead of re-reading it
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
+cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
+cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
+cartoon -c 'pytest -v | tail -5'     # pure output filters are dropped; the report replaces them
+cartoon doctor                 # health report: hook, config, allowlist gaps, ledger damage
 ```
+
+### Pipes inside `-c`
+
+Agents write `pytest -v | tail -5` because they want less output — which is
+cartoon's whole job. When the string is `<adapter-detected command> | <pure
+output filter>` (`head`, `tail`, `grep`, `wc`, `cat`, `less`, `more`),
+cartoon runs the adapter and drops the filter, disclosing it as
+`pipe_filter_dropped: "tail -5"` in the report. Anything else (`tee`,
+`xargs`, `sort`, redirections, two pipes, a non-adapter command) keeps the
+plain `sh -c` behavior. The hook still never auto-approves a piped compound;
+this applies only when `cartoon -c` is invoked explicitly.
+
+### `--junit`: any runner that writes JUnit XML
+
+`cartoon --junit <file-or-dir> <cmd>` (or `[command.<cmd>] junit = "path"`
+in config) renders the XML the command wrote as the same test report pytest
+gets — gradle, maven, `dotnet test --logger junit`, phpunit `--log-junit`,
+anything. A directory means every `*.xml` inside, merged. A file older than
+the run is stale (the build failed before tests ran) and is ignored with a
+warning so a green report never hides a red build.
+
+### `--max-tokens`: a hard ceiling
+
+`cartoon --max-tokens N <cmd>` (or `CARTOON_MAX_TOKENS=N`, or `max_tokens`
+in config) guarantees no result exceeds N tokens: the head and tail are kept
+in whole lines and the middle is replaced by one marker that is itself a
+ready-to-run `cartoon logs grep` command. Opt-in, because with a ceiling set
+even passthrough output may be cut — that is the point. The raw log is
+archived as always.
+
+### Content sniffing
+
+Output that arrives without a matching adapter — a `./build.sh` that runs
+xcodebuild internally, fastlane's gym log, a runner printing JUnit XML to
+stdout — is recognized by shape: xcodebuild build/archive banners get the
+diagnostics table, XCTest's `Test Case … passed/failed` protocol gets the
+test report, JUnit XML gets the test report. Parse-only, never changes the
+command, and the net-savings guard applies as always.
+
+### `cartoon doctor`
+
+One report for the ways an integration quietly stops saving tokens: hook
+installed or not per surface, whether the global and project config parse,
+`wrap_scripts` entries that do not exist on disk, allowlisted tools that
+have no adapter (ladder compression only), and ledger health (malformed
+lines, negative-saved runs, the biggest uncompressed commands). Paste it into
+a bug report.
 
 Failing test run, before (pytest, ~4800 tokens) vs after (~300 tokens):
 
@@ -230,8 +303,10 @@ stage that understands the content wins:
    machine-readable format injected and re-rendered as a compact report.
 2. **JSON detection** — any JSON document in stdout is TOON-encoded.
 3. **Ladder, safe tier (default)** — ANSI stripping, progress-bar
-   collapse, duplicate-line collapse, blank-run collapse. Deterministic
-   and non-lossy in practice.
+   collapse (only frames that redraw or share one indicator — table rows
+   with percentages are never folded), duplicate-line collapse, blank-run
+   collapse. Deterministic and non-lossy in practice: CRLF line endings
+   are preserved, trailing spaces and tabs are trimmed.
 4. **Ladder, aggressive tier (opt-in)** — log-level filtering (INFO/DEBUG
    to counts, WARN+ kept with context), near-duplicate templating,
    compiler-diagnostic extraction into a TOON table (gcc/clang one-liners
@@ -296,19 +371,71 @@ tokenizer = "o200k"  # or "approx" (bytes/4) for zero-cost estimates
 trace_lines = 20     # per-failure traceback cap
 keep_runs = 50       # archived raw logs to keep (0 disables)
 max_archive_mb = 50  # max total archive size
+# max_tokens = 1500  # hard output ceiling (see --max-tokens); unset = none
 
 [compress]
 level = "safe"       # default for non-adapter output: safe | aggressive
 
 [command.docker]
 level = "aggressive" # per-command pin; CLI --compress wins over config
+
+[command.gradle]
+junit = "build/test-results/test"   # render the JUnit XML gradle writes
 ```
 
 Compression precedence: `--compress` flag > `--heuristic` (deprecated alias
-for aggressive) > `[command.<name>]` > `[compress]` > legacy `heuristic`
-key > safe.
+for aggressive) > `[command.<name>]` > `wrap_scripts` member (aggressive) >
+`[compress]` > legacy `heuristic` key > safe.
+
+`cartoon stats` reports `malformed_lines` when the ledger holds lines it
+could not parse (older versions could interleave two concurrent writes);
+`cartoon learn` sees through `sh -c` runs and explains why a piped command
+missed its adapter instead of suggesting a `[command.sh]` pin.
 
 Stats live in `~/.local/state/cartoon/stats.jsonl`.
+
+## Project config: wrapping build/test scripts
+
+Some projects build through a wrapper script instead of calling a known
+runner directly — an iOS project's `./build.sh` that internally runs
+`xcodegen`, then `xcodebuild build`, then `simctl install`. The hook's
+allowlist matches on the command's own first word, so `./build.sh` never
+matches and its output — including `xcodebuild`'s very verbose compile
+log — reaches the agent completely unwrapped. This is not a hypothetical:
+a real `./build.sh -d` run produced 113,705 raw tokens; the exact same
+content compresses to 518 tokens (99.5% saved) at the aggressive tier once
+it's actually routed through cartoon.
+
+Declare such scripts in a project-local `.cartoon.toml` (repo root, or any
+ancestor up to the `.git` boundary):
+
+```toml
+wrap_scripts = ["./build.sh"]
+```
+
+A declared script compresses at the **aggressive** tier by default — the
+safe tier compresses none of this kind of output (see the numbers above).
+Pin `[command."./build.sh"] level = "safe"` to override. Run `cartoon init`
+in the repo to scan for `*.sh` files that mention a known noisy tool
+(`xcodebuild`, `swift test`/`build`, `pytest`, `cargo test`/`build`, ...)
+and print this snippet ready to paste. The hook matches the script whether
+you invoke it as `./build.sh`, `build.sh`, `bash ./build.sh`, or by absolute
+path.
+
+**A declared script is never auto-approved.** The built-in allowlist
+(`pytest`, `cargo test`, `swift test`, ...) gets a transparent rewrite —
+`permissionDecision: "allow"` — because those are vetted, globally-known,
+read-mostly tools. A project's own script is arbitrary code: an iOS
+`build.sh` can install a build onto a physical device, or push model
+weights to one. `.cartoon.toml` is also repo-committed and agent-writable,
+so treating a declaration as license to bypass the permission prompt would
+turn adding one TOML line into a silent permission-bypass primitive.
+Instead, a `wrap_scripts` match always denies-with-suggestion: the raw
+command is blocked and the agent is told to re-run it as
+`cartoon -c './build.sh -d'`, going through the normal permission flow for
+that explicit call. Want it frictionless? Allowlist that exact string in
+your agent's own permission settings — that's the right layer for that
+decision, not cartoon's.
 
 ## Adapters
 
@@ -324,10 +451,21 @@ Stats live in `~/.local/state/cartoon/stats.jsonl`.
 | eslint | `eslint`, `npx eslint` | injected `--format json` |
 | tsc | `tsc`, `npx tsc` (not `--watch`) | injected `--pretty false` |
 | swift-build | `swift build` | stdout/stderr text parse |
-| xcodebuild-build | `xcodebuild build` (no test action) | stdout/stderr diagnostics parse |
+| xcodebuild-build | `xcodebuild build` / `archive` / `-exportArchive` (no test action) | stdout/stderr diagnostics parse |
+| pre-commit | `pre-commit`, `pre-commit run …` | stdout text parse (`--color=never` injected) |
+| cargo-test | `cargo test`, `cargo nextest run` | stable text parse (never nightly JSON) |
+| cargo-build | `cargo build`, `cargo check`, `cargo clippy` | injected `--message-format=json` (before `--`) |
+| go-test | `go test` | injected `-json` |
+| mypy | `mypy`, `python -m mypy`, `uv run mypy` | injected `--output json` |
+| phpunit | `phpunit`, `vendor/bin/phpunit` | injected `--log-junit` |
+| rspec | `rspec`, `bundle exec rspec` | injected `--format json --out <file>` |
+| swiftlint | `swiftlint`, `swiftlint lint` (never `--fix`/`autocorrect`) | injected `--reporter json` |
 
-No adapter match → JSON auto-detection → compression ladder (safe tier by
-default, aggressive opt-in) → passthrough when nothing pays for itself.
+No adapter match → content sniffing (xcodebuild / XCTest / JUnit shapes) →
+JSON auto-detection → compression ladder (safe tier by default, aggressive
+opt-in) → passthrough when nothing pays for itself. Hook-allowlisted tools
+with no adapter (`make`, `gradle`, `mvn`, `dotnet`, `npm test`, …) get the
+ladder only; `cartoon doctor` lists them.
 
 Want another runner (cargo test, go test, rspec)? See
 [CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.

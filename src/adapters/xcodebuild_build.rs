@@ -10,10 +10,10 @@ impl Adapter for XcodebuildBuild {
         "xcodebuild-build"
     }
     fn matches(&self) -> &'static str {
-        "xcodebuild build / build-for-testing (no test action)"
+        "xcodebuild build / build-for-testing / archive / -exportArchive (no test action)"
     }
     fn detect(&self, argv: &[String]) -> bool {
-        action(argv) == Some(Action::Build)
+        matches!(action(argv), Some(Action::Build) | Some(Action::Archive))
     }
     fn prepare(&self, argv: Vec<String>) -> Prepared {
         // Diagnostics are already machine-parseable text; nothing to inject.
@@ -24,7 +24,7 @@ impl Adapter for XcodebuildBuild {
             artifact: None,
         }
     }
-    fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
+    fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         // Scan both streams separately (joining could weld a split line into a
         // phantom diagnostic). xcodebuild emits the same clang format as swift.
         let (mut diags, mut errors, mut warnings) = diagnostics::collect(&captured.stdout);
@@ -33,7 +33,12 @@ impl Adapter for XcodebuildBuild {
         errors += e2;
         warnings += w2;
         let matched = errors + warnings;
-        let value = diagnostics::build_value("xcodebuild-build", diags, errors, warnings);
+        let runner = if action(&prepared.argv) == Some(Action::Archive) {
+            "xcodebuild-archive"
+        } else {
+            "xcodebuild-build"
+        };
+        let value = diagnostics::build_value(runner, diags, errors, warnings);
         // Failed build with zero matched diagnostics (linker, signing, missing
         // scheme, ...) must not be swallowed — pass the raw streams through.
         let unexplained_failure = !captured.status.success() && matched == 0;
@@ -74,6 +79,7 @@ struct V: View {
     fn detects_build_action_only() {
         assert!(XcodebuildBuild.detect(&argv(&["xcodebuild", "build"])));
         assert!(XcodebuildBuild.detect(&argv(&["xcodebuild", "-scheme", "A", "build"])));
+        assert!(XcodebuildBuild.detect(&argv(&["xcodebuild", "archive", "-scheme", "A"])));
         assert!(!XcodebuildBuild.detect(&argv(&["xcodebuild", "test"])));
         assert!(!XcodebuildBuild.detect(&argv(&["xcodebuild", "clean", "test"])));
         assert!(!XcodebuildBuild.detect(&argv(&["swift", "build"])));

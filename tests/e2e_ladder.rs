@@ -5,11 +5,19 @@ fn cartoon_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cartoon")
 }
 
+/// Every run archives into XDG_STATE_HOME; point it at a per-test temp dir so
+/// `cargo test` never writes into (or prunes) the developer's real archive.
+fn isolated_state() -> &'static tempfile::TempDir {
+    static STATE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| tempfile::tempdir().expect("temp state dir"))
+}
+
 #[test]
 fn safe_tier_compresses_and_mirrors_exit_code() {
     // ANSI + a long duplicate run: the safe tier must fire AND beat the
     // net-savings guard (compression + raw_log footer < original tokens).
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args([
             "sh",
             "-c",
@@ -27,6 +35,7 @@ fn safe_tier_compresses_and_mirrors_exit_code() {
 #[test]
 fn raw_flag_bypasses_ladder() {
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args(["--raw", "sh", "-c", r"printf 'same\nsame\n'"])
         .output()
         .expect("run cartoon");
@@ -54,6 +63,7 @@ fn aggressive_flag_extracts_diagnostics() {
       "src/util.c:22:17: error: array subscript is not an integer literal" \
       "src/util.c:60:6: warning: control reaches end of non-void function here""#;
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args(["--compress", "aggressive", "sh", "-c", script])
         .output()
         .expect("run cartoon");
@@ -71,6 +81,7 @@ fn aggressive_flag_extracts_diagnostics() {
 #[test]
 fn invalid_compress_level_exits_2() {
     let out = Command::new(cartoon_bin())
+        .env("XDG_STATE_HOME", isolated_state().path())
         .args(["--compress", "turbo", "echo", "hi"])
         .output()
         .expect("run cartoon");

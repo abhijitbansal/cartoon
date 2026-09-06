@@ -19,6 +19,22 @@ pub struct Failure {
     pub trace: Vec<String>,
 }
 
+/// Sum several reports (one JUnit file per module, gradle-style) into one.
+/// Runner label comes from the first. None for an empty list.
+pub fn merge(reports: Vec<TestReport>) -> Option<TestReport> {
+    let mut iter = reports.into_iter();
+    let mut acc = iter.next()?;
+    for r in iter {
+        acc.total += r.total;
+        acc.passed += r.passed;
+        acc.failed += r.failed;
+        acc.skipped += r.skipped;
+        acc.duration_s += r.duration_s;
+        acc.failures.extend(r.failures);
+    }
+    Some(acc)
+}
+
 /// Asymmetric rendering: passes cost one summary block; failures keep
 /// id/loc/msg rows plus trimmed traces. `fast_note` discloses injected
 /// acceleration args (e.g. "-n auto") right after the runner line.
@@ -105,8 +121,10 @@ pub fn trim_trace(raw: &str) -> Vec<String> {
         if is_frame_header {
             skip_frame = NOISE.iter().any(|n| l.contains(n));
         }
-        let is_caret_line = !t.is_empty() && t.chars().all(|c| c == '^');
-        if !skip_frame && !t.is_empty() && !is_caret_line {
+        // Python 3.11+ marks the failing expression with `~~~~^^^^` runs.
+        let is_caret_line = !t.is_empty() && t.chars().all(|c| c == '^' || c == '~' || c == ' ');
+        let is_traceback_header = t == "Traceback (most recent call last):";
+        if !skip_frame && !t.is_empty() && !is_caret_line && !is_traceback_header {
             lines.push(t.to_string());
         }
     }
@@ -143,6 +161,32 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn merge_sums_reports() {
+        let a = TestReport {
+            runner: "junit",
+            total: 2,
+            passed: 1,
+            failed: 1,
+            skipped: 0,
+            duration_s: 1.0,
+            failures: vec![],
+        };
+        let b = TestReport {
+            runner: "junit",
+            total: 3,
+            passed: 3,
+            failed: 0,
+            skipped: 0,
+            duration_s: 0.5,
+            failures: vec![],
+        };
+        let m = merge(vec![a, b]).unwrap();
+        assert_eq!((m.total, m.passed, m.failed), (5, 4, 1));
+        assert!((m.duration_s - 1.5).abs() < 1e-9);
+        assert!(merge(vec![]).is_none());
     }
 
     #[test]
@@ -199,6 +243,15 @@ mod tests {
     fn zero_trace_lines_omits_traces_section() {
         let out = render(&sample(), 0, None);
         assert!(!out.contains("traces"));
+    }
+
+    #[test]
+    fn trim_trace_drops_tilde_caret_marker_lines_and_traceback_header() {
+        let raw = "Traceback (most recent call last):\n  File \"/p/t.py\", line 2, in f\n    g(x)\n    ~^^^\nValueError: bad\n";
+        assert_eq!(
+            trim_trace(raw),
+            vec!["File \"/p/t.py\", line 2, in f", "g(x)", "ValueError: bad"]
+        );
     }
 
     #[test]

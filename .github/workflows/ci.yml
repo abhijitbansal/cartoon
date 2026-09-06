@@ -1,3 +1,8 @@
+# DISABLED ON GITHUB (manually, since 2026-06-15; decision recorded
+# 2026-09-05): Actions runner minutes cost money the maintainer does not
+# want to pay. This file is kept as the reference recipe. The local gate is
+# the real one — run before every commit:
+#   cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 name: ci
 on:
   push:

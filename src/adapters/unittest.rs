@@ -41,6 +41,40 @@ impl Adapter for Unittest {
     }
 }
 
+/// `AssertionError: …`, `ValueError: …`, `module.CustomException: …`.
+fn is_exception_line(t: &str) -> bool {
+    static EXC: OnceLock<Regex> = OnceLock::new();
+    re(
+        &EXC,
+        r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure|Exit)\b",
+    )
+    .is_match(t)
+}
+
+/// The lines from `Traceback (most recent call last):` through the exception
+/// line (inclusive); the whole block when no traceback is present.
+fn traceback_span(block: &str, exception_idx: Option<usize>) -> &str {
+    let Some(start) = block.find("Traceback (most recent call last):") else {
+        return block;
+    };
+    let Some(exc_i) = exception_idx else {
+        return &block[start..];
+    };
+    let mut end = block.len();
+    let mut offset = 0;
+    for (i, line) in block.split_inclusive('\n').enumerate() {
+        offset += line.len();
+        if i == exc_i {
+            end = offset;
+            break;
+        }
+    }
+    if end < start {
+        return &block[start..];
+    }
+    &block[start..end]
+}
+
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).unwrap())
 }
@@ -97,17 +131,26 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
             .last()
             .map(|c| format!("{}:{}", &c[1], &c[2]))
             .unwrap_or_default();
-        let msg = block
-            .lines()
-            .rev()
-            .find(|l| {
-                let t = l.trim();
-                !t.is_empty() && !t.starts_with('-')
+        // The exception line ("AssertionError: Lists differ: …") is the
+        // message; unittest's multi-line diff explanation after it is detail
+        // the trace carries. Fall back to the last non-separator line.
+        let exception_idx = block.lines().position(|l| is_exception_line(l.trim()));
+        let msg = exception_idx
+            .and_then(|i| block.lines().nth(i))
+            .or_else(|| {
+                block.lines().rev().find(|l| {
+                    let t = l.trim();
+                    !t.is_empty() && !t.starts_with('-')
+                })
             })
             .unwrap_or("")
             .trim()
             .to_string();
-        let trace = trim_trace(block);
+        // Trace: from "Traceback" through the exception line. The FAIL header
+        // (already the id), the dashed separator, and the diff explanation
+        // would otherwise make the report larger than unittest's own output.
+        let trace_block = traceback_span(block, exception_idx);
+        let trace = trim_trace(trace_block);
         failures.push(Failure {
             id,
             loc,
@@ -149,6 +192,49 @@ mod tests {
         assert_eq!(f.id, "tests.test_auth.AuthTest.test_expiry");
         assert_eq!(f.loc, "/home/user/proj/tests/test_auth.py:42");
         assert_eq!(f.msg, "AssertionError: 1717000000 not less than 1716000000");
+    }
+
+    #[test]
+    fn msg_is_the_exception_line_and_trace_stops_there() {
+        let stderr = "F\n======================================================================\nFAIL: test_fail_alpha (test_many.ManyTests.test_fail_alpha)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/p/test_many.py\", line 22, in test_fail_alpha\n    self._explode(\"alpha\")\n    ~~~~~~~~~~~~~^^^^^^^^^\n  File \"/p/test_many.py\", line 19, in _explode\n    self.assertEqual(a, b)\nAssertionError: Lists differ: ['admin', 'editor', 'viewer'] != ['admin', 'editor']\n\nFirst list contains 1 additional elements.\nFirst extra element 2:\n'viewer'\n\n- ['admin', 'editor', 'viewer']\n?                   ----------\n+ ['admin', 'editor'] : unexpected roles for alpha\n\n----------------------------------------------------------------------\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n";
+        let r = parse_text(stderr).unwrap();
+        let f = &r.failures[0];
+        assert!(
+            f.msg.starts_with("AssertionError: Lists differ"),
+            "{}",
+            f.msg
+        );
+        assert_eq!(f.loc, "/p/test_many.py:19");
+        assert!(
+            f.trace[0].starts_with("File \"/p/test_many.py\", line 22"),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            f.trace.last().unwrap().starts_with("AssertionError"),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace.iter().any(|l| l.starts_with("FAIL:")),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace.iter().any(|l| l.starts_with("---")),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace.iter().any(|l| l.contains("~~~~^^^^")),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace.iter().any(|l| l.starts_with("First list")),
+            "{:?}",
+            f.trace
+        );
     }
 
     #[test]

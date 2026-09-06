@@ -9,8 +9,12 @@ const MIN_TOTAL_LINES: usize = 80; // below this, windowing saves too little
 fn is_error_line(line: &str) -> bool {
     static PAT: OnceLock<Regex> = OnceLock::new();
     let pat = PAT.get_or_init(|| {
-        Regex::new(r"(?i)\b(error|err!|fail|failed|failure|exception|panic|fatal|traceback)\b")
-            .unwrap()
+        // Keyword list plus identifier-glued names (`KeyError:`,
+        // `NullPointerException`) that `\b…\b` alone would miss.
+        Regex::new(
+            r"(?i)\b(error|err!|fail|failed|failure|exception|panic|fatal|traceback)\b|[A-Za-z_][A-Za-z0-9_]*(Error|Exception)\b",
+        )
+        .unwrap()
     });
     pat.is_match(line)
 }
@@ -18,6 +22,7 @@ fn is_error_line(line: &str) -> bool {
 /// Keep head + tail + windows around error keywords; replace elided spans
 /// with `  (skipped K lines, see raw_log)`.
 pub fn window_errors(text: &str) -> String {
+    let sep = super::safe::line_sep(text);
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() < MIN_TOTAL_LINES {
         return text.to_string();
@@ -54,7 +59,7 @@ pub fn window_errors(text: &str) -> String {
     if skipped > 0 {
         out.push(format!("  (skipped {skipped} lines, see raw_log)"));
     }
-    out.join("\n")
+    out.join(sep)
 }
 
 #[cfg(test)]
@@ -82,6 +87,18 @@ mod tests {
         assert!(out.contains("step 98: ok")); // error context
         assert!(out.contains("skipped"));
         assert!(!out.contains("step 50: ok")); // elided middle
+    }
+
+    #[test]
+    fn camelcase_exception_names_anchor_a_window() {
+        let mut lines: Vec<String> = (0..120).map(|i| format!("line {i}")).collect();
+        lines[60] = "KeyError: 'email'".into();
+        lines[61] = "java.lang.NullPointerException: x".into();
+        let out = window_errors(&lines.join("\n"));
+        assert!(out.contains("KeyError"), "{out}");
+        assert!(out.contains("NullPointerException"), "{out}");
+        assert!(out.contains("line 58"), "context kept: {out}");
+        assert!(!out.contains("line 30"), "middle elided: {out}");
     }
 
     #[test]

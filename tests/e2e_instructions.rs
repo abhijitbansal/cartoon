@@ -2,8 +2,18 @@ use assert_cmd::Command;
 use predicates::str::contains;
 use std::fs;
 
+/// Nothing here archives a run, but every binary invocation in tests/ points
+/// XDG_STATE_HOME at a temp dir (enforced by tests/isolation_lint.rs) so the
+/// developer's real archive can never be touched by `cargo test`.
+fn isolated_state() -> &'static tempfile::TempDir {
+    static STATE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| tempfile::tempdir().expect("temp state dir"))
+}
+
 fn cartoon() -> Command {
-    Command::cargo_bin("cartoon").unwrap()
+    let mut cmd = Command::cargo_bin("cartoon").unwrap();
+    cmd.env("XDG_STATE_HOME", isolated_state().path());
+    cmd
 }
 
 #[test]

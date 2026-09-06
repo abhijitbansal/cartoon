@@ -220,3 +220,10 @@ cp -r skills/cartoon ~/.codex/skills/
   adding this marketplace.
 - Design and decisions:
   [docs/superpowers/specs/2026-06-10-cartoon-agent-integrations-design.md](superpowers/specs/2026-06-10-cartoon-agent-integrations-design.md).
+
+## Troubleshooting
+
+`cartoon doctor` reports hook status per surface, config parse status,
+missing `wrap_scripts` targets, allowlisted tools without an adapter, and
+ledger health in one TOON document — paste it into a bug report.
+`cartoon hook status` and `cartoon shim status` remain the narrow checks.

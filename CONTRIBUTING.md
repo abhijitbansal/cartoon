@@ -8,8 +8,13 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-E2E tests for pytest/jest self-skip when the runner isn't installed locally;
-CI runs them all.
+E2E tests for pytest/jest self-skip when the runner isn't installed locally.
+
+GitHub CI is intentionally disabled (Actions runner minutes cost money the
+maintainer does not want to pay). The three commands above ARE the gate: run
+them before every commit and say so in the PR. `cargo test` never touches
+your real `~/.local/state/cartoon` archive — every e2e test points
+`XDG_STATE_HOME` at a temp dir (`tests/isolation_lint.rs` enforces it).
 
 ## Adding an adapter
 
@@ -26,5 +31,8 @@ CI runs them all.
 ## Rules
 
 - TDD: failing test first.
-- Never remove or reorder user-provided args in `prepare`.
+- Never remove or reorder user-provided args in `prepare`. Inject by
+  appending, or by inserting before the first `--` separator (cargo, mypy,
+  phpunit) or before `-args` (go test) — the tokens after those belong to
+  the wrapped program, not the runner.
 - Exit codes are sacred.

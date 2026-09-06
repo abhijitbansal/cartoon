@@ -1,0 +1,8 @@
+# 40 distinct coverage rows each carrying a percentage. The safe tier used to
+# collapse them as a "progress bar" run; it must now keep every row. The
+# aggressive tier may fold rows that differ only by numbers ("(x40 similar)",
+# disclosed, raw log archived) — that is its documented lossy contract.
+must_survive = ["src/pkg/module_00.py", "TOTAL"]
+must_survive_safe = ["src/pkg/module_17.py", "src/pkg/module_39.py"]
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.0
