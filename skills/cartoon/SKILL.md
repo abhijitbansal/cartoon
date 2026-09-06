@@ -56,9 +56,15 @@ cartoon xcodebuild build …        # RIGHT: signal kept, ~70% fewer tokens
 ```
 
 Wrap first; if you still need a slice of the raw log afterward, use
-`cartoon logs grep … --last`. Anything with a dedicated adapter (pytest, jest,
-vitest, swift test/build, `xcodebuild test`/`build`, ruff, eslint, tsc) should
-be run bare so the auto-wrap hook catches it — never behind a pipe.
+`cartoon logs grep … --last`. Anything with a dedicated adapter (pytest,
+unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo
+test/nextest, cargo build/check/clippy, go test, phpunit, rspec, swiftlint,
+swift test/build, `xcodebuild test`/`build`/`archive`) should be run bare so
+the auto-wrap hook catches it — never behind a pipe. If you must pipe, use
+`cartoon -c '<cmd> | tail -5'`: the adapter still fires and the dropped
+filter is disclosed. Any runner that writes JUnit XML (gradle, maven, dotnet)
+gets the same report via `cartoon --junit <file-or-dir> <cmd>`, and
+`cartoon --max-tokens 1500 <cmd>` guarantees a hard ceiling on what you read.
 
 Commands without a dedicated adapter still compress: the safe tier (ANSI,
 progress, duplicate, blank collapse) applies automatically, and

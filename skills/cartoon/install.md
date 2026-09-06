@@ -99,7 +99,10 @@ Check what's active anytime: `cartoon hook status` (every surface),
 
 ## Caveats
 
-- **Conservative allowlist**: only test/lint/typecheck/build commands wrap;
+- **Conservative allowlist**: only test/lint/typecheck/build commands wrap
+  (0.6.0: mutating modes such as `ruff format`/`--fix`, env-prefixed
+  commands like `PATH=… pytest`, and `npx <non-JS tool>` are left to the
+  normal permission prompt);
   infra CLIs (docker, kubectl, gh, aws) and mutating subcommands
   (`cargo publish`, `npm install`) pass through. The net-savings guard means
   wrapped output is never bigger than raw.

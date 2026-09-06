@@ -610,8 +610,8 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     <div class="gcard anim" style="--i:10">
       <span class="idx">01</span>
       <span class="chip chip--navy">Adapters</span>
-      <h3>Eleven runners, native formats</h3>
-      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> are first-class too — <code>uv run pytest</code> (uv auto-picks the project <code>.venv</code>), <code>uv run -m pytest</code>, and <code>uvx ruff check</code> are detected and auto-wrapped just like the bare tools.</p>
+      <h3>Twenty runners, native formats</h3>
+      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo test/nextest, cargo build/check/clippy, go test, phpunit, rspec, swiftlint — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>/<code>archive</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--message-format=json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> and <b>xcrun</b> are first-class too — <code>uv run pytest</code>, <code>uvx ruff check</code>, <code>xcrun xcodebuild test</code> are detected and auto-wrapped just like the bare tools. Anything that writes JUnit XML (gradle, maven, dotnet) gets the same report via <code>--junit</code>.</p>
     </div>
     <div class="gcard anim" style="--i:11">
       <span class="idx">02</span>
@@ -654,6 +654,12 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       <span class="chip chip--gold">Speed, disclosed</span>
       <h3><code>--fast</code> mode</h3>
       <p>Opt-in acceleration: pytest gains <code>-n auto</code> via pytest-xdist, disclosed right in the report. Strictly off by default — parallel execution is not "same behavior", so cartoon never enables it on its own.</p>
+    </div>
+    <div class="gcard anim" style="--i:18">
+      <span class="idx">09</span>
+      <span class="chip chip--slate">0.6</span>
+      <h3>Doctor, ceilings, pipes</h3>
+      <p><code>cartoon doctor</code> reports hook status per agent surface, config parse status, and every allowlisted tool that still has no adapter. <code>--max-tokens N</code> is a hard ceiling — head and tail kept, the middle replaced by one disclosed <code>logs grep</code> marker. <code>--junit &lt;path&gt;</code> renders any runner's JUnit XML as a test report. And <code>cartoon -c 'pytest | tail -5'</code> runs the adapter and drops the filter, disclosed as <code>pipe_filter_dropped</code>.</p>
     </div>
   </div>
 
@@ -784,7 +790,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   <div class="shead anim" style="--i:22">
     <div class="rule"><span class="tag">Coverage</span></div>
     <h2>Adapters &amp; measured results</h2>
-    <p>Eleven runners get native, machine-readable handling. Everything else still rides the compression ladder. The four Apple-platform adapters are new.</p>
+    <p>Twenty runners get native, machine-readable handling. Everything else still rides the compression ladder, and output that arrives without a matching command — a <code>./build.sh</code> that runs xcodebuild inside, JUnit XML on stdout — is recognized by shape. <code>cartoon doctor</code> lists any hook-allowlisted tool that still has no adapter.</p>
   </div>
 
   <div class="tablewrap anim" style="--i:23">
@@ -801,7 +807,15 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
         <tr><td><code>eslint</code></td><td>eslint, npx eslint</td><td>injected --format json</td></tr>
         <tr><td><code>tsc</code></td><td>tsc, npx tsc (not --watch)</td><td>injected --pretty false</td></tr>
         <tr class="apple"><td><code>swift-build</code><span class="newchip">New · Apple</span></td><td>swift build</td><td>stdout/stderr diagnostics parse</td></tr>
-        <tr class="apple"><td><code>xcodebuild-build</code><span class="newchip">New · Apple</span></td><td>xcodebuild build (no test action)</td><td>stdout/stderr diagnostics parse</td></tr>
+        <tr class="apple"><td><code>xcodebuild-build</code><span class="newchip">New · Apple</span></td><td>xcodebuild build / archive / -exportArchive (no test action)</td><td>stdout/stderr diagnostics parse</td></tr>
+        <tr><td><code>pre-commit</code><span class="newchip">New · 0.6</span></td><td>pre-commit, pre-commit run …</td><td>stdout text parse (--color=never injected)</td></tr>
+        <tr><td><code>cargo-test</code><span class="newchip">New · 0.6</span></td><td>cargo test, cargo nextest run</td><td>stable text parse (never nightly JSON)</td></tr>
+        <tr><td><code>cargo-build</code><span class="newchip">New · 0.6</span></td><td>cargo build / check / clippy</td><td>injected --message-format=json (before --)</td></tr>
+        <tr><td><code>go-test</code><span class="newchip">New · 0.6</span></td><td>go test</td><td>injected -json</td></tr>
+        <tr><td><code>mypy</code><span class="newchip">New · 0.6</span></td><td>mypy, python -m mypy, uv run mypy</td><td>injected --output json</td></tr>
+        <tr><td><code>phpunit</code><span class="newchip">New · 0.6</span></td><td>phpunit, vendor/bin/phpunit</td><td>injected --log-junit</td></tr>
+        <tr><td><code>rspec</code><span class="newchip">New · 0.6</span></td><td>rspec, bundle exec rspec</td><td>injected --format json --out &lt;file&gt;</td></tr>
+        <tr class="apple"><td><code>swiftlint</code><span class="newchip">New · Apple</span></td><td>swiftlint, swiftlint lint (never --fix / autocorrect)</td><td>injected --reporter json</td></tr>
       </tbody>
     </table>
   </div>
