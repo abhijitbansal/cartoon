@@ -61,6 +61,11 @@ pub fn estimate_tokens(text: &str, tokenizer: &str) -> usize {
 /// costs ~170 ms, which dwarfs `cartoon true` itself.
 pub const SMALL_OUTPUT_BYTES: usize = 4096;
 
+/// Above this many bytes the estimate is used too: exact o200k over tens of
+/// megabytes costs seconds, and at that size the guard's decision is never
+/// close (close calls still go through `exact`).
+pub const LARGE_OUTPUT_BYTES: usize = 4 << 20;
+
 /// Token counting for one run: exact with the configured tokenizer for
 /// real output, the cheap estimate for tiny output (stats stay within a few
 /// tokens there). `exact` forces the configured tokenizer for close calls.
@@ -76,7 +81,7 @@ impl<'a> Counter<'a> {
     pub fn new(tokenizer: &'a str, total_bytes: usize, need_exact: bool) -> Self {
         Counter {
             tokenizer,
-            cheap: !need_exact && total_bytes < SMALL_OUTPUT_BYTES,
+            cheap: !need_exact && !(SMALL_OUTPUT_BYTES..=LARGE_OUTPUT_BYTES).contains(&total_bytes),
         }
     }
 

@@ -740,6 +740,9 @@ fn transform_text(text: &str, level: CompressLevel) -> Option<String> {
     if text.is_empty() {
         return None;
     }
+    if let Some(view) = window_large(text) {
+        return Some(crate::ladder::compress(&view, level));
+    }
     let compressed = crate::ladder::compress(text, level);
     // The ladder's line-join drops a trailing newline; treat that as unchanged.
     let unchanged = compressed == text
@@ -749,9 +752,91 @@ fn transform_text(text: &str, level: CompressLevel) -> Option<String> {
     (!unchanged).then_some(compressed)
 }
 
+/// Outputs above this size reach the ladder as a window (see `window_large`).
+const WINDOW_THRESHOLD_BYTES: usize = 4 << 20;
+const WINDOW_HEAD_BYTES: usize = 512 << 10;
+const WINDOW_TAIL_BYTES: usize = 1 << 20;
+const WINDOW_MAX_ERROR_LINES: usize = 200;
+
+/// A huge output (multi-megabyte logs) is useless to an agent whole and
+/// costs ~13x its size in ladder memory. Keep the head, the tail, and every
+/// error line from the middle (up to a cap), with a marker saying exactly
+/// what was omitted; the full text is in the raw-log archive, and if the
+/// archive write fails the caller emits the original streams instead.
+fn window_large(text: &str) -> Option<String> {
+    if text.len() <= WINDOW_THRESHOLD_BYTES {
+        return None;
+    }
+    let head_end = text[..WINDOW_HEAD_BYTES]
+        .rfind('\n')
+        .map_or(WINDOW_HEAD_BYTES, |i| i + 1);
+    let mut tail_start = text.len() - WINDOW_TAIL_BYTES;
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let tail_start = text[tail_start..]
+        .find('\n')
+        .map_or(tail_start, |i| tail_start + i + 1);
+    let middle = &text[head_end..tail_start];
+    let mut omitted = 0usize;
+    let mut errors: Vec<&str> = Vec::new();
+    let mut extra_errors = 0usize;
+    for line in middle.lines() {
+        omitted += 1;
+        if crate::ladder::is_error_line(line) {
+            if errors.len() < WINDOW_MAX_ERROR_LINES {
+                errors.push(line);
+            } else {
+                extra_errors += 1;
+            }
+        }
+    }
+    let mut view = String::with_capacity(head_end + (text.len() - tail_start) + 4096);
+    view.push_str(&text[..head_end]);
+    view.push_str(&format!(
+        "… cartoon: {omitted} lines ({:.1} MB) of a {:.1} MB output omitted; \
+         {} error line(s) from them follow{} — full text in raw_log\n",
+        middle.len() as f64 / 1048576.0,
+        text.len() as f64 / 1048576.0,
+        errors.len(),
+        if extra_errors > 0 {
+            format!(" (+{extra_errors} more not shown)")
+        } else {
+            String::new()
+        }
+    ));
+    for e in errors {
+        view.push_str(e);
+        view.push('\n');
+    }
+    view.push_str("… cartoon: end of omitted section\n");
+    view.push_str(&text[tail_start..]);
+    Some(view)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_output_is_windowed_keeping_middle_errors() {
+        let mut text = String::new();
+        let mut i = 0;
+        while text.len() < WINDOW_THRESHOLD_BYTES + (1 << 20) {
+            text.push_str(&format!("step {i} compiled ok\n"));
+            if i == 150_000 {
+                text.push_str("error: linker failed in module zeta\n");
+            }
+            i += 1;
+        }
+        let view = window_large(&text).expect("windowed");
+        assert!(view.len() < 2 << 20, "{}", view.len());
+        assert!(view.starts_with("step 0 compiled ok\n"));
+        assert!(view.ends_with(&format!("step {} compiled ok\n", i - 1)));
+        assert!(view.contains("error: linker failed in module zeta"));
+        assert!(view.contains("lines (") && view.contains("omitted"));
+        assert!(window_large("small\n").is_none());
+    }
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
