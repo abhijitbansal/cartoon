@@ -1,0 +1,15 @@
+xF.u
+======================================================================
+FAIL: test_fail (test_us.T.test_fail)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/user/proj/test_us.py", line 17, in test_fail
+    self.assertEqual(1, 2, "custom note")
+AssertionError: 1 != 2 : custom note
+
+======================================================================
+UNEXPECTED SUCCESS: test_unexpected (test_us.T.test_unexpected)
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+FAILED (failures=1, expected failures=1, unexpected successes=1)
