@@ -26,19 +26,75 @@ pub struct RunMeta {
 
 /// `YYYYMMDD-HHMMSS-<4 hex>` UTC; lexicographic order == time order.
 /// Salt: process-local monotonic counter lazily seeded from pid ^ nanos,
-/// so parallel processes start at different offsets (collision-resistant)
-/// while calls within one process stay strictly ordered.
+/// so parallel processes start at different offsets while calls within one
+/// process stay strictly ordered. Uniqueness is not assumed: `create_run_dir`
+/// claims the id with an exclusive `create_dir` and retries on a collision.
 pub fn new_run_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    static SEEDED: std::sync::Once = std::sync::Once::new();
     let now = chrono::Utc::now();
-    let _ = COUNTER.compare_exchange(
-        0,
-        (std::process::id() as u64 ^ now.timestamp_subsec_nanos() as u64) | 1,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
+    SEEDED.call_once(|| {
+        COUNTER.store(
+            std::process::id() as u64 ^ now.timestamp_subsec_nanos() as u64,
+            Ordering::Relaxed,
+        )
+    });
     let salt = COUNTER.fetch_add(1, Ordering::Relaxed) & 0xffff;
     format!("{}-{:04x}", now.format("%Y%m%d-%H%M%S"), salt)
+}
+
+/// Archive dirs are 0700 and files 0600: `meta.json` holds full argv + cwd
+/// and the logs hold whatever the command printed (tokens, env dumps).
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// Create `dir` and any missing parents, private to the user.
+fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, DIR_MODE);
+    b.create(dir)
+}
+
+/// Claim a fresh run dir under `root`. `create_dir` (not `create_dir_all`)
+/// fails on an existing dir, so two processes can never share a run id;
+/// on `AlreadyExists` a new id is drawn.
+fn create_run_dir(root: &Path) -> std::io::Result<RunRef> {
+    create_run_dir_with(root, new_run_id)
+}
+
+fn create_run_dir_with(
+    root: &Path,
+    mut next_id: impl FnMut() -> String,
+) -> std::io::Result<RunRef> {
+    create_private_dir_all(root)?;
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, DIR_MODE);
+    let mut last = None;
+    for _ in 0..64 {
+        let id = next_id();
+        let dir = root.join(&id);
+        match b.create(&dir) {
+            Ok(()) => return Ok(RunRef { id, dir }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free run id")))
+}
+
+/// Write a new archive file readable only by the user.
+fn write_private(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, FILE_MODE);
+    o.open(path)?.write_all(contents.as_ref())
 }
 
 /// Public wrapper: archive under the XDG runs dir. Failures swallowed → None.
@@ -54,17 +110,16 @@ pub fn record(
     record_at(&root, argv, mode, captured, exit, tags, cfg)
 }
 
-/// Reserve a run slot (id + dir) without writing anything, so callers can
-/// know the final `raw_log` path before committing to a transform. None when
-/// archiving is disabled or no state dir exists.
+/// Reserve a run slot (id + empty dir, claimed exclusively) without writing
+/// any logs, so callers can know the final `raw_log` path before committing
+/// to a transform. None when archiving is disabled, no state dir exists, or
+/// the dir cannot be created.
 pub fn reserve(cfg: &Config) -> Option<RunRef> {
     if cfg.keep_runs == 0 {
         return None;
     }
     let root = crate::paths::runs_dir()?;
-    let id = new_run_id();
-    let dir = root.join(&id);
-    Some(RunRef { id, dir })
+    create_run_dir(&root).ok()
 }
 
 /// Write a previously reserved run. Failures swallowed → None.
@@ -110,18 +165,17 @@ pub fn record_at(
     if cfg.keep_runs == 0 {
         return None; // archiving disabled
     }
-    let id = new_run_id();
-    let dir = root.join(&id);
-    write_at(
-        root,
-        RunRef { id, dir },
-        argv,
-        mode,
-        captured,
-        exit,
-        tags,
-        cfg,
-    )
+    let run = match create_run_dir(root) {
+        Ok(run) => run,
+        Err(e) => {
+            eprintln!(
+                "cartoon: could not archive raw output under {}: {e}",
+                root.display()
+            );
+            return None;
+        }
+    };
+    write_at(root, run, argv, mode, captured, exit, tags, cfg)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -154,11 +208,15 @@ fn write_at(
         stderr_bytes: captured.stderr.len() as u64,
     };
     let write_all = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("stdout.log"), &captured.stdout)?;
-        std::fs::write(dir.join("stderr.log"), &captured.stderr)?;
+        // The dir was claimed by `create_run_dir`; recreate it only if it
+        // vanished in between (e.g. a manual cleanup).
+        if !dir.is_dir() {
+            create_private_dir_all(&dir)?;
+        }
+        write_private(&dir.join("stdout.log"), &captured.stdout)?;
+        write_private(&dir.join("stderr.log"), &captured.stderr)?;
         let json = serde_json::to_string_pretty(&meta).map_err(std::io::Error::other)?;
-        std::fs::write(dir.join("meta.json"), json)?;
+        write_private(&dir.join("meta.json"), json.as_bytes())?;
         Ok(())
     };
     if let Err(e) = write_all() {
@@ -171,7 +229,7 @@ fn write_at(
         let _ = std::fs::remove_dir_all(&dir);
         return None;
     }
-    prune_at(root, cfg);
+    prune_at(root, cfg, chrono::Utc::now());
     Some(RunRef { id, dir })
 }
 
@@ -226,9 +284,30 @@ pub fn load_at(root: &Path, id: &str) -> Result<(RunMeta, String, String)> {
     Ok((meta, stdout, stderr))
 }
 
-/// Delete oldest runs while count > keep_runs OR total bytes > max_archive_mb.
+/// The newest runs that the size budget never deletes: one oversized log
+/// must not wipe out every older `raw_log` an agent may still hold.
+const MIN_KEEP_RUNS: usize = 5;
+/// Runs younger than this are never pruned: a concurrent cartoon process
+/// may have just reserved or written one and printed its `raw_log` path.
+const MIN_PRUNE_AGE_SECS: i64 = 60;
+
+/// When a run was created, from its id (`YYYYMMDD-HHMMSS-xxxx`, UTC).
+fn run_time(dir: &Path) -> Option<chrono::DateTime<chrono::Utc>> {
+    let name = dir.file_name()?.to_str()?;
+    let ts = chrono::NaiveDateTime::parse_from_str(name.get(..15)?, "%Y%m%d-%H%M%S").ok()?;
+    Some(ts.and_utc())
+}
+
+/// Delete oldest runs while count > keep_runs OR the archive is over
+/// max_archive_mb, with three guards:
+/// - the newest run is always kept and does not count toward the size
+///   budget (its raw_log footer was just emitted);
+/// - the size budget never deletes any of the newest `MIN_KEEP_RUNS`;
+/// - runs younger than `MIN_PRUNE_AGE_SECS` are never deleted (a sibling
+///   process's run in flight).
+///
 /// Errors ignored: deletion is idempotent and retried implicitly next run.
-fn prune_at(root: &Path, cfg: &Config) {
+fn prune_at(root: &Path, cfg: &Config, now: chrono::DateTime<chrono::Utc>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -238,6 +317,10 @@ fn prune_at(root: &Path, cfg: &Config) {
         .filter(|p| p.is_dir())
         .collect();
     dirs.sort(); // run-ids sort oldest-first lexicographically
+    let n = dirs.len();
+    if n < 2 {
+        return;
+    }
 
     let dir_size = |d: &Path| -> u64 {
         std::fs::read_dir(d)
@@ -250,30 +333,70 @@ fn prune_at(root: &Path, cfg: &Config) {
             .unwrap_or(0)
     };
     let sizes: Vec<u64> = dirs.iter().map(|d| dir_size(d)).collect();
-    let mut total: u64 = sizes.iter().sum();
+    // The newest run is outside the budget: it is always kept anyway.
+    let mut total: u64 = sizes[..n - 1].iter().sum();
     let max_bytes = cfg.max_archive_mb * 1024 * 1024;
+    let too_young =
+        |d: &Path| run_time(d).is_some_and(|t| (now - t).num_seconds() < MIN_PRUNE_AGE_SECS);
 
-    // Never prune the newest entry: it is the run whose raw_log footer was
-    // just emitted. A single run over max_archive_mb is kept and disclosed.
+    // `i` is the oldest surviving run; `n - i` runs remain.
     let mut i = 0;
-    while i + 1 < dirs.len() && (dirs.len() - i > cfg.keep_runs || total > max_bytes) {
+    while i + 1 < n {
+        let remaining = n - i;
+        let over_count = remaining > cfg.keep_runs;
+        let over_size = total > max_bytes && remaining > MIN_KEEP_RUNS;
+        // Ids are time-ordered: once one is too young, all newer ones are.
+        if !(over_count || over_size) || too_young(&dirs[i]) {
+            break;
+        }
         let _ = std::fs::remove_dir_all(&dirs[i]);
         total = total.saturating_sub(sizes[i]);
         i += 1;
     }
     if total > max_bytes {
         eprintln!(
-            "cartoon: archive is {} MB, over max_archive_mb = {}; keeping the newest run so raw_log stays valid",
+            "cartoon: archive is {} MB, over max_archive_mb = {}; keeping the newest {} runs so their raw_log paths stay valid",
             total / (1024 * 1024),
-            cfg.max_archive_mb
+            cfg.max_archive_mb,
+            n - i
         );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{list_at, load_at, new_run_id, record_at};
+    use super::{create_run_dir_with, list_at, load_at, new_run_id, prune_at, record_at};
     use crate::runner::Captured;
+    use std::path::Path;
+
+    /// An archived run with an explicit id (so its age is under the test's
+    /// control) and `bytes` of stdout.
+    fn fake_run(root: &Path, id: &str, bytes: usize) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stdout.log"), "x".repeat(bytes)).unwrap();
+        std::fs::write(
+            dir.join("meta.json"),
+            format!(
+                r#"{{"id":"{id}","ts":"","argv":["a"],"mode":"safe","exit":0,"cwd":"","stdout_bytes":{bytes},"stderr_bytes":0}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn old_id(i: usize) -> String {
+        format!("20200101-000000-{i:04x}")
+    }
+
+    fn ids(root: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
 
     fn captured(stdout: &str, stderr: &str) -> Captured {
         use std::process::Command;
@@ -388,64 +511,120 @@ mod tests {
     #[test]
     fn prunes_beyond_keep_runs() {
         let tmp = tempfile::tempdir().unwrap();
-        let cap = captured("x", "");
+        for i in 1..=3 {
+            fake_run(tmp.path(), &old_id(i), 1);
+        }
         let mut small = cfg();
         small.keep_runs = 2;
-        for name in ["a", "b", "c"] {
-            record_at(
-                tmp.path(),
-                &[name.to_string()],
-                "json",
-                &cap,
-                0,
-                &[],
-                &small,
-            )
-            .unwrap();
-        }
-        let all = list_at(tmp.path(), None);
-        assert_eq!(all.len(), 2, "oldest pruned");
-        assert_eq!(all[1].argv[0], "b", "a was deleted");
+        prune_at(tmp.path(), &small, chrono::Utc::now());
+        assert_eq!(ids(tmp.path()), vec![old_id(2), old_id(3)], "oldest pruned");
     }
 
     #[test]
-    fn prunes_beyond_max_size() {
+    fn size_budget_keeps_the_newest_runs() {
         let tmp = tempfile::tempdir().unwrap();
-        let big = "x".repeat(1024 * 1024); // 1 MiB stdout per run
-        let cap = captured(&big, "");
+        for i in 1..=8 {
+            fake_run(tmp.path(), &old_id(i), 1024 * 1024);
+        }
         let mut small = cfg();
-        small.keep_runs = 100;
         small.max_archive_mb = 2;
-        for name in ["a", "b", "c"] {
-            record_at(
-                tmp.path(),
-                &[name.to_string()],
-                "json",
-                &cap,
-                0,
-                &[],
-                &small,
-            )
-            .unwrap();
-        }
-        let all = list_at(tmp.path(), None);
-        assert!(all.len() <= 2, "size cap enforced, got {}", all.len());
+        prune_at(tmp.path(), &small, chrono::Utc::now());
+        let left = ids(tmp.path());
+        assert_eq!(left.len(), super::MIN_KEEP_RUNS, "{left:?}");
+        assert_eq!(left.last(), Some(&old_id(8)));
     }
 
     #[test]
-    fn prune_keeps_the_run_just_written_even_over_the_size_cap() {
+    fn one_oversized_run_does_not_wipe_older_runs() {
+        // Regression: a single run larger than max_archive_mb used to prune
+        // every older run, breaking raw_log pointers the agent still holds.
         let tmp = tempfile::tempdir().unwrap();
+        for i in 1..=8 {
+            fake_run(tmp.path(), &old_id(i), 1024);
+        }
+        fake_run(tmp.path(), &old_id(9), 3 * 1024 * 1024);
+        let mut small = cfg();
+        small.max_archive_mb = 1;
+        prune_at(tmp.path(), &small, chrono::Utc::now());
+        assert_eq!(
+            ids(tmp.path()).len(),
+            9,
+            "the newest run is outside the budget"
+        );
+    }
+
+    #[test]
+    fn oversized_runs_never_prune_below_the_minimum_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 1..=8 {
+            fake_run(tmp.path(), &old_id(i), 4096);
+        }
         let mut c = cfg();
         c.max_archive_mb = 0; // every byte is over the cap
-        let big = "x".repeat(4096);
-        let cap = captured(&big, "");
-        let first = record_at(tmp.path(), &["a".to_string()], "safe", &cap, 0, &[], &c).unwrap();
-        let second = record_at(tmp.path(), &["b".to_string()], "safe", &cap, 0, &[], &c).unwrap();
-        assert!(!first.dir.exists(), "older run pruned");
-        assert!(
-            second.dir.exists(),
-            "newest run must survive so raw_log never dangles"
+        prune_at(tmp.path(), &c, chrono::Utc::now());
+        let left = ids(tmp.path());
+        assert_eq!(left.len(), super::MIN_KEEP_RUNS, "{left:?}");
+        assert_eq!(left.last(), Some(&old_id(8)), "newest survives");
+    }
+
+    #[test]
+    fn young_runs_are_never_pruned() {
+        // A sibling process may have just reserved or written these.
+        let tmp = tempfile::tempdir().unwrap();
+        let now = chrono::Utc::now();
+        fake_run(tmp.path(), &old_id(1), 1);
+        for i in 0..3 {
+            let id = format!("{}-{i:04x}", now.format("%Y%m%d-%H%M%S"));
+            std::fs::create_dir_all(tmp.path().join(id)).unwrap(); // reserved, empty
+        }
+        let mut c = cfg();
+        c.keep_runs = 1;
+        prune_at(tmp.path(), &c, now);
+        let left = ids(tmp.path());
+        assert_eq!(left.len(), 3, "only the old run goes: {left:?}");
+        assert!(!left.contains(&old_id(1)));
+    }
+
+    #[test]
+    fn records_written_back_to_back_are_all_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cap = captured("x", "");
+        let mut c = cfg();
+        c.keep_runs = 1;
+        let a = record_at(tmp.path(), &["a".into()], "safe", &cap, 0, &[], &c).unwrap();
+        let b = record_at(tmp.path(), &["b".into()], "safe", &cap, 0, &[], &c).unwrap();
+        assert!(a.dir.exists() && b.dir.exists(), "neither is 60s old yet");
+    }
+
+    #[test]
+    fn run_dir_creation_never_reuses_an_existing_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("taken")).unwrap();
+        std::fs::write(tmp.path().join("taken/stdout.log"), "sibling's log").unwrap();
+        let mut ids = vec!["fresh".to_string(), "taken".to_string()];
+        let run = create_run_dir_with(tmp.path(), || ids.pop().unwrap()).unwrap();
+        assert_eq!(run.id, "fresh");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("taken/stdout.log")).unwrap(),
+            "sibling's log"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_is_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("state/cartoon/runs");
+        let cap = captured("secret token\n", "err\n");
+        let run = record_at(&root, &["env".into()], "safe", &cap, 0, &[], &cfg()).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&root), 0o700);
+        assert_eq!(mode(&tmp.path().join("state/cartoon")), 0o700);
+        assert_eq!(mode(&run.dir), 0o700);
+        for f in ["stdout.log", "stderr.log", "meta.json"] {
+            assert_eq!(mode(&run.dir.join(f)), 0o600, "{f}");
+        }
     }
 
     #[test]
