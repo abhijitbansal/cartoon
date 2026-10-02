@@ -597,6 +597,25 @@ fn run_with_adapter(
                     }
                 };
             }
+            // The injected machine format (e.g. `go test -json`) can dwarf
+            // what the tool prints on its own; measure against the native
+            // view when the adapter can reconstruct it, and show that view
+            // instead of the machine stream when the report doesn't win.
+            if let Some(native) = adapter.native_stdout(argv, captured) {
+                let native_n = counter.exact(&native);
+                if !pays_for_itself(out_n + err_n, native_n + in_err) {
+                    let em = Emission {
+                        out: Part::Text(Cow::Owned(native), native_n),
+                        err: Part::Raw,
+                        in_out: native_n,
+                        in_err,
+                        mode: "passthrough",
+                        normalize_newline: false,
+                    };
+                    return Ok(deliver(argv, &run, code, em, cfg, run_id));
+                }
+                in_out = native_n;
+            }
             // Net-savings guard, same rule as the ladder path: a report that
             // costs more tokens than the raw output (tiny suites, `-q` runs)
             // is replaced by the original streams, byte-identical.

@@ -351,11 +351,12 @@ aggressive tier, signal lines asserted intact):
   unmodified output.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
-  byte-identically. Savings are never negative relative to the output of
-  the command cartoon ran. Note that adapters inject a machine-readable
-  flag (`go test -json`, `--junit-xml`, ...), so against a runner's terse
-  default output a report can be larger: `go test` with short failures is
-  the measured case ([benchmarks](benchmarks/README.md)).
+  byte-identically. When an adapter injects a machine-readable flag
+  (`go test -json`, `--junit-xml`, ...), the guard measures against what
+  the command would have printed *without* that flag (reconstructed from
+  the machine stream), and emits that native output when the report would
+  not beat it — so savings are never negative relative to the command as
+  you typed it ([benchmarks](benchmarks/README.md)).
 
 ## Raw log archive
 

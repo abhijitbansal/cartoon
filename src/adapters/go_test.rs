@@ -61,6 +61,72 @@ impl Adapter for GoTest {
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         parse_go_test(captured)
     }
+    fn native_stdout(&self, user_argv: &[String], captured: &Captured) -> Option<String> {
+        // The user asked for JSON themselves: that stream IS their baseline.
+        if user_argv.iter().any(|a| a == "-json" || a == "--json") {
+            return None;
+        }
+        let verbose = user_argv
+            .iter()
+            .any(|a| matches!(a.as_str(), "-v" | "--v" | "-v=true" | "--v=true"));
+        Some(plain_view(&captured.stdout, verbose))
+    }
+}
+
+/// Reconstruct what plain `go test` (without `-json`, which implies `-v`)
+/// prints from the event stream: non-verbose go shows only failing tests'
+/// output plus the per-package `ok`/`FAIL` lines; `-v` shows everything.
+/// Non-event lines (a crashed binary's raw output) are kept verbatim.
+fn plain_view(stdout: &str, verbose: bool) -> String {
+    let mut out = String::new();
+    // Buffered output of tests whose outcome is not known yet, by
+    // (package, test), in first-seen order.
+    let mut pending: Vec<((String, String), String)> = Vec::new();
+    for raw_line in stdout.lines() {
+        let Ok(ev) = serde_json::from_str::<GoEvent>(raw_line.trim()) else {
+            if !raw_line.trim().is_empty() {
+                out.push_str(raw_line);
+                out.push('\n');
+            }
+            continue;
+        };
+        let text = ev.output.as_deref().unwrap_or("");
+        if ev.action.starts_with("build-") {
+            out.push_str(text);
+            continue;
+        }
+        match (ev.test, ev.action.as_str()) {
+            (_, "output") if verbose => out.push_str(text),
+            (Some(t), "output") => {
+                if text.starts_with("=== ") {
+                    continue;
+                }
+                let key = (ev.package, t);
+                match pending.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, buf)) => buf.push_str(text),
+                    None => pending.push((key, text.to_string())),
+                }
+            }
+            (Some(t), action @ ("pass" | "fail" | "skip")) if !verbose => {
+                let key = (ev.package, t);
+                if let Some(i) = pending.iter().position(|(k, _)| *k == key) {
+                    let (_, buf) = pending.remove(i);
+                    if action == "fail" {
+                        out.push_str(&buf);
+                    }
+                }
+            }
+            // Non-verbose go prints no bare `PASS` line for a passing package.
+            (None, "output") if text == "PASS\n" => {}
+            (None, "output") => out.push_str(text),
+            _ => {}
+        }
+    }
+    // Tests that never finished (killed by -timeout): go shows their output.
+    for (_, buf) in pending {
+        out.push_str(&buf);
+    }
+    out
 }
 
 #[derive(Deserialize)]
@@ -559,6 +625,45 @@ mod tests {
     }
 
     // --- detect ---
+
+    #[test]
+    fn plain_view_keeps_only_failing_output_and_package_lines() {
+        let stdout = concat!(
+            r#"{"Action":"start","Package":"ex/p"}"#,
+            "\n",
+            r#"{"Action":"run","Package":"ex/p","Test":"TestOk"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestOk","Output":"=== RUN   TestOk\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestOk","Output":"--- PASS: TestOk (0.00s)\n"}"#,
+            "\n",
+            r#"{"Action":"pass","Package":"ex/p","Test":"TestOk"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"=== RUN   TestBad\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"    p_test.go:9: boom\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}"#,
+            "\n",
+            r#"{"Action":"fail","Package":"ex/p","Test":"TestBad"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Output":"FAIL\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Output":"FAIL\tex/p\t0.01s\n"}"#,
+            "\n",
+            r#"{"Action":"fail","Package":"ex/p"}"#,
+            "\n",
+        );
+        assert_eq!(
+            plain_view(stdout, false),
+            "    p_test.go:9: boom\n--- FAIL: TestBad (0.00s)\nFAIL\nFAIL\tex/p\t0.01s\n"
+        );
+        assert!(plain_view(stdout, true).contains("--- PASS: TestOk"));
+        let user = argv(&["go", "test", "-json", "./..."]);
+        assert!(GoTest
+            .native_stdout(&user, &captured(stdout, "", false))
+            .is_none());
+    }
 
     #[test]
     fn detects_go_test_variants() {

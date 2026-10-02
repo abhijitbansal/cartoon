@@ -79,6 +79,15 @@ impl Adapter for Pytest {
             artifact: artifact.map(super::Artifact::File),
         }
     }
+    fn native_stdout(&self, user_argv: &[String], captured: &Captured) -> Option<String> {
+        // Our injected `--junit-xml` makes pytest print a
+        // `generated xml file: …/cartoon-junit-….xml` line the user's own
+        // run would not have; the baseline (and any passthrough) omits it.
+        if user_junit_path(user_argv).is_some() {
+            return None;
+        }
+        Some(strip_injected_junit_line(&captured.stdout))
+    }
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let path = prepared
             .artifact_path()
@@ -102,6 +111,13 @@ impl Adapter for Pytest {
 }
 
 /// A user-supplied `--junit-xml`/`--junitxml` path (`=` or two-token form).
+fn strip_injected_junit_line(stdout: &str) -> String {
+    stdout
+        .split_inclusive('\n')
+        .filter(|l| !(l.contains("generated xml file:") && l.contains("cartoon-junit-")))
+        .collect()
+}
+
 fn user_junit_path(argv: &[String]) -> Option<PathBuf> {
     for (i, a) in argv.iter().enumerate() {
         for flag in ["--junit-xml", "--junitxml"] {
@@ -316,6 +332,15 @@ mod tests {
             name
         );
         parse_junit(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn native_view_drops_only_our_generated_xml_line() {
+        let out = "1 failed in 0.01s\n- generated xml file: /tmp/cartoon-junit-ab.xml -\n- generated xml file: mine.xml -\n";
+        assert_eq!(
+            strip_injected_junit_line(out),
+            "1 failed in 0.01s\n- generated xml file: mine.xml -\n"
+        );
     }
 
     #[test]

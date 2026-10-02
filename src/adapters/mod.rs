@@ -100,6 +100,15 @@ pub trait Adapter {
     fn fast_args(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What the tool would have printed on stdout for the user's own argv,
+    /// had `prepare()` not injected a machine format (plain `go test` vs
+    /// `go test -json`, which is far larger). When present, the net-savings
+    /// guard measures the report against this view instead of the bulky
+    /// machine stream, and emits it when the report would not pay for
+    /// itself. Default: none (the captured stream is already the baseline).
+    fn native_stdout(&self, _user_argv: &[String], _captured: &Captured) -> Option<String> {
+        None
+    }
 }
 
 pub fn registry() -> Vec<Box<dyn Adapter>> {
