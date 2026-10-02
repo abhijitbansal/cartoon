@@ -52,9 +52,11 @@ impl Adapter for CargoTest {
                 // should still see. Anchored to a line start so a crate
                 // merely named `my-error-utils` in printed test output
                 // can't trip this on the bare substring.
-                let passthrough_stderr = diag_re()
-                    .is_match(&captured.stderr)
-                    .then(|| captured.stderr.clone());
+                // cargo's own `error: test failed, to rerun …` /
+                // `error: N targets failed:` trailer is on every failing run
+                // and is not a diagnostic; it must not force the raw stream.
+                let passthrough_stderr =
+                    has_real_diagnostic(&captured.stderr).then(|| captured.stderr.clone());
                 Ok(ParseOutcome {
                     report: AdapterReport::Tests(report),
                     passthrough_stdout: None,
@@ -114,6 +116,17 @@ fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
 fn diag_re() -> &'static Regex {
     static DIAG: OnceLock<Regex> = OnceLock::new();
     re(&DIAG, r"(?m)^(warning|error)(\[|:)")
+}
+
+/// True when stderr carries a compiler `warning:`/`error:` line other than
+/// cargo's failing-run trailer (`error: test failed, to rerun pass …`,
+/// `error: N targets failed:`), which the report already conveys.
+fn has_real_diagnostic(stderr: &str) -> bool {
+    stderr.lines().any(|l| {
+        diag_re().is_match(l)
+            && !l.starts_with("error: test failed, to rerun")
+            && !(l.starts_with("error: ") && l.ends_with(" targets failed:"))
+    })
 }
 
 /// An optional capture group as `u64`, defaulting to 0 when absent. Unlike
@@ -742,6 +755,17 @@ error: could not compile `my_crate` (lib test) due to 1 previous error
             .parse(&captured, &CargoTest.prepare(argv(&["cargo", "test"])))
             .unwrap();
         assert!(out.passthrough_stderr.unwrap().contains("warning"));
+    }
+
+    #[test]
+    fn cargo_failing_run_trailer_is_not_passed_through() {
+        let stderr = "   Compiling p v0.1.0\n    Finished `test` profile\n     Running unittests src/lib.rs\nerror: test failed, to rerun pass `--lib`\n";
+        assert!(!has_real_diagnostic(stderr));
+        assert!(!has_real_diagnostic(
+            "error: 2 targets failed:\n    `--lib`\n"
+        ));
+        assert!(has_real_diagnostic("warning: unused variable: `x`\n"));
+        assert!(has_real_diagnostic("error[E0308]: mismatched types\n"));
     }
 
     #[test]
