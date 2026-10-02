@@ -9,6 +9,25 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 dynamic = ["version"]
+keywords = ["llm", "agents", "tokens", "toon", "cli", "pytest", "testing", "test-output"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://abhijitbansal.github.io/cartoon/"
+Repository = "https://github.com/abhijitbansal/cartoon"
+Issues = "https://github.com/abhijitbansal/cartoon/issues"
+Changelog = "https://github.com/abhijitbansal/cartoon/releases"
 
 [tool.maturin]
 bindings = "bin"

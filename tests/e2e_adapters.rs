@@ -4,13 +4,9 @@ fn cartoon() -> Command {
     Command::cargo_bin("cartoon").unwrap()
 }
 
-fn have(cmd: &str) -> bool {
-    std::process::Command::new(cmd)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+// `have()` panics instead of skipping under CARTOON_E2E_STRICT=1.
+mod common;
+use common::have;
 
 fn fixture(rel: &str) -> String {
     format!("{}/tests/fixtures/e2e/{rel}", env!("CARGO_MANIFEST_DIR"))

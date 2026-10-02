@@ -3,7 +3,9 @@
 **Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-~70%+ fewer tokens on test runs.
+far fewer tokens: 43–89% less than a verbose test run in the
+[benchmark](benchmarks/README.md) (~70% is the rough average; against
+already-quiet flags like `pytest -q` the gain is small).
 
 A cartoon is a compressed rendering of reality. So is this.
 
@@ -19,8 +21,21 @@ tracebacks — and drops the rest.
 ```bash
 uv tool install cartoon        # or: pipx install cartoon
 npm install -g cartoon-wrap    # installs the `cartoon` binary
-cargo install cartoon
+cargo install cartoon          # build from source
+cargo binstall cartoon         # prebuilt binary via cargo-binstall
+curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh
 ```
+
+Prebuilt binaries cover Linux (x86_64, aarch64), macOS (x86_64, arm64) and
+Windows (x86_64). The Linux binaries are static (musl), so they run on any
+distro: old glibc, Alpine, `python:*` images. PyPI also ships an sdist, so
+`pip` builds from source (needs a Rust toolchain) where no wheel fits.
+
+`install.sh` puts the binary in `~/.local/bin` (override with
+`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.6.0`) after
+checking it against the release's `SHA256SUMS`. Release tarballs also carry
+build provenance: `gh attestation verify cartoon-<target>.tar.gz -R
+abhijitbansal/cartoon`.
 
 ## For agents (Claude Code, Codex, Copilot, Cursor, …)
 
@@ -316,8 +331,9 @@ stage that understands the content wins:
    byte-identically. Trying cartoon is zero-risk by construction.
 
 Every rule is a pure function that no-ops when its pattern is absent, so
-plain prose is never mangled. Measured on the golden corpus that runs in
-CI (token reduction at the aggressive tier, signal lines asserted intact):
+plain prose is never mangled. Measured on the golden corpus by the test
+suite (`tests/corpus.rs`, part of `cargo test`; token reduction at the
+aggressive tier, signal lines asserted intact):
 
 | Fixture | Reduction | Signal kept |
 |---|---|---|
@@ -335,7 +351,11 @@ CI (token reduction at the aggressive tier, signal lines asserted intact):
   unmodified output.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
-  byte-identically. Savings are never negative.
+  byte-identically. Savings are never negative relative to the output of
+  the command cartoon ran. Note that adapters inject a machine-readable
+  flag (`go test -json`, `--junit-xml`, ...), so against a runner's terse
+  default output a report can be larger: `go test` with short failures is
+  the measured case ([benchmarks](benchmarks/README.md)).
 
 ## Raw log archive
 
@@ -467,8 +487,9 @@ opt-in) → passthrough when nothing pays for itself. Hook-allowlisted tools
 with no adapter (`make`, `gradle`, `mvn`, `dotnet`, `npm test`, …) get the
 ladder only; `cartoon doctor` lists them.
 
-Want another runner (cargo test, go test, rspec)? See
-[CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.
+Want another runner (`dotnet test`, `bun test`, `deno test`, gradle/maven
+without `--junit`, ...)? See [CONTRIBUTING.md](CONTRIBUTING.md) — adapters
+are one trait impl + fixtures.
 The roadmap lives in
 [docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md](docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md).
 

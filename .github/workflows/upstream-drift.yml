@@ -1,0 +1,48 @@
+# Weekly: the full test suite against the LATEST release of every runner the
+# adapters parse. Fixture tests can't see upstream format drift (vitest 5's
+# reporter, Go 1.24's build-output events, Rust's thread-id panic line all
+# broke adapters silently); this job does. A red run here means "an adapter
+# needs updating for a new upstream release", not "main is broken".
+name: upstream-drift
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-tools:
+    runs-on: ubuntu-latest
+    env:
+      CARTOON_E2E_STRICT: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+      - run: rustup update stable
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+          check-latest: true
+      - run: pip install --upgrade pytest pytest-xdist ruff mypy
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "lts/*"
+          check-latest: true
+      - run: npm install -g jest@latest vitest@latest typescript@latest
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: false
+      - name: tool versions under test
+        run: |
+          rustc --version; cargo --version; go version; python --version
+          pytest --version; ruff --version; mypy --version
+          jest --version; vitest --version; tsc --version
+      - run: cargo test
