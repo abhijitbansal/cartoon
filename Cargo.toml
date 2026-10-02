@@ -8,6 +8,24 @@ repository = "https://github.com/abhijitbansal/cartoon"
 readme = "README.md"
 keywords = ["llm", "agents", "tokens", "cli", "testing"]
 categories = ["command-line-utilities", "development-tools::testing"]
+# The crate is the Rust source only: docs, the site, plans and test fixtures
+# are not needed to build it (they made the published crate 1.1 MB).
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
+
+# `cargo binstall cartoon` downloads the GitHub release tarball instead of
+# compiling. Names must match the `package tarball` step in release.yml.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+# Linux ships static musl binaries only (they run on any glibc or musl
+# distro), so a gnu host fetches the musl tarball.
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-x86_64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-aarch64-unknown-linux-musl.tar.gz"
 
 [dependencies]
 anyhow = "1"
@@ -28,3 +46,9 @@ assert_cmd = "2"
 insta = "1"
 predicates = "3"
 tempfile = "3"
+
+# Every npm/PyPI/tarball user downloads this binary: keep it small.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
