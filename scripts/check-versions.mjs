@@ -7,9 +7,9 @@
 //   node scripts/check-versions.mjs --tag v0.6.0 # also require the tag to match
 //   node scripts/check-versions.mjs --write      # rewrite the JSON manifests + site to match
 //
-// GitHub CI is disabled by decision (runner minutes cost); `cargo test` runs
-// tests/version_sync.rs, which enforces the plugin manifest locally, and the
-// release workflow runs this script with --tag before publishing anything.
+// `cargo test` runs tests/version_sync.rs, which enforces the same thing for
+// the plugin manifest and the site; ci.yml runs this script on every push/PR
+// and the release workflow runs it with --tag before publishing anything.
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 

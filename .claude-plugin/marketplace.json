@@ -11,7 +11,7 @@
     {
       "name": "cartoon",
       "source": "./",
-      "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` for ~70% fewer input tokens"
+      "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` (~70% fewer input tokens on verbose test runs). Its hook auto-approves the dev-loop commands it rewrites."
     }
   ]
 }

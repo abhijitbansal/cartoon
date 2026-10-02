@@ -2,8 +2,8 @@
 //
 // Cargo.toml `version` is the in-repo source of truth (see docs/RELEASING.md);
 // this writes it into the version marker in docs/index.html so the site never
-// drifts. Run it whenever you bump Cargo.toml; CI runs it with --check so a
-// bump that forgets the site fails fast.
+// drifts. Run it whenever you bump Cargo.toml; check-versions.mjs (CI and
+// release) runs it with --check so a bump that forgets the site fails fast.
 //
 // Usage:
 //   node scripts/sync-site-version.mjs           # write Cargo.toml version into the site

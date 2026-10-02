@@ -10,7 +10,7 @@ license: MIT
 re-rendered as [TOON](https://github.com/toon-format/toon), a compact
 format built for LLM consumption: test passes collapse to counts, failures
 keep full actionable detail (location, message, user-code traceback).
-Typical test runs shrink ~70%+. Exit codes and behavior are unchanged.
+Verbose test runs shrink ~70% (an estimate; far less against already-quiet flags like `pytest -q`). Exit codes and behavior are unchanged.
 
 ## Check it is installed (once per session)
 
@@ -52,7 +52,7 @@ piped command at all, so you lose cartoon entirely.
 
 ```bash
 xcodebuild build … | tail -15     # WRONG: dumb cut, and wrapping is skipped
-cartoon xcodebuild build …        # RIGHT: signal kept, ~70% fewer tokens
+cartoon xcodebuild build …        # RIGHT: signal kept, far fewer tokens
 ```
 
 Wrap first; if you still need a slice of the raw log afterward, use
