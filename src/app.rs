@@ -73,12 +73,20 @@ fn harvest_junit(
         );
         return None;
     };
+    // Filesystem timestamps come from a coarser clock than SystemTime::now()
+    // (Linux stamps new inodes with the jiffy-granular coarse clock; FAT and
+    // HFS+ round to 1-2 s), so a file the child wrote can read as slightly
+    // older than `started`. Allow that slack; a genuinely stale file from a
+    // previous run is older by far more.
+    let cutoff = started
+        .checked_sub(std::time::Duration::from_secs(2))
+        .unwrap_or(started);
     let fresh: Vec<&PathBuf> = files
         .iter()
         .filter(|f| {
             std::fs::metadata(f)
                 .and_then(|m| m.modified())
-                .is_ok_and(|t| t >= started)
+                .is_ok_and(|t| t >= cutoff)
         })
         .collect();
     if fresh.is_empty() {
