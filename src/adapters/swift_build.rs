@@ -1,4 +1,4 @@
-use super::{basename, diagnostics, Adapter, AdapterReport, ParseOutcome, Prepared};
+use super::{basename, diagnostics, Adapter, ParseOutcome, Prepared};
 use crate::runner::Captured;
 use anyhow::Result;
 use serde_json::Value;
@@ -29,25 +29,10 @@ impl Adapter for SwiftBuild {
     }
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         // Diagnostics land on stdout on Swift 6.3, stderr on older
-        // toolchains — scan both (separately: joining the streams could weld
-        // a split line into a phantom diagnostic).
-        let (mut diags, mut errors, mut warnings) = diagnostics::collect(&captured.stdout);
-        let (d2, e2, w2) = diagnostics::collect(&captured.stderr);
-        diags.extend(d2);
-        errors += e2;
-        warnings += w2;
-        let matched = errors + warnings;
-        let value = diagnostics::build_value("swift-build", diags, errors, warnings);
-        // A failed build with zero matched diagnostics (linker error, manifest
-        // error, ...) must not be swallowed — the agent needs the raw streams.
-        let unexplained_failure = !captured.status.success() && matched == 0;
-        Ok(ParseOutcome {
-            report: AdapterReport::Value(value),
-            passthrough_stdout: (unexplained_failure && !captured.stdout.is_empty())
-                .then(|| captured.stdout.clone()),
-            passthrough_stderr: (unexplained_failure && !captured.stderr.is_empty())
-                .then(|| captured.stderr.clone()),
-        })
+        // toolchains — both are scanned. A failed build with no located
+        // error (linker error, manifest error, ...) must not be swallowed,
+        // even when a warning matched — the agent needs the raw streams.
+        Ok(diagnostics::parse_build_streams("swift-build", captured))
     }
 }
 
@@ -64,6 +49,7 @@ pub fn parse_text(text: &str) -> (Value, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::AdapterReport;
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -188,6 +174,37 @@ mod tests {
             .parse(&captured, &SwiftBuild.prepare(argv(&["swift", "build"])))
             .unwrap();
         assert!(out.passthrough_stderr.is_some());
+        assert!(out.passthrough_stdout.is_some());
+    }
+
+    #[test]
+    fn warning_does_not_mask_a_linker_failure() {
+        use std::os::unix::process::ExitStatusExt;
+        let captured = Captured {
+            stdout: "/Users/dev/proj/Sources/App/Main.swift:3:10: warning: result of call to 'run()' is unused\n".into(),
+            stderr: "ld: symbol(s) not found for architecture arm64\n\
+clang: error: linker command failed with exit code 1 (use -v to see invocation)\n"
+                .into(),
+            status: std::process::ExitStatus::from_raw(256),
+        };
+        let out = SwiftBuild
+            .parse(&captured, &SwiftBuild.prepare(argv(&["swift", "build"])))
+            .unwrap();
+        let AdapterReport::Value(v) = &out.report else {
+            panic!("expected value report")
+        };
+        assert_eq!(v["summary"]["errors"], 2, "{v}");
+        assert_eq!(v["summary"]["warnings"], 1);
+        let msgs: Vec<&str> = v["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["msg"].as_str().unwrap())
+            .collect();
+        assert!(msgs
+            .iter()
+            .any(|m| m.starts_with("ld: symbol(s) not found")));
+        assert!(out.passthrough_stderr.unwrap().contains("ld: symbol(s)"));
         assert!(out.passthrough_stdout.is_some());
     }
 

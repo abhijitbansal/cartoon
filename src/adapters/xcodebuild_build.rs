@@ -1,5 +1,5 @@
 use super::xcodebuild::{action, Action};
-use super::{diagnostics, Adapter, AdapterReport, ParseOutcome, Prepared};
+use super::{diagnostics, Adapter, ParseOutcome, Prepared};
 use crate::runner::Captured;
 use anyhow::Result;
 
@@ -25,36 +25,23 @@ impl Adapter for XcodebuildBuild {
         }
     }
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
-        // Scan both streams separately (joining could weld a split line into a
-        // phantom diagnostic). xcodebuild emits the same clang format as swift.
-        let (mut diags, mut errors, mut warnings) = diagnostics::collect(&captured.stdout);
-        let (d2, e2, w2) = diagnostics::collect(&captured.stderr);
-        diags.extend(d2);
-        errors += e2;
-        warnings += w2;
-        let matched = errors + warnings;
+        // xcodebuild emits the same clang format as swift. A failed build with
+        // no located error (linker, signing, missing scheme, ...) must not be
+        // swallowed — even when a warning matched — so its tool-level errors
+        // are counted and the raw streams pass through.
         let runner = if action(&prepared.argv) == Some(Action::Archive) {
             "xcodebuild-archive"
         } else {
             "xcodebuild-build"
         };
-        let value = diagnostics::build_value(runner, diags, errors, warnings);
-        // Failed build with zero matched diagnostics (linker, signing, missing
-        // scheme, ...) must not be swallowed — pass the raw streams through.
-        let unexplained_failure = !captured.status.success() && matched == 0;
-        Ok(ParseOutcome {
-            report: AdapterReport::Value(value),
-            passthrough_stdout: (unexplained_failure && !captured.stdout.is_empty())
-                .then(|| captured.stdout.clone()),
-            passthrough_stderr: (unexplained_failure && !captured.stderr.is_empty())
-                .then(|| captured.stderr.clone()),
-        })
+        Ok(diagnostics::parse_build_streams(runner, captured))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::AdapterReport;
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
@@ -138,5 +125,39 @@ struct V: View {
             .unwrap();
         assert!(out.passthrough_stdout.is_some());
         assert!(out.passthrough_stderr.is_some());
+        let AdapterReport::Value(v) = out.report else {
+            panic!("expected value report")
+        };
+        assert_eq!(v["summary"]["errors"], 1);
+    }
+
+    #[test]
+    fn warning_does_not_mask_a_signing_failure() {
+        use std::os::unix::process::ExitStatusExt;
+        let captured = Captured {
+            stdout: "\
+/Users/dev/App/Sources/App/View.swift:7:1: warning: 'NavigationView' is deprecated
+error: Signing for \"App\" requires a development team. Select a development team in the Signing & Capabilities editor. (in target 'App' from project 'App')
+** BUILD FAILED **
+"
+            .into(),
+            stderr: String::new(),
+            status: std::process::ExitStatus::from_raw(16640), // exit 65
+        };
+        let out = XcodebuildBuild
+            .parse(
+                &captured,
+                &XcodebuildBuild.prepare(argv(&["xcodebuild", "build"])),
+            )
+            .unwrap();
+        let AdapterReport::Value(v) = &out.report else {
+            panic!("expected value report")
+        };
+        assert_eq!(v["summary"]["errors"], 1, "{v}");
+        assert_eq!(v["summary"]["warnings"], 1);
+        assert!(out
+            .passthrough_stdout
+            .as_deref()
+            .is_some_and(|s| s.contains("Signing for")));
     }
 }
