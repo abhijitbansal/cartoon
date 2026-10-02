@@ -8,13 +8,31 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-E2E tests for pytest/jest self-skip when the runner isn't installed locally.
+The three commands above are the gate, locally and in CI
+(`.github/workflows/ci.yml`, on every push to main and every PR). `cargo
+test` never touches your real `~/.local/state/cartoon` archive — every e2e
+test points `XDG_STATE_HOME` at a temp dir (`tests/isolation_lint.rs`
+enforces it).
 
-GitHub CI is intentionally disabled (Actions runner minutes cost money the
-maintainer does not want to pay). The three commands above ARE the gate: run
-them before every commit and say so in the PR. `cargo test` never touches
-your real `~/.local/state/cartoon` archive — every e2e test points
-`XDG_STATE_HOME` at a temp dir (`tests/isolation_lint.rs` enforces it).
+Real-tool e2e tests (pytest, jest, ...) skip when the tool isn't installed
+locally. Set `CARTOON_E2E_STRICT=1` to make a missing tool fail instead; CI
+does, and installs pinned versions of pytest, pytest-xdist, jest, vitest,
+tsc, go, ruff and mypy. Apple-only tools (xcodebuild, xcrun, swift) are
+never required; `CARTOON_E2E_ALLOW_MISSING=a,b` exempts others by name. Use
+the shared `tests/common::have()` for new real-tool tests so strict mode
+covers them.
+
+`upstream-drift.yml` runs the same suite weekly against the *latest*
+release of every runner: a red run there means an upstream output format
+changed and an adapter needs updating.
+
+The npm wrapper has its own test: `node --test
+packages/npm/cartoon-wrap/test/wrapper.test.mjs`.
+
+> CI was switched off in GitHub's Actions settings in 2026-06 (to save
+> runner minutes, which a public repository does not spend). The workflow
+> file alone does not turn it back on: a maintainer must re-enable the
+> `ci` workflow under Actions → ci → "Enable workflow".
 
 ## Adding an adapter
 

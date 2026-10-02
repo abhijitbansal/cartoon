@@ -175,24 +175,39 @@ pub fn is_present(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| s.contains(MARKER_BEGIN))
 }
 
+/// Read the user's file. Only "not found" means absent: any other error
+/// (permission denied, a directory, invalid UTF-8) must stop us before we
+/// write, or install would replace the user's file with just our block.
+fn read_existing(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => bail!(
+            "cannot read {}: {e}; refusing to modify it (fix or move the file and retry)",
+            path.display()
+        ),
+    }
+}
+
 /// Write/update the directive in `path`, creating parent dirs as needed.
-/// Idempotent: an existing block is replaced, not duplicated.
+/// Idempotent: an existing block is replaced, not duplicated. The write is
+/// atomic (temp file + rename) and keeps the file's permissions.
 pub fn install_doc(path: &Path) -> Result<Outcome> {
-    let existing = std::fs::read_to_string(path).ok();
+    let existing = read_existing(path)?;
     let (out, outcome) = apply(existing.as_deref())?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    std::fs::write(path, out)?;
+    crate::paths::write_atomic(path, out.as_bytes())?;
     Ok(outcome)
 }
 
 /// Remove our directive from `path`. Returns whether anything was removed.
 /// If the file is left empty, it is deleted.
 pub fn uninstall_doc(path: &Path) -> Result<bool> {
-    let Ok(existing) = std::fs::read_to_string(path) else {
+    let Some(existing) = read_existing(path)? else {
         return Ok(false);
     };
     match apply_remove(&existing)? {
@@ -201,7 +216,7 @@ pub fn uninstall_doc(path: &Path) -> Result<bool> {
             if rest.trim().is_empty() {
                 std::fs::remove_file(path)?;
             } else {
-                std::fs::write(path, rest)?;
+                crate::paths::write_atomic(path, rest.as_bytes())?;
             }
             Ok(true)
         }
@@ -432,6 +447,40 @@ mod tests {
         let rest = apply_remove(&doc).unwrap().unwrap();
         assert!(!rest.contains(MARKER_BEGIN));
         assert!(rest.contains("We close the block"));
+    }
+
+    #[test]
+    fn unreadable_or_non_utf8_file_is_never_overwritten() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bad = tmp.path().join("CLAUDE.md");
+        let bytes = b"# Rules\n\xff\xfe latin-1 caf\xe9\n".to_vec();
+        std::fs::write(&bad, &bytes).unwrap();
+        assert!(install_doc(&bad).is_err());
+        assert!(uninstall_doc(&bad).is_err());
+        assert_eq!(std::fs::read(&bad).unwrap(), bytes, "file untouched");
+
+        // A directory where the file should be: error, not "absent".
+        let dir = tmp.path().join("AGENTS.md");
+        std::fs::create_dir(&dir).unwrap();
+        assert!(install_doc(&dir).is_err());
+        assert!(dir.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_keeps_the_existing_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("AGENTS.md");
+        std::fs::write(&p, "# Mine\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(install_doc(&p).unwrap(), Outcome::Added);
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        assert!(uninstall_doc(&p).unwrap());
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "# Mine\n");
     }
 
     #[test]

@@ -4,13 +4,9 @@ fn cartoon() -> Command {
     Command::cargo_bin("cartoon").unwrap()
 }
 
-fn have(cmd: &str) -> bool {
-    std::process::Command::new(cmd)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+// `have()` panics instead of skipping under CARTOON_E2E_STRICT=1.
+mod common;
+use common::have;
 
 fn fixture(rel: &str) -> String {
     format!("{}/tests/fixtures/e2e/{rel}", env!("CARGO_MANIFEST_DIR"))
@@ -25,6 +21,7 @@ fn e2e_pytest_failing_suite() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .args(["pytest", &fixture("pyproj")])
         .assert()
         .code(1); // pytest exit 1 = test failures, mirrored
@@ -43,6 +40,7 @@ fn e2e_unittest_failing_suite() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .current_dir(fixture("unittestproj_big"))
         .args(["python3", "-m", "unittest", "discover"])
         .assert()
@@ -65,6 +63,7 @@ fn e2e_unittest_tiny_suite_passes_through_when_report_costs_more() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .current_dir(fixture("unittestproj"))
         .args(["python3", "-m", "unittest", "discover"])
         .assert()
@@ -84,6 +83,7 @@ fn e2e_jest_failing_suite() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .current_dir(fixture("jsproj"))
         .args(["jest"])
         .assert()
@@ -92,6 +92,92 @@ fn e2e_jest_failing_suite() {
     assert!(out.contains("runner: jest"), "got:\n{out}");
     assert!(out.contains("failed: 1"), "got:\n{out}");
     assert!(out.contains("fails"), "got:\n{out}");
+}
+
+#[test]
+fn e2e_pytest_exit_mid_run_is_not_reported_as_all_pass() {
+    // `pytest.exit()` in the second test: pytest exits 2 with "1 passed";
+    // the report must carry the abort reason, not a clean summary.
+    if !have("pytest") {
+        eprintln!("SKIP: pytest not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let assert = cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .current_dir(fixture("pyexit"))
+        .args(["pytest", "-p", "no:cacheprovider"])
+        .assert()
+        .code(2);
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        out.contains("database not reachable, aborting run"),
+        "got:\n{out}"
+    );
+    assert!(!out.contains("failed: 0"), "got:\n{out}");
+}
+
+#[test]
+fn e2e_jest_suite_that_failed_to_run_is_reported() {
+    if !have("jest") {
+        eprintln!("SKIP: jest not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let assert = cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .current_dir(fixture("jsproj_suite_error"))
+        .args(["jest"])
+        .assert()
+        .code(1);
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(out.contains("failed: 1"), "got:\n{out}");
+    assert!(
+        out.contains("Cannot find module './does-not-exist'"),
+        "got:\n{out}"
+    );
+}
+
+#[test]
+fn e2e_vitest_reports_failures_without_writing_into_the_repo() {
+    // vitest >= 4 writes `--reporter=json` output to .vitest/json/ in the
+    // project; the adapter must read its own temp file instead.
+    if !have("vitest") {
+        eprintln!("SKIP: vitest not installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir(&proj).unwrap();
+    std::fs::copy(
+        fixture("vitestproj/sample.test.js"),
+        proj.join("sample.test.js"),
+    )
+    .unwrap();
+    let assert = cartoon()
+        .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .current_dir(&proj)
+        .args(["vitest", "run"])
+        .assert()
+        .code(1);
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(out.contains("runner: vitest"), "got:\n{out}");
+    assert!(out.contains("failed: 1"), "got:\n{out}");
+    assert!(out.contains("console: debug value 41"), "got:\n{out}");
+    // (vitest's own node_modules/.vite cache may appear; a report may not.)
+    assert!(
+        !proj.join(".vitest").exists(),
+        "report written into the repo"
+    );
+    let json_files: Vec<_> = std::fs::read_dir(&proj)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    assert!(json_files.is_empty(), "report written: {json_files:?}");
 }
 
 #[test]
@@ -143,6 +229,7 @@ fn e2e_parse_failure_passes_through() {
     }
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .args([fake.to_str().unwrap()])
         .assert()
         .code(5);
@@ -170,6 +257,7 @@ fn tiny_pytest_run_passes_through_when_report_would_be_bigger() {
     let state = tempfile::tempdir().unwrap();
     let out = cartoon()
         .env("XDG_STATE_HOME", state.path())
+        .env("XDG_CONFIG_HOME", state.path())
         .current_dir(dir.path())
         .args(["pytest", "-q", "-p", "no:cacheprovider"])
         .output()
@@ -194,6 +282,7 @@ fn shell_string_pipe_to_tail_still_gets_the_adapter_report() {
     let cmd = format!("pytest -v {} | tail -5", fixture("pyproj"));
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
         .args(["-c", &cmd])
         .assert()
         .code(1);

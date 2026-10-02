@@ -1,3 +1,4 @@
+mod common;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
@@ -107,9 +108,8 @@ fn xdist_available() -> bool {
 #[test]
 fn real_pytest_fast_discloses_and_counts_match() {
     if !xdist_available() {
-        if std::env::var("CI").is_ok() {
-            panic!("pytest-xdist must be installed in CI (ci.yml pip install step)");
-        }
+        // CI sets CARTOON_E2E_STRICT=1 and installs it (ci.yml pip step).
+        common::missing("pytest-xdist");
         eprintln!("skipping: pytest-xdist not importable");
         return;
     }
@@ -131,4 +131,21 @@ fn real_pytest_fast_discloses_and_counts_match() {
         .stdout(predicate::str::contains("fast: \"-n auto\""))
         .stdout(predicate::str::contains("total: 2"))
         .stdout(predicate::str::contains("failed: 1"));
+}
+
+/// CARTOON_E2E_STRICT=1 turns a missing tool into a failure, except the
+/// Apple-only tools (the strict CI job runs on Linux) and names listed in
+/// CARTOON_E2E_ALLOW_MISSING.
+#[test]
+fn strict_mode_requires_every_tool_but_apple_and_allowed_ones() {
+    use common::strict_requires;
+    assert!(!strict_requires("jest", None, None));
+    assert!(!strict_requires("jest", Some("0"), None));
+    assert!(strict_requires("jest", Some("1"), None));
+    assert!(strict_requires("pytest-xdist", Some("1"), Some("")));
+    for apple in ["xcodebuild", "xcrun", "swift"] {
+        assert!(!strict_requires(apple, Some("1"), None), "{apple}");
+    }
+    assert!(!strict_requires("go", Some("1"), Some("ruff, go")));
+    assert!(strict_requires("gofmt", Some("1"), Some("ruff,go")));
 }

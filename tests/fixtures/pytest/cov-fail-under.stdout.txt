@@ -1,0 +1,21 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/user/proj
+plugins: anyio-4.14.1, cov-7.1.0
+collected 1 item
+
+test_cov.py .
+ERROR: Coverage failure: total of 50 is less than fail-under=95
+                                                                         [100%]
+
+- generated xml file: /tmp/cartoon-junit-x.xml -
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.11.15-final-0 _______________
+
+Name     Stmts   Miss  Cover
+----------------------------
+mod.py       6      3    50%
+----------------------------
+TOTAL        6      3    50%
+FAIL Required test coverage of 95% not reached. Total coverage: 50.00%
+============================== 1 passed in 0.03s ===============================

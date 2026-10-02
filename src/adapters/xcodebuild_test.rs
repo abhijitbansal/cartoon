@@ -65,7 +65,7 @@ impl Adapter for XcodebuildTest {
             },
         }
     }
-    fn parse(&self, _captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
+    fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let bundle = prepared
             .artifact_path()
             .or_else(|| user_bundle_path(&prepared.argv))
@@ -74,12 +74,8 @@ impl Adapter for XcodebuildTest {
             anyhow::bail!("xcresult bundle missing (build likely failed)");
         }
         let json = run_xcresulttool(&bundle)?;
-        let report = parse_summary_json(&json)?;
-        // W3: "no tests ran" (build broke, or a filter matched nothing) is not
-        // our job — passthrough so the agent sees the real output.
-        if report.total == 0 {
-            anyhow::bail!("xcresult reported zero tests");
-        }
+        let (report, result) = parse_summary(&json)?;
+        check_summary(&report, result.as_deref(), captured.status.success())?;
         Ok(ParseOutcome {
             report: super::AdapterReport::Tests(report),
             // xcodebuild's human log was stdout/stderr — replaced by the summary.
@@ -151,6 +147,25 @@ fn run_xcresulttool(bundle: &Path) -> Result<String> {
     String::from_utf8(buf).context("xcresulttool output not UTF-8")
 }
 
+/// Whether the parsed summary may stand in for xcodebuild's own output.
+/// W3: "no tests ran" (build broke, or a filter matched nothing) is not our
+/// job — passthrough so the agent sees the real output. Likewise a run the
+/// summary itself calls `Failed`, or that exited non-zero, while showing no
+/// failed test (a crash in setup, a test-plan or launch error, ...): the
+/// explanation is in the raw log, not in `failed: 0`.
+fn check_summary(report: &TestReport, result: Option<&str>, success: bool) -> Result<()> {
+    if report.total == 0 {
+        anyhow::bail!("xcresult reported zero tests");
+    }
+    if report.failed == 0 && (!success || result == Some("Failed")) {
+        anyhow::bail!(
+            "xcodebuild test failed (result: {}) but the xcresult shows no failed test",
+            result.unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct Summary {
     #[serde(rename = "totalTestCount", default)]
@@ -167,6 +182,9 @@ struct Summary {
     finish_time: f64,
     #[serde(rename = "testFailures", default)]
     test_failures: Vec<SummaryFailure>,
+    /// Overall verdict: `Passed`/`Succeeded`, `Failed`, ...
+    #[serde(default)]
+    result: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -185,7 +203,13 @@ struct SummaryFailure {
 /// I/O — the CI-testable seam. Lenient: unknown fields ignored, missing fields
 /// default, so minor schema drift degrades gracefully rather than erroring.
 pub fn parse_summary_json(json: &str) -> Result<TestReport> {
+    parse_summary(json).map(|(report, _)| report)
+}
+
+/// `parse_summary_json` plus the summary's overall `result` field.
+fn parse_summary(json: &str) -> Result<(TestReport, Option<String>)> {
     let s: Summary = serde_json::from_str(json).context("invalid xcresult summary json")?;
+    let result = s.result.clone();
     let duration_s = (s.finish_time - s.start_time).max(0.0);
     let failures = s
         .test_failures
@@ -211,15 +235,18 @@ pub fn parse_summary_json(json: &str) -> Result<TestReport> {
             }
         })
         .collect();
-    Ok(TestReport {
-        runner: "xcodebuild-test",
-        total: s.total,
-        passed: s.passed,
-        failed: s.failed,
-        skipped: s.skipped,
-        duration_s,
-        failures,
-    })
+    Ok((
+        TestReport {
+            runner: "xcodebuild-test",
+            total: s.total,
+            passed: s.passed,
+            failed: s.failed,
+            skipped: s.skipped,
+            duration_s,
+            failures,
+        },
+        result,
+    ))
 }
 
 #[cfg(test)]
@@ -312,6 +339,29 @@ mod tests {
         // passthrough. This guards the W3 discriminator input.
         let r = parse_summary_json(&fixture("summary-zero-tests.json")).unwrap();
         assert_eq!(r.total, 0);
+    }
+
+    #[test]
+    fn summary_result_failed_with_no_failed_test_is_not_reported_clean() {
+        let (r, result) =
+            parse_summary(&fixture("summary-result-failed-no-failures.json")).unwrap();
+        assert_eq!(result.as_deref(), Some("Failed"));
+        assert_eq!(r.failed, 0);
+        // Even with exit 0, `result: Failed` and zero failures → passthrough.
+        assert!(check_summary(&r, result.as_deref(), true).is_err());
+    }
+
+    #[test]
+    fn nonzero_exit_with_no_failed_test_is_not_reported_clean() {
+        let (r, result) = parse_summary(&fixture("summary-all-pass.json")).unwrap();
+        assert!(check_summary(&r, result.as_deref(), true).is_ok());
+        assert!(check_summary(&r, result.as_deref(), false).is_err());
+    }
+
+    #[test]
+    fn real_failures_are_reported_whatever_the_exit() {
+        let (r, result) = parse_summary(&fixture("summary-mixed.json")).unwrap();
+        assert!(check_summary(&r, result.as_deref(), false).is_ok());
     }
 
     #[test]

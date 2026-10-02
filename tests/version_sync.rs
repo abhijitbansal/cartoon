@@ -1,7 +1,6 @@
-//! Every manifest that carries a version must agree with Cargo.toml. GitHub
-//! CI is disabled by decision (runner minutes cost), so `cargo test` is the
-//! gate that catches drift; scripts/check-versions.mjs does the same plus the
-//! git tag at release time.
+//! Every manifest that carries a version must agree with Cargo.toml.
+//! `cargo test` (locally and in CI) catches drift before a release;
+//! scripts/check-versions.mjs does the same plus the git tag at release time.
 #[test]
 fn plugin_manifest_version_matches_cargo() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

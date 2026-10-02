@@ -1,0 +1,23 @@
+# Synthetic regression log for review §5.1/§5.2 (2026-10-02): distinct
+# percentage rows that share a digit-stripped template, a `\r`-redrawn
+# download, a bar, `\r\r\n` line endings, `git diff` lines with trailing
+# whitespace, and a final `FATAL …\r` without a newline.
+must_survive = [
+  "Coverage total: 45%",
+  "Downloading model 100%",
+  "[==========] 10/10",
+  "FATAL out of memory on GPU1",
+]
+# The safe tier keeps every distinct data line and whitespace verbatim.
+must_survive_safe = [
+  "GPU0 util: 12%",
+  "GPU1 util: 99%",
+  "GPU2 util: 7%",
+  "epoch 1 loss 0.91",
+  "epoch 2 loss 0.55",
+  " diff context line   \n",
+  "+\tindented change  \n \n",
+  "(x3 progress frames, last kept)",
+]
+min_reduction_safe = 0.0
+min_reduction_aggressive = 0.0

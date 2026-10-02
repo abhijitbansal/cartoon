@@ -1,0 +1,25 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/user/proj
+collected 2 items
+
+test_cap.py F.                                                           [100%]
+
+=================================== FAILURES ===================================
+____________________________ test_prints_then_fails ____________________________
+
+    def test_prints_then_fails():
+        print("computed total = 41")
+        print("warning text", file=sys.stderr)
+>       assert 41 == 42
+E       assert 41 == 42
+
+test_cap.py:7: AssertionError
+----------------------------- Captured stdout call -----------------------------
+computed total = 41
+----------------------------- Captured stderr call -----------------------------
+warning text
+- generated xml file: /tmp/cartoon-junit-x.xml -
+=========================== short test summary info ============================
+FAILED test_cap.py::test_prints_then_fails - assert 41 == 42
+========================= 1 failed, 1 passed in 0.02s ==========================

@@ -11,9 +11,13 @@ impl Adapter for Ruff {
         "ruff"
     }
     fn matches(&self) -> &'static str {
-        "ruff check"
+        "ruff check (not --watch)"
     }
     fn detect(&self, argv: &[String]) -> bool {
+        // --watch runs are long-lived; never capture them.
+        if argv.iter().any(|a| a == "--watch" || a == "-w") {
+            return false;
+        }
         match argv {
             [first, second, ..] => basename(first) == "ruff" && second == "check",
             _ => false,
@@ -126,6 +130,12 @@ mod tests {
         assert!(!Ruff.detect(&argv(&["ruff", "format", "src/"])));
         assert!(!Ruff.detect(&argv(&["ruff"])));
         assert!(!Ruff.detect(&argv(&["uvx", "ruff", "check"])));
+    }
+
+    #[test]
+    fn watch_mode_is_not_detected() {
+        assert!(!Ruff.detect(&argv(&["ruff", "check", "--watch"])));
+        assert!(!Ruff.detect(&argv(&["ruff", "check", "-w", "src/"])));
     }
 
     #[test]

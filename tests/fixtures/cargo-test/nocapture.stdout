@@ -1,0 +1,15 @@
+
+running 3 tests
+some test output
+test tests::ok ... ok
+test tests::bad_eq ... FAILED
+test tests::bad_unwrap ... FAILED
+
+failures:
+
+failures:
+    tests::bad_eq
+    tests::bad_unwrap
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+

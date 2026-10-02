@@ -8,7 +8,7 @@ use super::{basename, Adapter, AdapterReport, ParseOutcome, Prepared};
 use crate::runner::Captured;
 use anyhow::{Context, Result};
 use regex::{Match, Regex};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub struct CargoTest;
@@ -46,15 +46,17 @@ impl Adapter for CargoTest {
         });
         match kind {
             Kind::Test => {
-                let report = parse_cargo_test(&captured.stdout)?;
+                let report = parse_cargo_test(&captured.stdout, &captured.stderr)?;
                 // stdout WAS the report; stderr held `Compiling`/`Finished`
                 // noise plus, sometimes, compiler diagnostics the agent
                 // should still see. Anchored to a line start so a crate
                 // merely named `my-error-utils` in printed test output
                 // can't trip this on the bare substring.
-                let passthrough_stderr = diag_re()
-                    .is_match(&captured.stderr)
-                    .then(|| captured.stderr.clone());
+                // cargo's own `error: test failed, to rerun …` /
+                // `error: N targets failed:` trailer is on every failing run
+                // and is not a diagnostic; it must not force the raw stream.
+                let passthrough_stderr =
+                    has_real_diagnostic(&captured.stderr).then(|| captured.stderr.clone());
                 Ok(ParseOutcome {
                     report: AdapterReport::Tests(report),
                     passthrough_stdout: None,
@@ -116,6 +118,17 @@ fn diag_re() -> &'static Regex {
     re(&DIAG, r"(?m)^(warning|error)(\[|:)")
 }
 
+/// True when stderr carries a compiler `warning:`/`error:` line other than
+/// cargo's failing-run trailer (`error: test failed, to rerun pass …`,
+/// `error: N targets failed:`), which the report already conveys.
+fn has_real_diagnostic(stderr: &str) -> bool {
+    stderr.lines().any(|l| {
+        diag_re().is_match(l)
+            && !l.starts_with("error: test failed, to rerun")
+            && !(l.starts_with("error: ") && l.ends_with(" targets failed:"))
+    })
+}
+
 /// An optional capture group as `u64`, defaulting to 0 when absent. Unlike
 /// `unwrap_or(0)` on a parse failure, a malformed present value still
 /// propagates as an error rather than silently reporting zero.
@@ -127,13 +140,14 @@ fn opt_u64(m: Option<Match<'_>>) -> Result<u64> {
 }
 
 /// Byte offset right after `panicked at ` on the genuine
-/// `thread '<name>' panicked at ...` line. Anchoring here — rather than a
-/// bare substring search for `panicked at ` — keeps a test's own printed
-/// output (which may itself contain that text, or an unrelated `.rs:N`
-/// reference) from being mistaken for the real panic location.
+/// `thread '<name>' panicked at ...` line (Rust >=1.86-ish adds the thread
+/// id: `thread '<name>' (12345) panicked at ...`). Anchoring here — rather
+/// than a bare substring search for `panicked at ` — keeps a test's own
+/// printed output (which may itself contain that text, or an unrelated
+/// `.rs:N` reference) from being mistaken for the real panic location.
 fn panic_at(block: &str) -> Option<usize> {
     static THREAD: OnceLock<Regex> = OnceLock::new();
-    re(&THREAD, r"(?m)^thread '.*' panicked at ")
+    re(&THREAD, r"(?m)^thread '.*'(?: \(\d+\))? panicked at ")
         .find(block)
         .map(|m| m.end())
 }
@@ -150,9 +164,14 @@ fn find_loc(block: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The panic message: the line after `panicked at path:line:col:` (current
-/// format), or the text between quotes in `panicked at 'msg', path:line`
-/// (pre-2021 format).
+/// Most panic-message lines kept in `msg` (an `assert_eq!` on a large
+/// pretty-printed value can run long; the trace keeps the rest).
+const MSG_LINES: usize = 5;
+
+/// The panic message: the lines after `panicked at path:line:col:` (current
+/// format) up to the backtrace / note / a blank line, joined with `; ` (so
+/// `assert_eq!`'s `left:` / `right:` survive), or the text between quotes in
+/// `panicked at 'msg', path:line` (pre-2021 format).
 fn panic_msg(block: &str) -> String {
     let Some(start) = panic_at(block) else {
         return String::new();
@@ -162,8 +181,18 @@ fn panic_msg(block: &str) -> String {
     let head = after[..line_end].trim_end();
     if head.ends_with(':') {
         let rest = after[line_end..].strip_prefix('\n').unwrap_or("");
-        let msg_end = rest.find('\n').unwrap_or(rest.len());
-        return rest[..msg_end].trim().to_string();
+        return rest
+            .lines()
+            .map(str::trim)
+            .take_while(|l| {
+                !l.is_empty()
+                    && *l != "stack backtrace:"
+                    && !l.starts_with("note: ")
+                    && !l.starts_with("thread '")
+            })
+            .take(MSG_LINES)
+            .collect::<Vec<_>>()
+            .join("; ");
     }
     if let Some(quoted) = head.strip_prefix('\'') {
         if let Some(close) = quoted.find('\'') {
@@ -179,19 +208,109 @@ fn panic_msg(block: &str) -> String {
 /// `cargo test -- --show-output` prints the same `---- name stdout ----`
 /// header shape for PASSING tests under a `successes:` section; only names
 /// that appear in a failures summary are real failures.
-fn failing_names(stdout: &str) -> HashSet<String> {
+fn failing_names(stdout: &str) -> Vec<String> {
     static SUMMARY: OnceLock<Regex> = OnceLock::new();
     let summary_re = re(&SUMMARY, r"(?m)^failures:\n((?:[ \t]+\S.*\n)+)");
-    let mut names = HashSet::new();
+    let mut names: Vec<String> = Vec::new();
     for cap in summary_re.captures_iter(stdout) {
         for line in cap[1].lines() {
             let name = line.trim();
-            if !name.is_empty() {
-                names.insert(name.to_string());
+            if !name.is_empty() && !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
             }
         }
     }
     names
+}
+
+/// The panic text for test `name` printed straight to the stream (no
+/// `---- name stdout ----` block: `--nocapture` sends it to stderr). libtest
+/// names each test's thread after the test, so the `thread '<name>'` line
+/// identifies it; the block runs to the next thread panic or cargo/libtest
+/// banner.
+fn stream_panic_block(stream: &str, name: &str) -> Option<String> {
+    static BOUNDARY: OnceLock<Regex> = OnceLock::new();
+    let boundary_re = re(
+        &BOUNDARY,
+        r"(?m)^(?:thread '|error: test failed|\s+Running |---- |failures:|test result:|running \d+ tests?)",
+    );
+    let head = Regex::new(&format!(
+        r"(?m)^thread '{}'(?: \(\d+\))? panicked at ",
+        regex::escape(name)
+    ))
+    .ok()?;
+    let m = head.find(stream)?;
+    let line_end = stream[m.end()..]
+        .find('\n')
+        .map_or(stream.len(), |i| m.end() + i);
+    let end = boundary_re
+        .find_at(stream, line_end)
+        .map_or(stream.len(), |b| b.start());
+    Some(stream[m.start()..end].trim().to_string())
+}
+
+/// Drop Rust backtrace frames that point into std/core/alloc/libtest (and
+/// their `at /rustc/...` lines), plus the `RUST_BACKTRACE` hint notes, so a
+/// 20-line trace of `core::panicking` frames doesn't crowd out the user's.
+fn strip_std_frames(block: &str) -> String {
+    static FRAME: OnceLock<Regex> = OnceLock::new();
+    let frame_re = re(&FRAME, r"^\s*\d+: (.*)$");
+    const STD_SYMBOLS: &[&str] = &[
+        "std::", "core::", "alloc::", "test::", "__rustc", "<std::", "<core::", "<alloc::",
+    ];
+    let is_std_path = |at: &str| {
+        at.starts_with("/rustc/")
+            || [
+                "/library/std/",
+                "/library/core/",
+                "/library/alloc/",
+                "/library/test/",
+            ]
+            .iter()
+            .any(|p| at.contains(p))
+    };
+    let lines: Vec<&str> = block.lines().collect();
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(cap) = frame_re.captures(line) {
+            let symbol = cap.get(1).map_or("", |m| m.as_str());
+            let at = lines
+                .get(i + 1)
+                .and_then(|l| l.trim_start().strip_prefix("at "));
+            let drop = match at {
+                Some(path) => is_std_path(path),
+                None => STD_SYMBOLS.iter().any(|p| symbol.starts_with(p)),
+            };
+            if !drop {
+                out.push(line);
+                if at.is_some() {
+                    out.push(lines[i + 1]);
+                }
+            }
+            i += if at.is_some() { 2 } else { 1 };
+            continue;
+        }
+        let t = line.trim_start();
+        let hint = t.starts_with("note: ")
+            && (t.contains("RUST_BACKTRACE") || t.starts_with("note: Some details are omitted"));
+        if !hint {
+            out.push(line);
+        }
+        i += 1;
+    }
+    out.join("\n")
+}
+
+fn failure_from_block(id: String, block: &str) -> Failure {
+    let block = strip_std_frames(block);
+    Failure {
+        loc: find_loc(&block),
+        msg: panic_msg(&block),
+        trace: trim_trace(&block),
+        id,
+    }
 }
 
 /// `---- <name> stdout ----` headers and the content between them: up to
@@ -236,7 +355,7 @@ fn cargo_test_blocks(stdout: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn parse_cargo_test(stdout: &str) -> Result<TestReport> {
+fn parse_cargo_test(stdout: &str, stderr: &str) -> Result<TestReport> {
     static RESULT: OnceLock<Regex> = OnceLock::new();
     // Several `test result:` lines appear (unit / integration / doc-tests
     // each get their own binary run) — sum across all of them.
@@ -258,15 +377,22 @@ fn parse_cargo_test(stdout: &str) -> Result<TestReport> {
         anyhow::bail!("no 'test result:' line — not cargo test output");
     }
 
-    let failures = cargo_test_blocks(stdout)
+    let mut failures: Vec<Failure> = cargo_test_blocks(stdout)
         .into_iter()
-        .map(|(id, block)| Failure {
-            loc: find_loc(&block),
-            msg: panic_msg(&block),
-            trace: trim_trace(&block),
-            id,
-        })
+        .map(|(id, block)| failure_from_block(id, &block))
         .collect();
+    // `--nocapture` prints no `---- name stdout ----` blocks: the names under
+    // `failures:` are all there is. Give each its Failure anyway, with the
+    // panic text found for that test's thread in either stream.
+    for name in failing_names(stdout) {
+        if failures.iter().any(|f| f.id == name) {
+            continue;
+        }
+        let block = stream_panic_block(stderr, &name)
+            .or_else(|| stream_panic_block(stdout, &name))
+            .unwrap_or_default();
+        failures.push(failure_from_block(name, &block));
+    }
 
     Ok(TestReport {
         runner: "cargo-test",
@@ -339,12 +465,7 @@ fn parse_nextest(stderr: &str) -> Result<TestReport> {
         .map(|c| {
             let id = c[1].trim().to_string();
             let block = blocks.get(&id).cloned().unwrap_or_default();
-            Failure {
-                loc: find_loc(&block),
-                msg: panic_msg(&block),
-                trace: trim_trace(&block),
-                id,
-            }
+            failure_from_block(id, &block)
         })
         .collect();
 
@@ -637,6 +758,17 @@ error: could not compile `my_crate` (lib test) due to 1 previous error
     }
 
     #[test]
+    fn cargo_failing_run_trailer_is_not_passed_through() {
+        let stderr = "   Compiling p v0.1.0\n    Finished `test` profile\n     Running unittests src/lib.rs\nerror: test failed, to rerun pass `--lib`\n";
+        assert!(!has_real_diagnostic(stderr));
+        assert!(!has_real_diagnostic(
+            "error: 2 targets failed:\n    `--lib`\n"
+        ));
+        assert!(has_real_diagnostic("warning: unused variable: `x`\n"));
+        assert!(has_real_diagnostic("error[E0308]: mismatched types\n"));
+    }
+
+    #[test]
     fn stderr_mentioning_error_word_mid_line_is_not_passed_through() {
         // A crate/test named with "error" in it must not spoof the anchor.
         let captured = captured(ALL_PASS, "   Compiling my-error-utils v0.1.0\n", 0);
@@ -684,6 +816,142 @@ error: could not compile `my_crate` (lib test) due to 1 previous error
             Some("some test printed this")
         );
         assert!(out.passthrough_stderr.is_none());
+    }
+
+    // --- real cargo 1.97 fixtures ---
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/cargo-test/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        ))
+        .unwrap()
+    }
+
+    fn parse_test(stdout: &str, stderr: &str) -> TestReport {
+        let captured = captured(stdout, stderr, 101);
+        let out = CargoTest
+            .parse(&captured, &CargoTest.prepare(argv(&["cargo", "test"])))
+            .unwrap();
+        let AdapterReport::Tests(r) = out.report else {
+            panic!("expected Tests report")
+        };
+        r
+    }
+
+    fn failure<'a>(r: &'a TestReport, id: &str) -> &'a Failure {
+        r.failures
+            .iter()
+            .find(|f| f.id == id)
+            .unwrap_or_else(|| panic!("no failure {id}: {:?}", r.failures))
+    }
+
+    #[test]
+    fn thread_id_panic_line_populates_loc_and_msg() {
+        let r = parse_test(&fixture("plain.stdout"), "");
+        let f = failure(&r, "tests::bad_eq");
+        assert_eq!(f.loc, "src/lib.rs:17:9");
+        assert_eq!(
+            f.msg,
+            "assertion `left == right` failed: custom ctx; left: 2; right: 3"
+        );
+        let f = failure(&r, "tests::bad_unwrap");
+        assert_eq!(f.loc, "src/lib.rs:23:11");
+        assert_eq!(f.msg, "value must be present");
+    }
+
+    #[test]
+    fn backtrace_keeps_user_frames_and_drops_std_core_frames() {
+        let r = parse_test(&fixture("backtrace.stdout"), "");
+        let f = failure(&r, "tests::bad_eq");
+        assert_eq!(f.loc, "src/lib.rs:17:9");
+        assert!(f.msg.starts_with("assertion `left == right` failed"));
+        let joined = f.trace.join("\n");
+        assert!(joined.contains("fx::tests::bad_eq"), "{joined}");
+        assert!(joined.contains("at ./src/lib.rs:17:9"), "{joined}");
+        assert!(!joined.contains("/rustc/"), "{joined}");
+        assert!(!joined.contains("core::panicking"), "{joined}");
+        assert!(!joined.contains("__rustc"), "{joined}");
+    }
+
+    #[test]
+    fn old_panic_format_without_thread_id_still_parses() {
+        let r = parse_test(WITH_FAILURE, "");
+        assert_eq!(r.failures[0].loc, "src/lib.rs:42:9");
+        assert_eq!(
+            r.failures[0].msg,
+            "assertion `left == right` failed; left: 2; right: 3"
+        );
+    }
+
+    #[test]
+    fn nocapture_failures_get_entries_with_panic_text_from_stderr() {
+        let r = parse_test(&fixture("nocapture.stdout"), &fixture("nocapture.stderr"));
+        assert_eq!(r.failed, 2);
+        assert_eq!(r.failures.len(), 2, "{:?}", r.failures);
+        let f = failure(&r, "tests::bad_eq");
+        assert_eq!(f.loc, "src/lib.rs:17:9");
+        assert!(f.msg.contains("custom ctx"), "{}", f.msg);
+        let f = failure(&r, "tests::bad_unwrap");
+        assert_eq!(f.loc, "src/lib.rs:23:11");
+        assert_eq!(f.msg, "value must be present");
+        assert!(!f.trace.join("\n").contains("bad_eq"), "{:?}", f.trace);
+    }
+
+    #[test]
+    fn nocapture_failure_without_any_panic_text_still_listed() {
+        const NOCAPTURE_NO_PANIC: &str = "\
+running 1 test
+test tests::t_fail ... FAILED
+
+failures:
+
+failures:
+    tests::t_fail
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+";
+        let r = parse_test(NOCAPTURE_NO_PANIC, "");
+        assert_eq!(r.failures.len(), 1);
+        assert_eq!(r.failures[0].id, "tests::t_fail");
+    }
+
+    #[test]
+    fn nextest_thread_id_panic_and_backtrace_filtering() {
+        const NEXTEST_BT: &str = "\
+        FAIL [   0.030s] my-crate tests::b
+--- STDERR: my-crate tests::b ---
+
+thread 'tests::b' (4242) panicked at src/lib.rs:10:5:
+assertion failed: false
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/abc/library/std/src/panicking.rs:689:5
+   1: core::panicking::panic
+             at /rustc/abc/library/core/src/panicking.rs:145:5
+   2: my_crate::tests::b
+             at ./src/lib.rs:10:5
+   3: core::ops::function::FnOnce::call_once
+             at /rustc/abc/library/core/src/ops/function.rs:250:5
+     Summary [   0.042s] 1 test run: 0 passed, 1 failed
+";
+        let captured = captured("", NEXTEST_BT, 100);
+        let out = CargoTest
+            .parse(
+                &captured,
+                &CargoTest.prepare(argv(&["cargo", "nextest", "run"])),
+            )
+            .unwrap();
+        let AdapterReport::Tests(r) = out.report else {
+            panic!("expected Tests report")
+        };
+        let f = &r.failures[0];
+        assert_eq!(f.loc, "src/lib.rs:10:5");
+        assert_eq!(f.msg, "assertion failed: false");
+        let joined = f.trace.join("\n");
+        assert!(joined.contains("my_crate::tests::b"), "{joined}");
+        assert!(!joined.contains("/rustc/"), "{joined}");
     }
 
     #[test]

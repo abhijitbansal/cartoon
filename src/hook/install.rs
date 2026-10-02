@@ -253,11 +253,11 @@ fn mode_label(deny: bool) -> &'static str {
 
 fn install_claude(t: Target) -> Result<i32> {
     let path = claude_settings_path(t.project)?;
-    let mut root: Value = match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| {
+    let mut root: Value = match read_settings(&path)? {
+        Some(s) => serde_json::from_str(&s).map_err(|e| {
             anyhow::anyhow!("{} is not valid JSON ({e}); fix it first", path.display())
         })?,
-        Err(_) => json!({}),
+        None => json!({}),
     };
     let pre = root
         .as_object_mut()
@@ -276,10 +276,7 @@ fn install_claude(t: Target) -> Result<i32> {
         println!("cartoon hook already installed in {}", path.display());
         return Ok(0);
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
+    write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
     if outcome == Upsert::ModeUpdated {
         println!(
             "cartoon hook entry updated in {} — now {}. Restart the agent (or run /hooks) to load it.",
@@ -315,11 +312,12 @@ fn install_claude(t: Target) -> Result<i32> {
 
 fn uninstall_claude(t: Target) -> Result<i32> {
     let path = claude_settings_path(t.project)?;
-    let Ok(s) = std::fs::read_to_string(&path) else {
+    let Some(s) = read_settings(&path)? else {
         println!("nothing to remove: {} not found", path.display());
         return Ok(0);
     };
-    let mut root: Value = serde_json::from_str(&s)?;
+    let mut root: Value = serde_json::from_str(&s)
+        .map_err(|e| anyhow::anyhow!("{} is not valid JSON ({e}); fix it first", path.display()))?;
     let mut removed = false;
     if let Some(arr) = root
         .get_mut("hooks")
@@ -331,7 +329,7 @@ fn uninstall_claude(t: Target) -> Result<i32> {
         removed = arr.len() != before;
     }
     if removed {
-        std::fs::write(&path, serde_json::to_string_pretty(&root)?)?;
+        write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
         println!("cartoon hook removed from {}", path.display());
     } else {
         println!("cartoon hook not present in {}", path.display());
@@ -373,19 +371,20 @@ fn copilot_config(deny: bool) -> Value {
 fn install_copilot(t: Target) -> Result<i32> {
     let path = copilot_path(t.project)?;
     // We own the dedicated `cartoon.json` name; refuse to clobber a file at
-    // that path we didn't write (uninstall is already this careful).
-    if path.exists() && !is_our_copilot_file(&path) {
-        bail!(
+    // that path we didn't write (uninstall is already this careful). Any read
+    // error other than "absent" is fatal: we can't tell whose file it is.
+    match read_settings(&path) {
+        Ok(None) => {}
+        Ok(Some(s)) if s.contains(HOOK_MARKER) => {}
+        Ok(Some(_)) => bail!(
             "{} exists but is not a cartoon hook; move it aside first",
             path.display()
-        );
+        ),
+        Err(e) => bail!("{e:#}; move it aside first"),
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(
+    write_atomic(
         &path,
-        serde_json::to_string_pretty(&copilot_config(t.deny))?,
+        &serde_json::to_string_pretty(&copilot_config(t.deny))?,
     )?;
     let mode = if t.deny {
         "deny-with-suggestion mode (raw command blocked; agent re-runs wrapped)"
@@ -407,18 +406,50 @@ fn install_copilot(t: Target) -> Result<i32> {
 
 fn uninstall_copilot(t: Target) -> Result<i32> {
     let path = copilot_path(t.project)?;
-    if is_our_copilot_file(&path) {
-        std::fs::remove_file(&path)?;
-        println!("cartoon Copilot hook removed from {}", path.display());
-    } else if path.exists() {
-        println!(
+    match std::fs::read(&path) {
+        Ok(bytes) if String::from_utf8_lossy(&bytes).contains(HOOK_MARKER) => {
+            std::fs::remove_file(&path)?;
+            println!("cartoon Copilot hook removed from {}", path.display());
+        }
+        Ok(_) => println!(
             "{} exists but is not a cartoon hook; left untouched",
             path.display()
-        );
-    } else {
-        println!("nothing to remove: {} not found", path.display());
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("nothing to remove: {} not found", path.display());
+        }
+        Err(e) => bail!("cannot read {}: {e}", path.display()),
     }
     Ok(0)
+}
+
+/// Read a config file we may rewrite. `Ok(None)` only when it does not
+/// exist; any other failure (permissions, a directory, invalid UTF-8) is an
+/// error, so the caller never mistakes an unreadable file for an absent one
+/// and overwrites it.
+fn read_settings(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => bail!(
+            "{} is not valid UTF-8; fix it first (left untouched)",
+            path.display()
+        ),
+        Err(e) => bail!("cannot read {}: {e} (left untouched)", path.display()),
+    }
+}
+
+/// Replace `path` atomically: write a temp file in the same directory, then
+/// rename it over the target, so a crash or a full disk never leaves a
+/// truncated settings file. An existing file keeps its permissions, and a
+/// symlinked settings file (dotfile managers) is updated at its target
+/// instead of being replaced by a regular file.
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    crate::paths::write_atomic(path, contents.as_bytes())?;
+    Ok(())
 }
 
 fn is_our_copilot_file(path: &Path) -> bool {
@@ -553,6 +584,47 @@ mod tests {
         assert!(target(&["install".into(), "--vscode".into(), "--copilot".into()]).is_err());
         // unknown flag still errors.
         assert!(target(&["install".into(), "--nope".into()]).is_err());
+    }
+
+    #[test]
+    fn read_settings_only_treats_not_found_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_settings(&dir.path().join("missing.json"))
+            .unwrap()
+            .is_none());
+        // A directory where the file should be: an error, never "absent".
+        assert!(read_settings(dir.path()).is_err());
+        // Invalid UTF-8: an error, so install can't overwrite the file.
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, b"{\"a\":\"\xff\"}").unwrap();
+        let err = read_settings(&bad).unwrap_err().to_string();
+        assert!(err.contains("UTF-8"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_preserves_mode_and_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join("settings.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_atomic(&link, "{\"x\":1}").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"x\":1}");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // No temp files left behind.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+        // A fresh file in a not-yet-existing directory.
+        let fresh = dir.path().join("sub/new.json");
+        write_atomic(&fresh, "{}").unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "{}");
     }
 
     #[test]

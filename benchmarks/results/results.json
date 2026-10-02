@@ -1,0 +1,97 @@
+{
+  "cartoon": "cartoon 0.6.0",
+  "platform": "Linux x86_64",
+  "suite_size": {
+    "tests": 600,
+    "failing": 20
+  },
+  "tools": {
+    "pytest": "pytest 9.1.1",
+    "unittest": "Python 3.11.15",
+    "cargo test": "cargo 1.97.0 (c980f4866 2026-06-30)",
+    "go test": "go version go1.24.7 linux/amd64"
+  },
+  "skipped": [],
+  "rows": [
+    {
+      "suite": "pytest",
+      "baseline": "verbose",
+      "command": "pytest -v tests",
+      "baseline_tokens": 14217,
+      "cartoon_tokens": 2464,
+      "saved_pct": 82.7,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    },
+    {
+      "suite": "pytest",
+      "baseline": "quiet",
+      "command": "pytest -q --tb=short tests",
+      "baseline_tokens": 1895,
+      "cartoon_tokens": 1891,
+      "saved_pct": 0.2,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    },
+    {
+      "suite": "unittest",
+      "baseline": "verbose",
+      "command": "python3 -m unittest -v",
+      "baseline_tokens": 14380,
+      "cartoon_tokens": 1549,
+      "saved_pct": 89.2,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    },
+    {
+      "suite": "unittest",
+      "baseline": "quiet",
+      "command": "python3 -m unittest",
+      "baseline_tokens": 1820,
+      "cartoon_tokens": 1550,
+      "saved_pct": 14.8,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    },
+    {
+      "suite": "cargo test",
+      "baseline": "verbose",
+      "command": "cargo test",
+      "baseline_tokens": 16327,
+      "cartoon_tokens": 3083,
+      "saved_pct": 81.1,
+      "exit_baseline": 101,
+      "exit_cartoon": 101
+    },
+    {
+      "suite": "cargo test",
+      "baseline": "quiet",
+      "command": "cargo test -q",
+      "baseline_tokens": 11101,
+      "cartoon_tokens": 3082,
+      "saved_pct": 72.2,
+      "exit_baseline": 101,
+      "exit_cartoon": 101
+    },
+    {
+      "suite": "go test",
+      "baseline": "verbose",
+      "command": "go test -v ./...",
+      "baseline_tokens": 11893,
+      "cartoon_tokens": 795,
+      "saved_pct": 93.3,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    },
+    {
+      "suite": "go test",
+      "baseline": "quiet",
+      "command": "go test ./...",
+      "baseline_tokens": 424,
+      "cartoon_tokens": 423,
+      "saved_pct": 0.2,
+      "exit_baseline": 1,
+      "exit_cartoon": 1
+    }
+  ]
+}

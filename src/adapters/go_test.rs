@@ -19,10 +19,16 @@ impl Adapter for GoTest {
     fn detect(&self, argv: &[String]) -> bool {
         // Benchmark result lines are the point of a `-bench` run, not a
         // pass/fail count our report shape can express — leave it unwrapped.
-        if argv
-            .iter()
-            .any(|a| a == "-bench" || a.starts_with("-bench="))
-        {
+        // Same for `-list` (a listing of names, no test runs) and `-fuzz`
+        // (a long-running fuzzer whose progress lines are the output).
+        if argv.iter().any(|a| {
+            let flag = a.strip_prefix("--").or_else(|| a.strip_prefix('-'));
+            flag.is_some_and(|f| {
+                ["bench", "list", "fuzz"]
+                    .iter()
+                    .any(|n| f == *n || f.starts_with(&format!("{n}=")))
+            })
+        }) {
             return false;
         }
         matches!(argv, [first, second, ..] if basename(first) == "go" && second == "test")
@@ -32,12 +38,19 @@ impl Adapter for GoTest {
         // `-args` — everything following `-args` is forwarded verbatim to
         // the test binary, where `-json` would mean something else (or
         // nothing at all). Insert right before `-args` when present, else
-        // right after `test`. Never remove or reorder the user's own args.
+        // right after `test` — or after a leading `-C <dir>` / `-C=dir`,
+        // which go requires to be the very first flag. Never remove or
+        // reorder the user's own args.
         if !argv.iter().any(|a| a == "-json" || a == "--json") {
+            let after_test = match argv.get(2).map(String::as_str) {
+                Some("-C" | "--C") => 4,
+                Some(a) if a.starts_with("-C=") || a.starts_with("--C=") => 3,
+                _ => 2,
+            };
             let insert_at = argv
                 .iter()
                 .position(|a| a == "-args")
-                .unwrap_or_else(|| argv.len().min(2));
+                .unwrap_or_else(|| argv.len().min(after_test));
             argv.insert(insert_at, "-json".into());
         }
         Prepared {
@@ -48,6 +61,72 @@ impl Adapter for GoTest {
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
         parse_go_test(captured)
     }
+    fn native_stdout(&self, user_argv: &[String], captured: &Captured) -> Option<String> {
+        // The user asked for JSON themselves: that stream IS their baseline.
+        if user_argv.iter().any(|a| a == "-json" || a == "--json") {
+            return None;
+        }
+        let verbose = user_argv
+            .iter()
+            .any(|a| matches!(a.as_str(), "-v" | "--v" | "-v=true" | "--v=true"));
+        Some(plain_view(&captured.stdout, verbose))
+    }
+}
+
+/// Reconstruct what plain `go test` (without `-json`, which implies `-v`)
+/// prints from the event stream: non-verbose go shows only failing tests'
+/// output plus the per-package `ok`/`FAIL` lines; `-v` shows everything.
+/// Non-event lines (a crashed binary's raw output) are kept verbatim.
+fn plain_view(stdout: &str, verbose: bool) -> String {
+    let mut out = String::new();
+    // Buffered output of tests whose outcome is not known yet, by
+    // (package, test), in first-seen order.
+    let mut pending: Vec<((String, String), String)> = Vec::new();
+    for raw_line in stdout.lines() {
+        let Ok(ev) = serde_json::from_str::<GoEvent>(raw_line.trim()) else {
+            if !raw_line.trim().is_empty() {
+                out.push_str(raw_line);
+                out.push('\n');
+            }
+            continue;
+        };
+        let text = ev.output.as_deref().unwrap_or("");
+        if ev.action.starts_with("build-") {
+            out.push_str(text);
+            continue;
+        }
+        match (ev.test, ev.action.as_str()) {
+            (_, "output") if verbose => out.push_str(text),
+            (Some(t), "output") => {
+                if text.starts_with("=== ") {
+                    continue;
+                }
+                let key = (ev.package, t);
+                match pending.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, buf)) => buf.push_str(text),
+                    None => pending.push((key, text.to_string())),
+                }
+            }
+            (Some(t), action @ ("pass" | "fail" | "skip")) if !verbose => {
+                let key = (ev.package, t);
+                if let Some(i) = pending.iter().position(|(k, _)| *k == key) {
+                    let (_, buf) = pending.remove(i);
+                    if action == "fail" {
+                        out.push_str(&buf);
+                    }
+                }
+            }
+            // Non-verbose go prints no bare `PASS` line for a passing package.
+            (None, "output") if text == "PASS\n" => {}
+            (None, "output") => out.push_str(text),
+            _ => {}
+        }
+    }
+    // Tests that never finished (killed by -timeout): go shows their output.
+    for (_, buf) in pending {
+        out.push_str(&buf);
+    }
+    out
 }
 
 #[derive(Deserialize)]
@@ -62,6 +141,14 @@ struct GoEvent {
     elapsed: f64,
     #[serde(rename = "Output", default)]
     output: Option<String>,
+    /// Go >=1.24 `build-output` / `build-fail` events are keyed by the
+    /// import path being built (e.g. `pkg [pkg.test]`), not `Package`.
+    #[serde(rename = "ImportPath", default)]
+    import_path: String,
+    /// On a package `fail` caused by a build failure, the `ImportPath` whose
+    /// `build-output` explains it — possibly a dependency, not the package.
+    #[serde(rename = "FailedBuild", default)]
+    failed_build: String,
 }
 
 /// Per-package bookkeeping needed to tell a real build/setup failure (no
@@ -74,6 +161,18 @@ struct PackageState {
     had_test_event: bool,
     /// Whether a package-level (no `Test`) `fail` action occurred.
     had_fail: bool,
+    /// Whether a package-level (no `Test`) `pass` action occurred.
+    had_pass: bool,
+    /// The package `fail` event's `FailedBuild` import path, if any.
+    failed_build: Option<String>,
+}
+
+/// `pkg [pkg.test]` → `pkg`: go's build-event import paths carry the test
+/// variant in a bracketed suffix.
+fn strip_variant(import_path: &str) -> &str {
+    import_path
+        .split_once(" [")
+        .map_or(import_path, |(path, _)| path)
 }
 
 fn package_entry<'a>(
@@ -103,6 +202,11 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
     // passthrough rather than silently dropped.
     let mut raw_lines: Vec<String> = Vec::new();
     let mut duration_s = 0.0f64;
+    // `build-output` text per raw ImportPath.
+    let mut build_output: HashMap<String, Vec<String>> = HashMap::new();
+    // Tests that emitted `run`, in order — a test killed by `-timeout` (or a
+    // crashed binary) never gets its terminal event.
+    let mut runs: Vec<(String, String)> = Vec::new();
 
     for raw_line in captured.stdout.lines() {
         let line = raw_line.trim();
@@ -125,6 +229,17 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
         };
         any_parsed = true;
 
+        // Go >=1.24 reports compiler/vet output as separate build events
+        // keyed by ImportPath; collect them and attach to the package whose
+        // `fail` event names that build (see `FailedBuild`) afterwards.
+        if ev.action.starts_with("build-") {
+            let entry = build_output.entry(ev.import_path.clone()).or_default();
+            if let Some(out) = &ev.output {
+                entry.push(out.clone());
+            }
+            continue;
+        }
+
         let pkg = package_entry(&mut packages, &mut package_order, &ev.package);
         match &ev.test {
             Some(test_name) => {
@@ -135,8 +250,12 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
                         .or_default()
                         .push(out.clone());
                 }
-                if matches!(ev.action.as_str(), "pass" | "fail" | "skip") {
-                    terminal.push((ev.package.clone(), test_name.clone(), ev.action.clone()));
+                match ev.action.as_str() {
+                    "pass" | "fail" | "skip" => {
+                        terminal.push((ev.package.clone(), test_name.clone(), ev.action.clone()))
+                    }
+                    "run" => runs.push((ev.package.clone(), test_name.clone())),
+                    _ => {}
                 }
             }
             None => {
@@ -146,9 +265,15 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
                 match ev.action.as_str() {
                     // Packages run in parallel, so the run's wall-clock
                     // duration is bounded by the slowest one, not their sum.
-                    "pass" => duration_s = duration_s.max(ev.elapsed),
+                    "pass" => {
+                        pkg.had_pass = true;
+                        duration_s = duration_s.max(ev.elapsed);
+                    }
                     "fail" => {
                         pkg.had_fail = true;
+                        if !ev.failed_build.is_empty() {
+                            pkg.failed_build = Some(ev.failed_build.clone());
+                        }
                         duration_s = duration_s.max(ev.elapsed);
                     }
                     _ => {}
@@ -159,6 +284,38 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
 
     if !any_parsed {
         bail!("no `go test -json` event lines found in output");
+    }
+
+    // Attach build output to the failed package that names it — directly
+    // via `FailedBuild`, else by matching the stripped import path — ahead
+    // of the package's own `FAIL ... [build failed]` line.
+    for pkg_name in &package_order {
+        let state = packages.get_mut(pkg_name).unwrap();
+        let key = state.failed_build.clone().or_else(|| {
+            build_output
+                .keys()
+                .find(|k| strip_variant(k) == pkg_name)
+                .cloned()
+        });
+        if let Some(lines) = key.and_then(|k| build_output.remove(&k)) {
+            state.output.splice(0..0, lines);
+        }
+    }
+
+    // A test with a `run` but no terminal event in a failed package was cut
+    // off — `-timeout` panics, a crash, `os.Exit` mid-test. Count it as a
+    // failure carrying whatever it printed (e.g. `panic: test timed out`).
+    let process_failed = !captured.status.success();
+    for (pkg_name, test_name) in &runs {
+        let ended = terminal
+            .iter()
+            .any(|(p, n, _)| p == pkg_name && n == test_name);
+        let pkg_failed = packages
+            .get(pkg_name)
+            .is_some_and(|s| s.had_fail || (!s.had_pass && process_failed));
+        if !ended && pkg_failed {
+            terminal.push((pkg_name.clone(), test_name.clone(), "fail".into()));
+        }
     }
 
     // A parent of `t.Run` subtests reports its own terminal pass/fail/skip
@@ -176,6 +333,8 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
     let mut failed = 0u64;
     let mut skipped = 0u64;
     let mut failures = Vec::new();
+    // Packages with at least one attributed test failure.
+    let mut pkgs_with_test_failure: Vec<&str> = Vec::new();
 
     for (pkg_name, test_name, action) in &terminal {
         if has_child(pkg_name, test_name) {
@@ -187,6 +346,7 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
             "skip" => skipped += 1,
             "fail" => {
                 failed += 1;
+                pkgs_with_test_failure.push(pkg_name);
                 let key = (pkg_name.clone(), test_name.clone());
                 let lines = test_output.get(&key).cloned().unwrap_or_default();
                 failures.push(build_failure(pkg_name, test_name, &lines));
@@ -199,6 +359,9 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
     // event — its compiler/setup errors would otherwise vanish into a
     // silent "0 tests ran". Surface one Failure per such package, always
     // alongside its raw output, regardless of what the rest of the run did.
+    // Likewise a package that fails with no failing test (`TestMain` calling
+    // `os.Exit(1)`, a goroutine-leak detector) gets a package-level Failure
+    // carrying its output.
     let mut build_failure_packages: Vec<String> = Vec::new();
     for pkg_name in &package_order {
         let state = &packages[pkg_name];
@@ -206,14 +369,16 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
             .output
             .iter()
             .any(|o| BUILD_FAIL_MARKERS.iter().any(|m| o.contains(m)));
-        if (state.had_fail && !state.had_test_event) || looks_failed_textually {
-            build_failure_packages.push(pkg_name.clone());
+        let failed_without_test =
+            state.had_fail && !pkgs_with_test_failure.contains(&pkg_name.as_str());
+        if failed_without_test || looks_failed_textually {
+            total += 1;
+            failed += 1;
+            failures.push(build_package_failure(pkg_name, &state.output));
+            if !state.had_test_event || looks_failed_textually {
+                build_failure_packages.push(pkg_name.clone());
+            }
         }
-    }
-    for pkg_name in &build_failure_packages {
-        total += 1;
-        failed += 1;
-        failures.push(build_package_failure(pkg_name, &packages[pkg_name].output));
     }
 
     let mut passthrough_parts: Vec<String> = Vec::new();
@@ -233,6 +398,14 @@ fn parse_go_test(captured: &Captured) -> Result<ParseOutcome> {
     }
     if has_build_failure_output || unexplained_failure {
         passthrough_parts.extend(raw_lines.iter().cloned());
+    }
+    // Build output no failed package claimed — show it rather than drop it.
+    if process_failed {
+        let mut leftover: Vec<_> = build_output.into_iter().collect();
+        leftover.sort();
+        for (_, lines) in leftover {
+            passthrough_parts.extend(lines);
+        }
     }
     let passthrough_stdout = (!passthrough_parts.is_empty()).then(|| passthrough_parts.concat());
     let passthrough_stderr = (!captured.stderr.is_empty()).then(|| captured.stderr.clone());
@@ -285,36 +458,101 @@ fn short_pkg(package: &str) -> &str {
     package.rsplit('/').next().unwrap_or(package)
 }
 
+/// A goroutine-dump location line: `\t/path/file.go:12 +0x1d` (the
+/// `+0x..` offset is absent for inlined frames).
+fn frame_location(line: &str) -> Option<(&str, &str)> {
+    static FRAME: OnceLock<regex::Regex> = OnceLock::new();
+    let re =
+        FRAME.get_or_init(|| regex::Regex::new(r"^\t(\S+\.go):(\d+)(?: \+0x[0-9a-f]+)?$").unwrap());
+    let caps = re.captures(line)?;
+    Some((caps.get(1)?.as_str(), caps.get(2)?.as_str()))
+}
+
+/// Go runtime / testing-harness frames carry no signal about the user's bug,
+/// nor does any other standard-library frame once GOROOT is known (it is
+/// learned from the first runtime/testing frame path, e.g. `/usr/local/go`).
+fn is_runtime_frame(file: &str, goroot_src: Option<&str>) -> bool {
+    file.contains("/src/runtime/")
+        || file.contains("/src/testing/")
+        || file == "_testmain.go"
+        || goroot_src.is_some_and(|g| file.starts_with(g))
+}
+
 fn build_failure(package: &str, test: &str, output_lines: &[String]) -> Failure {
     let id = format!("{}.{test}", short_pkg(package));
 
     let mut loc = String::new();
     let mut msg = String::new();
     let mut found_loc = false;
-    let mut trace = Vec::new();
+    let mut panic_seen = false;
+    let mut panic_loc_found = false;
+    let mut trace: Vec<String> = Vec::new();
 
-    for chunk in output_lines {
-        for raw in chunk.lines() {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() || is_marker(trimmed) {
+    let raw_lines: Vec<&str> = output_lines.iter().flat_map(|c| c.lines()).collect();
+    let goroot_src = raw_lines.iter().find_map(|l| {
+        let (file, _) = frame_location(l)?;
+        ["/src/runtime/", "/src/testing/"]
+            .iter()
+            .find_map(|m| file.find(m).map(|i| &file[..i + "/src/".len()]))
+    });
+    let mut i = 0;
+    while i < raw_lines.len() {
+        let raw = raw_lines[i];
+        // A goroutine-dump frame is a function line followed by its
+        // location line; keep or drop the pair together.
+        if let Some((file, ln)) = raw_lines.get(i + 1).and_then(|l| frame_location(l)) {
+            if frame_location(raw).is_none() && !raw.starts_with('\t') {
+                if !is_runtime_frame(file, goroot_src) {
+                    // `created by` names where a goroutine was spawned,
+                    // not where it failed.
+                    if panic_seen && !panic_loc_found && !raw.starts_with("created by ") {
+                        loc = format!("{}:{ln}", basename(file));
+                        panic_loc_found = true;
+                    }
+                    trace.push(raw.trim().to_string());
+                    trace.push(raw_lines[i + 1].trim().to_string());
+                }
+                i += 2;
                 continue;
             }
-            if !found_loc {
-                if let Some((file_loc, rest)) = parse_go_loc(trimmed) {
-                    loc = file_loc;
-                    msg = rest;
-                    found_loc = true;
-                }
-            }
-            trace.push(trimmed.to_string());
         }
+        i += 1;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || is_marker(trimmed) {
+            continue;
+        }
+        // The panic (incl. `-timeout`'s `panic: test timed out`) is what
+        // ended the test, so it wins over an earlier `t.Log`/`t.Error` line.
+        if let Some(text) = trimmed.strip_prefix("panic: ") {
+            if !panic_seen {
+                panic_seen = true;
+                msg = format!("panic: {}", text.trim_end_matches(" [recovered]"));
+            }
+        } else if !found_loc && !panic_seen {
+            if let Some((file_loc, rest)) = parse_go_loc(trimmed) {
+                loc = file_loc;
+                msg = rest;
+                found_loc = true;
+            }
+        }
+        trace.push(trimmed.to_string());
+    }
+    // Drop `goroutine N [state]:` headers whose frames were all filtered.
+    let is_header = |l: &str| l.starts_with("goroutine ") && l.ends_with(':');
+    let mut kept: Vec<String> = Vec::with_capacity(trace.len());
+    for (idx, l) in trace.iter().enumerate() {
+        let next_is_header_or_end = trace.get(idx + 1).is_none_or(|n| is_header(n));
+        if is_header(l) && next_is_header_or_end {
+            continue;
+        }
+        kept.push(l.clone());
     }
 
     Failure {
         id,
         loc,
         msg,
-        trace,
+        trace: kept,
     }
 }
 
@@ -332,8 +570,20 @@ fn build_package_failure(package: &str, output_lines: &[String]) -> Failure {
             }
         }
     }
-    // The `# <pkg>` banner just names the package, not the error.
-    let msg_idx = lines.iter().position(|l| !l.starts_with('#'));
+    // The `# <pkg>` banner just names the package, not the error; nor do
+    // go's own `PASS` / `FAIL\t<pkg>` / `ok` status lines (a `TestMain`
+    // exit leaves them around the actual reason).
+    let is_status = |l: &str| {
+        l.starts_with('#')
+            || l == "PASS"
+            || l == "FAIL"
+            || l.starts_with("FAIL\t")
+            || l.starts_with("ok ")
+    };
+    let msg_idx = lines
+        .iter()
+        .position(|l| !is_status(l))
+        .or_else(|| lines.iter().position(|l| !l.starts_with('#')));
     let msg = msg_idx.map(|i| lines[i].clone()).unwrap_or_default();
     let trace = lines
         .into_iter()
@@ -375,6 +625,45 @@ mod tests {
     }
 
     // --- detect ---
+
+    #[test]
+    fn plain_view_keeps_only_failing_output_and_package_lines() {
+        let stdout = concat!(
+            r#"{"Action":"start","Package":"ex/p"}"#,
+            "\n",
+            r#"{"Action":"run","Package":"ex/p","Test":"TestOk"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestOk","Output":"=== RUN   TestOk\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestOk","Output":"--- PASS: TestOk (0.00s)\n"}"#,
+            "\n",
+            r#"{"Action":"pass","Package":"ex/p","Test":"TestOk"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"=== RUN   TestBad\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"    p_test.go:9: boom\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}"#,
+            "\n",
+            r#"{"Action":"fail","Package":"ex/p","Test":"TestBad"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Output":"FAIL\n"}"#,
+            "\n",
+            r#"{"Action":"output","Package":"ex/p","Output":"FAIL\tex/p\t0.01s\n"}"#,
+            "\n",
+            r#"{"Action":"fail","Package":"ex/p"}"#,
+            "\n",
+        );
+        assert_eq!(
+            plain_view(stdout, false),
+            "    p_test.go:9: boom\n--- FAIL: TestBad (0.00s)\nFAIL\nFAIL\tex/p\t0.01s\n"
+        );
+        assert!(plain_view(stdout, true).contains("--- PASS: TestOk"));
+        let user = argv(&["go", "test", "-json", "./..."]);
+        assert!(GoTest
+            .native_stdout(&user, &captured(stdout, "", false))
+            .is_none());
+    }
 
     #[test]
     fn detects_go_test_variants() {
@@ -616,6 +905,156 @@ panic: runtime error: index out of range
         };
         let prepared = GoTest.prepare(vec!["go".into(), "test".into()]);
         assert!(GoTest.parse(&cap, &prepared).is_err());
+    }
+
+    // --- real go 1.24 fixtures ---
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/go-test/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        ))
+        .unwrap()
+    }
+
+    fn parse_fixture(name: &str) -> ParseOutcome {
+        let c = captured(&fixture(name), "", false);
+        let prepared = GoTest.prepare(argv(&["go", "test", "./..."]));
+        GoTest.parse(&c, &prepared).unwrap()
+    }
+
+    #[test]
+    fn real_failing_test_has_loc_and_msg() {
+        let out = parse_fixture("fail.jsonl");
+        let r = tests_of(&out);
+        assert_eq!((r.total, r.passed, r.failed), (2, 1, 1));
+        let f = &r.failures[0];
+        assert_eq!(f.id, "fail.TestBad");
+        assert_eq!(f.loc, "fail_test.go:10");
+        assert_eq!(f.msg, "Add(1,1) = 2, want 3");
+    }
+
+    #[test]
+    fn timed_out_test_without_terminal_event_is_a_failure() {
+        let out = parse_fixture("timeout.jsonl");
+        let r = tests_of(&out);
+        assert_eq!((r.total, r.passed, r.failed), (2, 1, 1), "{r:?}");
+        let f = &r.failures[0];
+        assert_eq!(f.id, "timeout.TestSlow");
+        assert_eq!(f.msg, "panic: test timed out after 1s");
+        assert_eq!(f.loc, "timeout_test.go:11");
+        // The user's frame survives; runtime/testing/stdlib frames are
+        // filtered.
+        assert!(
+            f.trace.iter().any(|l| l.contains("timeout_test.go:11")),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace
+                .iter()
+                .any(|l| l.contains("/usr/local/go1.24.7/src/")),
+            "{:?}",
+            f.trace
+        );
+    }
+
+    #[test]
+    fn run_without_terminal_event_in_passing_package_is_not_a_failure() {
+        // Only a failed package turns a dangling `run` into a failure.
+        const DANGLING_OK: &str = "\
+{\"Action\":\"run\",\"Package\":\"example.com/m/a\",\"Test\":\"TestA\"}
+{\"Action\":\"pass\",\"Package\":\"example.com/m/a\",\"Elapsed\":0.01}
+";
+        let c = captured(DANGLING_OK, "", true);
+        let prepared = GoTest.prepare(argv(&["go", "test"]));
+        let out = GoTest.parse(&c, &prepared).unwrap();
+        assert_eq!(tests_of(&out).failed, 0);
+    }
+
+    #[test]
+    fn testmain_exit_with_no_failing_test_is_a_package_failure() {
+        let out = parse_fixture("tmain.jsonl");
+        let r = tests_of(&out);
+        assert_eq!((r.passed, r.failed), (1, 1), "{r:?}");
+        let f = &r.failures[0];
+        assert_eq!(f.id, "tmain");
+        assert_eq!(f.msg, "leak detector: 1 goroutine leaked");
+    }
+
+    #[test]
+    fn go_1_24_build_output_events_carry_the_compiler_error() {
+        let out = parse_fixture("builderr.jsonl");
+        let r = tests_of(&out);
+        assert_eq!((r.total, r.failed), (1, 1), "{r:?}");
+        let f = &r.failures[0];
+        assert_eq!(f.id, "builderr");
+        assert_eq!(f.msg, "builderr/b.go:3:23: undefined: x");
+        let stdout = out
+            .passthrough_stdout
+            .expect("compiler output passed through");
+        assert!(stdout.contains("undefined: x"), "got: {stdout}");
+    }
+
+    #[test]
+    fn build_output_of_a_failed_dependency_is_attached_via_failed_build() {
+        let out = parse_fixture("usesdep.jsonl");
+        let r = tests_of(&out);
+        assert_eq!(r.failed, 1, "{r:?}");
+        let f = &r.failures[0];
+        assert_eq!(f.id, "usesdep");
+        assert_eq!(f.msg, "dep/d.go:3:23: undefined: y");
+    }
+
+    #[test]
+    fn vet_failure_reported_as_build_output() {
+        let out = parse_fixture("vetbad.jsonl");
+        let r = tests_of(&out);
+        assert_eq!(r.failed, 1, "{r:?}");
+        assert!(
+            r.failures[0].msg.contains("fmt.Printf format %d"),
+            "{:?}",
+            r.failures[0]
+        );
+    }
+
+    #[test]
+    fn panic_msg_and_first_user_frame_are_populated() {
+        let out = parse_fixture("panicp.jsonl");
+        let r = tests_of(&out);
+        assert_eq!(r.failed, 1, "{r:?}");
+        let f = &r.failures[0];
+        assert_eq!(f.id, "panicp.TestPanics");
+        assert_eq!(
+            f.msg,
+            "panic: runtime error: index out of range [5] with length 0"
+        );
+        assert_eq!(f.loc, "p_test.go:7");
+        assert!(
+            !f.trace.iter().any(|l| l.contains("/src/testing/")),
+            "{:?}",
+            f.trace
+        );
+        assert!(f.trace.iter().any(|l| l.contains("p_test.go:11")));
+    }
+
+    #[test]
+    fn declines_list_and_fuzz_invocations() {
+        assert!(!GoTest.detect(&argv(&["go", "test", "-list", "."])));
+        assert!(!GoTest.detect(&argv(&["go", "test", "-list=Test.*"])));
+        assert!(!GoTest.detect(&argv(&["go", "test", "-fuzz", "FuzzX"])));
+        assert!(!GoTest.detect(&argv(&["go", "test", "-fuzz=FuzzX", "./p"])));
+    }
+
+    #[test]
+    fn prepare_inserts_json_after_leading_chdir_flag() {
+        let p = GoTest.prepare(argv(&["go", "test", "-C", "sub", "./..."]));
+        assert_eq!(p.argv, argv(&["go", "test", "-C", "sub", "-json", "./..."]));
+        let p = GoTest.prepare(argv(&["go", "test", "-C=sub", "./..."]));
+        assert_eq!(p.argv, argv(&["go", "test", "-C=sub", "-json", "./..."]));
+        let p = GoTest.prepare(argv(&["go", "test", "--C", "sub"]));
+        assert_eq!(p.argv, argv(&["go", "test", "--C", "sub", "-json"]));
     }
 
     // --- markers ---

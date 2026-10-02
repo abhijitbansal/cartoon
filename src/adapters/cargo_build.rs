@@ -178,6 +178,23 @@ struct CargoMessage {
     code: Option<CargoCode>,
     #[serde(default)]
     spans: Vec<CargoSpan>,
+    #[serde(default)]
+    children: Vec<CargoChild>,
+}
+
+/// A `help:` / `note:` sub-diagnostic attached to a compiler message.
+#[derive(Deserialize)]
+struct CargoChild {
+    message: String,
+    level: String,
+    #[serde(default)]
+    spans: Vec<CargoChildSpan>,
+}
+
+#[derive(Deserialize)]
+struct CargoChildSpan {
+    #[serde(default)]
+    suggested_replacement: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -192,6 +209,44 @@ struct CargoSpan {
     is_primary: bool,
     line_start: u64,
     column_start: u64,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// An error's one-line message plus what the human renderer shows around
+/// it: the primary span label (`expected \`i32\`, found \`&str\``) and the
+/// `help:` / `note:` children (with a single suggested replacement inline,
+/// as rustc renders it). Lint-boilerplate children (`... on by default`,
+/// `for further information visit <url>`) carry no fix signal and are left
+/// out.
+fn compact_error_msg(text: &str, primary_label: Option<&str>, children: &[CargoChild]) -> String {
+    let mut out = text.to_string();
+    if let Some(label) = primary_label.filter(|l| !l.is_empty() && *l != text) {
+        out.push_str(&format!(" ({label})"));
+    }
+    for child in children {
+        if child.level != "help" && child.level != "note" {
+            continue;
+        }
+        let first = child.message.lines().next().unwrap_or("").trim();
+        if first.is_empty()
+            || first.ends_with("on by default")
+            || first.starts_with("for further information visit")
+        {
+            continue;
+        }
+        out.push_str(&format!("; {}: {first}", child.level));
+        let replacements: Vec<&str> = child
+            .spans
+            .iter()
+            .filter_map(|s| s.suggested_replacement.as_deref())
+            .filter(|r| !r.is_empty() && !r.contains('\n'))
+            .collect();
+        if let [only] = replacements.as_slice() {
+            out.push_str(&format!(": `{only}`"));
+        }
+    }
+    out
 }
 
 /// Returns (diagnostics, errors, warnings, found any recognized cargo JSON
@@ -254,16 +309,20 @@ fn parse_lines(stdout: &str) -> Result<(Vec<Value>, u64, u64, bool)> {
         if !seen.insert((loc.clone(), rule.clone(), text.clone())) {
             continue;
         }
-        if msg.level == "error" {
+        let shown = if msg.level == "error" {
             errors += 1;
+            // Errors keep the context needed to fix them; warnings stay
+            // one line each.
+            compact_error_msg(&text, span.and_then(|s| s.label.as_deref()), &msg.children)
         } else {
             warnings += 1;
-        }
+            text
+        };
         diagnostics.push(json!({
             "loc": loc,
             "severity": msg.level,
             "rule": rule,
-            "msg": text,
+            "msg": shown,
         }));
     }
     Ok((diagnostics, errors, warnings, found_cargo_json))
@@ -404,6 +463,71 @@ mod tests {
         assert_eq!(diags[0]["rule"], "E0308");
         assert!(diags.iter().any(|d| d["rule"] == "clippy::needless_return"));
         assert!(out.passthrough_stdout.is_none());
+    }
+
+    fn fixture_diags(name: &str) -> Vec<Value> {
+        let stdout = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/cargo-build/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        ))
+        .unwrap();
+        let prepared = CargoBuild.prepare(argv(&["cargo", "build"]));
+        let out = CargoBuild
+            .parse(&captured(&stdout, "", false), &prepared)
+            .unwrap();
+        let AdapterReport::Value(v) = out.report else {
+            panic!("expected value report")
+        };
+        v["diagnostics"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn error_msg_carries_primary_span_label() {
+        let diags = fixture_diags("mismatched-types.json");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0]["loc"], "src/main.rs:7:18");
+        assert_eq!(
+            diags[0]["msg"],
+            "mismatched types (expected `i32`, found `&str`)"
+        );
+    }
+
+    #[test]
+    fn error_msg_carries_child_help_with_suggestion() {
+        let diags = fixture_diags("borrow-and-unused.json");
+        let e = diags.iter().find(|d| d["severity"] == "error").unwrap();
+        assert_eq!(e["rule"], "E0382");
+        assert_eq!(
+            e["msg"],
+            "borrow of moved value: `v` (value borrowed here after move); \
+             help: consider cloning the value if the performance cost is acceptable: `.clone()`"
+        );
+        // Warnings stay one-line: no label/help noise added.
+        let w = diags
+            .iter()
+            .find(|d| d["msg"] == "unused variable: `x`")
+            .expect("warning msg unchanged");
+        assert_eq!(w["severity"], "warning");
+    }
+
+    #[test]
+    fn error_msg_keeps_notes_but_drops_on_by_default_and_url_noise() {
+        const WITH_NOTES: &str = r#"
+{"reason":"compiler-message","package_id":"foo","target":{"name":"foo"},"message":{"rendered":"","children":[{"children":[],"code":null,"level":"note","message":"`#[deny(clippy::x)]` on by default","rendered":null,"spans":[]},{"children":[],"code":null,"level":"help","message":"for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#x","rendered":null,"spans":[]},{"children":[],"code":null,"level":"note","message":"required by a bound in `foo`","rendered":null,"spans":[]}],"code":{"code":"E0277","explanation":null},"level":"error","message":"the trait bound `X: Y` is not satisfied","spans":[{"file_name":"src/lib.rs","line_start":3,"column_start":5,"is_primary":true,"label":null}]}}
+{"reason":"build-finished","success":false}
+"#;
+        let prepared = CargoBuild.prepare(argv(&["cargo", "build"]));
+        let out = CargoBuild
+            .parse(&captured(WITH_NOTES, "", false), &prepared)
+            .unwrap();
+        let AdapterReport::Value(v) = out.report else {
+            panic!("expected value report")
+        };
+        assert_eq!(
+            v["diagnostics"][0]["msg"],
+            "the trait bound `X: Y` is not satisfied; note: required by a bound in `foo`"
+        );
     }
 
     #[test]

@@ -1,0 +1,9 @@
+{"Time":"2026-10-02T03:06:48.097815738Z","Action":"start","Package":"example.com/fx/tmain"}
+{"Time":"2026-10-02T03:06:48.106194839Z","Action":"run","Package":"example.com/fx/tmain","Test":"TestFine"}
+{"Time":"2026-10-02T03:06:48.106222908Z","Action":"output","Package":"example.com/fx/tmain","Test":"TestFine","Output":"=== RUN   TestFine\n"}
+{"Time":"2026-10-02T03:06:48.106292432Z","Action":"output","Package":"example.com/fx/tmain","Test":"TestFine","Output":"--- PASS: TestFine (0.00s)\n"}
+{"Time":"2026-10-02T03:06:48.106308789Z","Action":"pass","Package":"example.com/fx/tmain","Test":"TestFine","Elapsed":0}
+{"Time":"2026-10-02T03:06:48.106322205Z","Action":"output","Package":"example.com/fx/tmain","Output":"PASS\n"}
+{"Time":"2026-10-02T03:06:48.106371424Z","Action":"output","Package":"example.com/fx/tmain","Output":"leak detector: 1 goroutine leaked\n"}
+{"Time":"2026-10-02T03:06:48.106768257Z","Action":"output","Package":"example.com/fx/tmain","Output":"FAIL\texample.com/fx/tmain\t0.009s\n"}
+{"Time":"2026-10-02T03:06:48.106828336Z","Action":"fail","Package":"example.com/fx/tmain","Elapsed":0.009}
