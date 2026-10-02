@@ -38,7 +38,7 @@ impl Adapter for PreCommit {
         }
     }
     fn parse(&self, captured: &Captured, _prepared: &Prepared) -> Result<ParseOutcome> {
-        let report = parse_text(&captured.stdout)?;
+        let (report, long_outputs) = parse_hooks(&captured.stdout)?;
         // A nonzero exit with no failed hook (environment install failure,
         // `[ERROR] … InvalidConfigError`, `An unexpected error has occurred`
         // after some hooks already passed) must not read as a clean run:
@@ -46,11 +46,18 @@ impl Adapter for PreCommit {
         let unexplained = !captured.status.success() && report.failed == 0;
         let has_error_text = captured.stdout.contains("[ERROR]")
             || captured.stdout.contains("An unexpected error has occurred");
+        let passthrough_stdout = if unexplained || has_error_text {
+            Some(captured.stdout.clone())
+        } else {
+            // A failed hook's violations are all equally actionable; one too
+            // long for the report's trace cap is shown in full here instead.
+            (!long_outputs.is_empty()).then(|| long_outputs.concat())
+        };
         Ok(ParseOutcome {
             report: super::AdapterReport::Tests(report),
             // stdout WAS the report — consumed, unless something went wrong
             // outside the hook status lines.
-            passthrough_stdout: (unexplained || has_error_text).then(|| captured.stdout.clone()),
+            passthrough_stdout,
             passthrough_stderr: (!captured.stderr.is_empty()).then(|| captured.stderr.clone()),
         })
     }
@@ -88,8 +95,22 @@ fn non_empty_trimmed(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The report's default per-failure trace cap (`trace_lines` in config).
+/// A failed hook's output longer than this would be cut in the report, so
+/// it moves to passthrough whole instead.
+const TRACE_CAP: usize = 20;
+
 pub fn parse_text(stdout: &str) -> Result<TestReport> {
+    parse_hooks(stdout).map(|(report, _)| report)
+}
+
+/// The report plus the full output of every failed hook whose output
+/// exceeds `TRACE_CAP` (each block headed by the hook name and id). Such a
+/// hook's Failure keeps its first line as `msg` and a one-line pointer as
+/// its trace, so nothing is cut silently and nothing is shown twice.
+fn parse_hooks(stdout: &str) -> Result<(TestReport, Vec<String>)> {
     let lines: Vec<&str> = stdout.lines().collect();
+    let mut long_outputs: Vec<String> = Vec::new();
     let mut total = 0u64;
     let mut passed = 0u64;
     let mut failed = 0u64;
@@ -129,6 +150,23 @@ pub fn parse_text(stdout: &str) -> Result<TestReport> {
                     i += 1;
                 }
                 let output = non_empty_trimmed(&block);
+                if output.len() > TRACE_CAP + 1 {
+                    let id = if hook_id.is_empty() { &name } else { &hook_id };
+                    long_outputs.push(format!(
+                        "--- {name} ({id}): full output ---\n{}\n",
+                        output.join("\n")
+                    ));
+                    failures.push(Failure {
+                        id: name,
+                        loc: hook_id,
+                        msg: output[0].clone(),
+                        trace: vec![format!(
+                            "{} lines of hook output: full output follows the report",
+                            output.len()
+                        )],
+                    });
+                    continue;
+                }
                 let (msg, trace) = match output.split_first() {
                     Some((first, rest)) => (first.clone(), rest.to_vec()),
                     None if modified_files => {
@@ -151,15 +189,18 @@ pub fn parse_text(stdout: &str) -> Result<TestReport> {
         bail!("no pre-commit status line found — not pre-commit output");
     }
 
-    Ok(TestReport {
-        runner: "pre-commit",
-        total,
-        passed,
-        failed,
-        skipped,
-        duration_s: 0.0,
-        failures,
-    })
+    Ok((
+        TestReport {
+            runner: "pre-commit",
+            total,
+            passed,
+            failed,
+            skipped,
+            duration_s: 0.0,
+            failures,
+        },
+        long_outputs,
+    ))
 }
 
 #[cfg(test)]
@@ -318,6 +359,55 @@ check yaml...............................................................Passed
         assert_eq!(fmt.loc, "ruff-format");
         assert_eq!(fmt.msg, "1 file reformatted, 3 files left unchanged");
         assert!(fmt.trace.is_empty());
+    }
+
+    #[test]
+    fn long_hook_output_is_kept_whole_not_cut_at_the_trace_cap() {
+        let mut stdout = String::from(
+            "Ruff check...............................................................Failed\n- hook id: ruff\n- exit code: 1\n\n",
+        );
+        for n in 1..=40 {
+            stdout.push_str(&format!("src/a.py:{n}:1: F401 unused import m{n}\n"));
+        }
+        stdout.push_str("Found 40 errors.\n");
+        stdout.push_str(
+            "check yaml...............................................................Passed\n",
+        );
+        let cap = Captured {
+            stdout,
+            stderr: String::new(),
+            status: failing_status(),
+        };
+        let out = PreCommit
+            .parse(&cap, &PreCommit.prepare(vec!["pre-commit".into()]))
+            .unwrap();
+        let super::super::AdapterReport::Tests(r) = &out.report else {
+            panic!("expected tests report")
+        };
+        assert_eq!(r.failures[0].msg, "src/a.py:1:1: F401 unused import m1");
+        assert!(r.failures[0].trace.len() <= 1, "{:?}", r.failures[0].trace);
+        let passed = out.passthrough_stdout.expect("long hook output kept");
+        for n in [1, 22, 40] {
+            assert!(
+                passed.contains(&format!("src/a.py:{n}:1: F401 unused import m{n}\n")),
+                "violation {n} missing: {passed}"
+            );
+        }
+        assert!(passed.contains("Found 40 errors."));
+        assert!(!passed.contains("check yaml"));
+    }
+
+    #[test]
+    fn short_hook_output_is_not_passed_through() {
+        let cap = Captured {
+            stdout: TWO_FAILURES.to_string(),
+            stderr: String::new(),
+            status: failing_status(),
+        };
+        let out = PreCommit
+            .parse(&cap, &PreCommit.prepare(vec!["pre-commit".into()]))
+            .unwrap();
+        assert!(out.passthrough_stdout.is_none());
     }
 
     #[test]
