@@ -1,41 +1,60 @@
-# DISABLED ON GITHUB (manually, since 2026-06-15; decision recorded
-# 2026-09-05): Actions runner minutes cost money the maintainer does not
-# want to pay. This file is kept as the reference recipe. The local gate is
-# the real one — run before every commit:
+# The gate for main and every PR. The repo is public, so standard
+# GitHub-hosted runners cost nothing. The same commands are the local gate:
 #   cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 name: ci
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
   pull_request:
+    paths-ignore: ["docs/**", "**.md"]
+
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR supersedes the running one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     strategy:
       matrix:
-        # macOS runners are costly and burn CI credits fast; the Apple
-        # adapters (swift / xcodebuild) are exercised locally on a Mac
-        # instead. Re-add `macos-latest` here if that ever needs CI coverage.
+        # The Apple adapters (swift / xcodebuild) are exercised locally on a
+        # Mac; add `macos-latest` here if they need CI coverage.
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Every real-tool e2e test must run: a missing tool fails the job
+      # instead of skipping (tests/common/mod.rs). Tool versions are pinned
+      # here; upstream-drift.yml runs the same suite on the latest ones.
+      CARTOON_E2E_STRICT: "1"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
           components: clippy, rustfmt
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - run: pip install pytest pytest-xdist
-      - uses: actions/setup-node@v6
+      - run: pip install pytest==9.1.1 pytest-xdist==3.8.0 ruff==0.15.20 mypy==1.20.2
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
-      - run: npm install -g jest
-      # Site version must track Cargo.toml (the in-repo source of truth); a
-      # bump that forgets docs/index.html fails here. Fix: node
-      # scripts/sync-site-version.mjs
-      - run: node scripts/sync-site-version.mjs --check
-      - uses: Swatinem/rust-cache@v2
+      - run: npm install -g jest@30.5.2 vitest@5.0.3 typescript@6.0.2
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24"
+          cache: false
+      # Every manifest version (plugin.json, the site) must track Cargo.toml.
+      - run: node scripts/check-versions.mjs
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - run: node --test packages/npm/cartoon-wrap/test/wrapper.test.mjs
+      - run: sh -n install.sh
