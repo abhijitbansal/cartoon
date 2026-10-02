@@ -156,6 +156,79 @@ fn pipe_filter_followed_by_and_and_keeps_the_trailing_command() {
     assert!(!stdout.contains("pipe_filter_dropped"), "{stdout}");
 }
 
+/// A repo dir (bounded by `.git`) whose `.cartoon.toml` has a typo'd level.
+fn repo_with_bad_level() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    std::fs::write(
+        repo.path().join(".cartoon.toml"),
+        "max_token = 100\n[command.sh]\nlevel = \"aggresive\"\n",
+    )
+    .unwrap();
+    repo
+}
+
+#[test]
+fn invalid_level_in_project_config_warns_and_still_runs_the_command() {
+    let repo = repo_with_bad_level();
+    let out = cartoon()
+        .current_dir(repo.path())
+        .args(["sh", "-c", "echo still-ran; exit 3"])
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (text(&out.stdout), text(&out.stderr));
+    assert_eq!(out.status.code(), Some(3), "exit mirrored: {stderr}");
+    assert!(stdout.contains("still-ran"), "{stdout}");
+    let warning = "invalid level \"aggresive\" for [command.sh]; using safe";
+    assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
+    assert!(stderr.contains(".cartoon.toml"), "{stderr}");
+}
+
+#[test]
+fn invalid_level_in_global_config_warns_and_still_runs_the_command() {
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("cartoon")).unwrap();
+    std::fs::write(
+        config.path().join("cartoon/config.toml"),
+        "[compress]\nlevel = \"turbo\"\n",
+    )
+    .unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let out = cartoon()
+        .current_dir(cwd.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .args(["sh", "-c", "echo global-ok"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("global-ok"));
+    assert!(text(&out.stderr).contains("invalid level \"turbo\" for [compress]; using safe"));
+}
+
+#[test]
+fn invalid_compress_flag_is_still_fatal() {
+    let out = run(&["--compress", "turbo", "sh", "-c", "echo should-not-run"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!text(&out.stdout).contains("should-not-run"));
+}
+
+#[test]
+fn doctor_flags_invalid_levels_and_unknown_keys() {
+    let repo = repo_with_bad_level();
+    let home = tempfile::tempdir().unwrap();
+    let out = cartoon()
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .arg("doctor")
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("aggresive"), "{stdout}");
+    assert!(stdout.contains("max_token"), "{stdout}");
+    assert!(!stdout.contains("status: ok"), "{stdout}");
+}
+
 #[test]
 fn ingest_honors_the_max_tokens_flag() {
     let dir = tempfile::tempdir().unwrap();
