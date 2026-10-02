@@ -20,16 +20,81 @@ pub struct StatRecord {
     pub inner_cmd: Option<String>,
 }
 
+/// Text is tokenized in line-aligned pieces of about this size, so a huge
+/// log never materializes one token vector for the whole thing.
+const TOKENIZE_CHUNK: usize = 1 << 20;
+
 pub fn estimate_tokens(text: &str, tokenizer: &str) -> usize {
+    if text.is_empty() {
+        return 0; // never build the ~170 ms tokenizer for nothing
+    }
     match tokenizer {
         "approx" => text.len() / 4,
         _ => {
             use std::sync::OnceLock;
             static BPE: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
-            BPE.get_or_init(|| tiktoken_rs::o200k_base().expect("bundled tokenizer"))
-                .encode_with_special_tokens(text)
-                .len()
+            let bpe = BPE.get_or_init(|| tiktoken_rs::o200k_base().expect("bundled tokenizer"));
+            let mut total = 0;
+            let mut rest = text;
+            while !rest.is_empty() {
+                let mut end = rest.len().min(TOKENIZE_CHUNK);
+                if end < rest.len() {
+                    // Cut after a newline (tokens never span one in o200k's
+                    // pre-split for ordinary text); fall back to a char boundary.
+                    end = match rest[..end].rfind('\n') {
+                        Some(i) => i + 1,
+                        None => (end..rest.len())
+                            .find(|&i| rest.is_char_boundary(i))
+                            .unwrap_or(rest.len()),
+                    };
+                }
+                total += bpe.encode_with_special_tokens(&rest[..end]).len();
+                rest = &rest[end..];
+            }
+            total
         }
+    }
+}
+
+/// Below this many bytes of total output, token counts use the `len/4`
+/// estimate unless a decision hinges on them: building the o200k tokenizer
+/// costs ~170 ms, which dwarfs `cartoon true` itself.
+pub const SMALL_OUTPUT_BYTES: usize = 4096;
+
+/// Token counting for one run: exact with the configured tokenizer for
+/// real output, the cheap estimate for tiny output (stats stay within a few
+/// tokens there). `exact` forces the configured tokenizer for close calls.
+#[derive(Debug, Clone, Copy)]
+pub struct Counter<'a> {
+    tokenizer: &'a str,
+    cheap: bool,
+}
+
+impl<'a> Counter<'a> {
+    /// `total_bytes`: everything the run captured; `need_exact`: a ceiling
+    /// (`--max-tokens`) or similar depends on precise counts.
+    pub fn new(tokenizer: &'a str, total_bytes: usize, need_exact: bool) -> Self {
+        Counter {
+            tokenizer,
+            cheap: !need_exact && total_bytes < SMALL_OUTPUT_BYTES,
+        }
+    }
+
+    pub fn count(&self, text: &str) -> usize {
+        if self.cheap {
+            text.len().div_ceil(4)
+        } else {
+            estimate_tokens(text, self.tokenizer)
+        }
+    }
+
+    /// Always the configured tokenizer.
+    pub fn exact(&self, text: &str) -> usize {
+        estimate_tokens(text, self.tokenizer)
+    }
+
+    pub fn is_cheap(&self) -> bool {
+        self.cheap
     }
 }
 
@@ -173,31 +238,42 @@ pub fn read_ledger() -> (Vec<StatRecord>, usize) {
 
 /// Read stat records, optionally filtered by a `--since` window.
 pub fn read_records(since: Option<&str>) -> Result<Vec<StatRecord>> {
+    Ok(read_records_counted(since)?.0)
+}
+
+/// `read_records` plus the ledger's malformed-line count, from ONE parse.
+fn read_records_counted(since: Option<&str>) -> Result<(Vec<StatRecord>, usize)> {
     let cutoff: Option<DateTime<Utc>> = match since {
         Some(s) => Some(Utc::now() - parse_since(s)?),
         None => None,
     };
-    let (recs, _) = read_ledger();
-    Ok(recs
-        .into_iter()
+    let (recs, malformed) = read_ledger();
+    Ok((filter_since(recs, cutoff), malformed))
+}
+
+fn filter_since(recs: Vec<StatRecord>, cutoff: Option<DateTime<Utc>>) -> Vec<StatRecord> {
+    recs.into_iter()
         .filter(|r: &StatRecord| match cutoff {
             None => true,
             Some(c) => DateTime::parse_from_rfc3339(&r.ts)
                 .map(|t| t.with_timezone(&Utc) >= c)
                 .unwrap_or(false),
         })
-        .collect())
+        .collect()
 }
 
 /// The `cartoon stats` report — output is itself TOON (dogfooding).
 pub fn report(since: Option<&str>) -> Result<String> {
-    let recs = read_records(since)?;
-    let mut agg = aggregate(&recs);
-    let (_, malformed) = read_ledger();
+    let (recs, malformed) = read_records_counted(since)?;
+    Ok(render_report(&recs, malformed))
+}
+
+fn render_report(recs: &[StatRecord], malformed: usize) -> String {
+    let mut agg = aggregate(recs);
     if malformed > 0 {
         agg["malformed_lines"] = json!(malformed);
     }
-    Ok(crate::toon::encode(&agg))
+    crate::toon::encode(&agg)
 }
 
 #[cfg(test)]
@@ -247,6 +323,38 @@ mod tests {
     fn inner_cmd_is_omitted_from_json_when_absent() {
         let json = serde_json::to_string(&sample_record()).unwrap();
         assert!(!json.contains("inner_cmd"));
+    }
+
+    #[test]
+    fn report_takes_records_and_malformed_count_from_one_parse() {
+        let a = serde_json::to_string(&sample_record()).unwrap();
+        let (recs, malformed) = parse_ledger(&format!("{a}\nnot json\n{a}\n"));
+        let since = filter_since(recs, None);
+        let out = render_report(&since, malformed);
+        assert!(out.contains("calls: 2"), "{out}");
+        assert!(out.contains("malformed_lines: 1"), "{out}");
+    }
+
+    #[test]
+    fn empty_text_costs_zero_tokens_without_a_tokenizer() {
+        assert_eq!(estimate_tokens("", "o200k"), 0);
+    }
+
+    #[test]
+    fn chunked_o200k_count_matches_whole_count_closely() {
+        let text: String = (0..200_000).map(|i| format!("line {i} ok\n")).collect();
+        assert!(text.len() > TOKENIZE_CHUNK);
+        let bpe = tiktoken_rs::o200k_base().unwrap();
+        let whole = bpe.encode_with_special_tokens(&text).len();
+        assert_eq!(estimate_tokens(&text, "o200k"), whole);
+    }
+
+    #[test]
+    fn counter_is_cheap_only_for_small_output_without_a_ceiling() {
+        assert!(Counter::new("o200k", 10, false).is_cheap());
+        assert!(!Counter::new("o200k", 10, true).is_cheap());
+        assert!(!Counter::new("o200k", SMALL_OUTPUT_BYTES, false).is_cheap());
+        assert_eq!(Counter::new("o200k", 10, false).count("abcde"), 2);
     }
 
     #[test]
