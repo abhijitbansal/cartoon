@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/user/proj
+collected 3 items
+
+test_exit.py .
+
+- generated xml file: /tmp/cartoon-junit-x.xml -
+!!!!!!!!! _pytest.outcomes.Exit: database not reachable, aborting run !!!!!!!!!!
+============================== 1 passed in 0.18s ===============================

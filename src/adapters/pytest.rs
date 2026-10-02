@@ -2,6 +2,9 @@ use super::report::{Failure, TestReport};
 use super::{basename, is_python_module, Adapter, ParseOutcome, Prepared};
 use crate::runner::Captured;
 use anyhow::{Context, Result};
+use regex::Regex;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub struct Pytest;
 
@@ -15,7 +18,13 @@ const NON_TEST_FLAGS: &[&str] = &[
     "--co",
     "--fixtures",
     "--markers",
+    "--setup-plan",
+    "--setup-only",
+    "--fixtures-per-test",
 ];
+
+/// Captured stdout/stderr/log lines attached to one failure, at most.
+const MAX_CAPTURED_LINES: usize = 10;
 
 impl Adapter for Pytest {
     fn name(&self) -> &'static str {
@@ -43,6 +52,14 @@ impl Adapter for Pytest {
         is_pytest && !argv.iter().any(|a| NON_TEST_FLAGS.contains(&a.as_str()))
     }
     fn prepare(&self, mut argv: Vec<String>) -> Prepared {
+        if user_junit_path(&argv).is_some() {
+            // The user wants the junit file themselves: parse() reads their
+            // path rather than injecting a second one that would steal it.
+            return Prepared {
+                argv,
+                artifact: None,
+            };
+        }
         let artifact = tempfile::Builder::new()
             .prefix("cartoon-junit-")
             .suffix(".xml")
@@ -51,6 +68,11 @@ impl Adapter for Pytest {
         if let Some(f) = &artifact {
             argv.push(format!("--junit-xml={}", f.path().display()));
             argv.push("--override-ini=junit_family=legacy".into());
+            // Captured stdout/stderr/logging of each test, so a failing
+            // test's prints reach the report (attached to failures only).
+            if !argv.iter().any(|a| a.contains("junit_logging")) {
+                argv.push("--override-ini=junit_logging=all".into());
+            }
         }
         Prepared {
             argv,
@@ -60,9 +82,12 @@ impl Adapter for Pytest {
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let path = prepared
             .artifact_path()
+            .or_else(|| user_junit_path(&prepared.argv))
             .context("pytest adapter has no junit artifact")?;
         let xml = std::fs::read_to_string(&path).context("junit xml missing")?;
-        let report = parse_junit(&xml)?;
+        let mut report = parse_junit(&xml)?;
+        // Session-level outcomes the junit xml never records.
+        add_session_failures(&mut report, &captured.stdout);
         Ok(ParseOutcome {
             report: super::AdapterReport::Tests(report),
             // stdout was pytest's human report — consumed. stderr may hold
@@ -73,6 +98,102 @@ impl Adapter for Pytest {
     }
     fn fast_args(&self) -> Vec<String> {
         vec!["-n".into(), "auto".into()]
+    }
+}
+
+/// A user-supplied `--junit-xml`/`--junitxml` path (`=` or two-token form).
+fn user_junit_path(argv: &[String]) -> Option<PathBuf> {
+    for (i, a) in argv.iter().enumerate() {
+        for flag in ["--junit-xml", "--junitxml"] {
+            if let Some(v) = a.strip_prefix(&format!("{flag}=")) {
+                return Some(PathBuf::from(v));
+            }
+            if a == flag {
+                return argv.get(i + 1).map(PathBuf::from);
+            }
+        }
+    }
+    None
+}
+
+/// Reasons a run failed that live only in pytest's terminal summary:
+/// `pytest.exit()` / KeyboardInterrupt banners (`!!!! … !!!!`) and an unmet
+/// `--cov-fail-under`. Each becomes a failure, so a run that stopped
+/// early or missed coverage never looks like a clean pass.
+pub fn add_session_failures(report: &mut TestReport, stdout: &str) {
+    static BANG: OnceLock<Regex> = OnceLock::new();
+    let bang = BANG.get_or_init(|| Regex::new(r"^!{3,} (.+?) !{3,}$").unwrap());
+    let mut extra = Vec::new();
+    for line in stdout.lines().map(str::trim_end) {
+        if let Some(c) = bang.captures(line) {
+            let reason = c[1].to_string();
+            // Already explained by the failures in the report.
+            let explained = report.failed > 0
+                && ((reason.starts_with("Interrupted: ") && reason.contains("during collection"))
+                    || reason.starts_with("stopping after "));
+            if !explained {
+                extra.push(("(session)", reason));
+            }
+        } else if line.starts_with("FAIL Required test coverage") {
+            extra.push(("(coverage)", line.to_string()));
+        }
+    }
+    for (id, msg) in extra {
+        report.failed += 1;
+        report.failures.push(Failure {
+            id: id.into(),
+            loc: String::new(),
+            msg,
+            trace: Vec::new(),
+        });
+    }
+}
+
+/// Captured output (`<system-out>`/`<system-err>`) of a failed testcase as
+/// `[stdout] …` lines: pytest's `--- Captured Out ---` headers become the
+/// label, blank lines go. Bounded to the last `MAX_CAPTURED_LINES`.
+fn captured_output(case: roxmltree::Node) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for node in case
+        .children()
+        .filter(|c| c.has_tag_name("system-out") || c.has_tag_name("system-err"))
+    {
+        let mut label = if node.has_tag_name("system-out") {
+            "stdout"
+        } else {
+            "stderr"
+        };
+        for line in node.text().unwrap_or("").lines() {
+            let t = line.trim_end();
+            if t.trim().is_empty() {
+                continue;
+            }
+            if let Some(h) = captured_header(t) {
+                label = h;
+                continue;
+            }
+            out.push(format!("[{label}] {t}"));
+        }
+    }
+    if out.len() > MAX_CAPTURED_LINES {
+        let extra = out.len() - MAX_CAPTURED_LINES;
+        out.drain(..extra);
+        out.insert(
+            0,
+            format!("\u{2026} +{extra} captured lines omitted (see raw_log)"),
+        );
+    }
+    out
+}
+
+/// `----- Captured Out -----` → "stdout" (also Err → stderr, Log → log).
+fn captured_header(line: &str) -> Option<&'static str> {
+    let t = line.trim().trim_matches('-').trim();
+    match t {
+        "Captured Out" => Some("stdout"),
+        "Captured Err" => Some("stderr"),
+        "Captured Log" => Some("log"),
+        _ => None,
     }
 }
 
@@ -95,8 +216,12 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
     let (mut total, mut passed, mut failed, mut skipped) = (0u64, 0u64, 0u64, 0u64);
     let mut failures = Vec::new();
     for case in doc.descendants().filter(|n| n.has_tag_name("testcase")) {
+        // `pytest.exit()` mid-run leaves a bare `<testcase time="0.000" />`
+        // for the interrupted test: not a test that passed.
+        let Some(name) = case.attribute("name") else {
+            continue;
+        };
         total += 1;
-        let name = case.attribute("name").unwrap_or("?");
         let file = case.attribute("file").unwrap_or("");
         let line = case
             .attribute("line")
@@ -119,11 +244,15 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
                 .next()
                 .unwrap_or("")
                 .to_string();
-            let trace = super::report::trim_trace(fail.text().unwrap_or(""));
+            let mut trace = super::report::trim_trace(fail.text().unwrap_or(""));
             // "collection failure" hides the real error (ImportError etc.);
-            // promote pytest's `E ...` line — the actual exception — to msg.
+            // promote pytest's `E ...` exception line to msg — for a
+            // SyntaxError that is `E   SyntaxError: …`, not the `E   File
+            // "…", line 2` lines before it.
             if msg.is_empty() || msg == "collection failure" {
-                if let Some(e) = trace.iter().find(|l| l.starts_with("E ")) {
+                let e_lines = || trace.iter().filter(|l| l.starts_with("E "));
+                let is_exc = |l: &&String| is_exception_line(l[1..].trim_start());
+                if let Some(e) = e_lines().find(is_exc).or_else(|| e_lines().next()) {
                     msg = e[1..].trim_start().to_string();
                 }
             }
@@ -140,6 +269,7 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
                 Some(l) if !file.is_empty() => format!("{file}:{l}"),
                 _ => file.to_string(),
             };
+            trace.extend(captured_output(case));
             failures.push(Failure {
                 id,
                 loc,
@@ -166,6 +296,15 @@ pub fn parse_junit_named(xml: &str, runner: &'static str) -> Result<TestReport> 
     })
 }
 
+/// `SyntaxError: …`, `ModuleNotFoundError: …`, `pkg.CustomException: …`.
+fn is_exception_line(t: &str) -> bool {
+    static EXC: OnceLock<Regex> = OnceLock::new();
+    EXC.get_or_init(|| {
+        Regex::new(r"^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Failure|Exit|Interrupt)\b").unwrap()
+    })
+    .is_match(t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,7 +325,153 @@ mod tests {
         assert_eq!(p.argv[1], "-q");
         assert!(p.argv[2].starts_with("--junit-xml="));
         assert_eq!(p.argv[3], "--override-ini=junit_family=legacy");
+        assert_eq!(p.argv[4], "--override-ini=junit_logging=all");
         assert!(p.artifact.is_some());
+    }
+
+    #[test]
+    fn prepare_keeps_a_user_junit_logging_choice() {
+        let p = Pytest.prepare(argv(&["pytest", "-o", "junit_logging=system-err"]));
+        assert_eq!(
+            p.argv
+                .iter()
+                .filter(|a| a.contains("junit_logging"))
+                .count(),
+            1,
+            "{:?}",
+            p.argv
+        );
+    }
+
+    #[test]
+    fn user_junit_xml_path_is_reused_not_stolen() {
+        for a in [
+            argv(&["pytest", "--junit-xml=out/r.xml"]),
+            argv(&["pytest", "--junitxml", "out/r.xml", "-q"]),
+        ] {
+            let p = Pytest.prepare(a.clone());
+            assert_eq!(p.argv, a, "nothing injected");
+            assert!(p.artifact.is_none());
+            assert_eq!(user_junit_path(&p.argv), Some(PathBuf::from("out/r.xml")));
+        }
+        assert_eq!(user_junit_path(&argv(&["pytest", "-q"])), None);
+    }
+
+    #[test]
+    fn parse_reads_the_user_junit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.xml");
+        std::fs::copy(
+            format!(
+                "{}/tests/fixtures/pytest/mixed.xml",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            &path,
+        )
+        .unwrap();
+        let prepared = Pytest.prepare(vec![
+            "pytest".into(),
+            format!("--junitxml={}", path.display()),
+        ]);
+        let out = Pytest.parse(&captured("", false), &prepared).unwrap();
+        match out.report {
+            crate::adapters::AdapterReport::Tests(r) => assert_eq!(r.failed, 1),
+            _ => panic!("expected a test report"),
+        }
+    }
+
+    fn captured(stdout: &str, ok: bool) -> Captured {
+        let status = std::process::Command::new(if ok { "true" } else { "false" })
+            .status()
+            .unwrap();
+        Captured {
+            stdout: stdout.into(),
+            stderr: String::new(),
+            status,
+        }
+    }
+
+    fn fixture_text(name: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/pytest/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn pytest_exit_mid_run_is_a_failure_not_a_pass() {
+        // Real pytest 9: `pytest.exit()` in the second of three tests.
+        let mut r = parse_fixture("session-exit.xml");
+        // The bare <testcase/> pytest leaves for the aborted test is skipped.
+        assert_eq!((r.total, r.passed, r.failed), (1, 1, 0));
+        add_session_failures(&mut r, &fixture_text("session-exit.stdout.txt"));
+        assert_eq!(r.failed, 1);
+        assert_eq!(
+            r.failures[0].msg,
+            "_pytest.outcomes.Exit: database not reachable, aborting run"
+        );
+    }
+
+    #[test]
+    fn unmet_cov_fail_under_is_a_failure() {
+        let mut r = parse_fixture("cov-fail-under.xml");
+        add_session_failures(&mut r, &fixture_text("cov-fail-under.stdout.txt"));
+        assert_eq!((r.passed, r.failed), (1, 1));
+        assert_eq!(r.failures[0].id, "(coverage)");
+        assert_eq!(
+            r.failures[0].msg,
+            "FAIL Required test coverage of 95% not reached. Total coverage: 50.00%"
+        );
+    }
+
+    #[test]
+    fn collection_interrupt_banner_is_not_repeated() {
+        let mut r = parse_fixture("collect-syntax-error.xml");
+        add_session_failures(&mut r, &fixture_text("collect-syntax-error.stdout.txt"));
+        assert_eq!(r.failed, 1, "{:?}", r.failures);
+    }
+
+    #[test]
+    fn collection_syntax_error_msg_is_the_syntax_error_line() {
+        let r = parse_fixture("collect-syntax-error.xml");
+        let f = &r.failures[0];
+        assert_eq!(f.msg, "SyntaxError: '(' was never closed");
+        assert!(
+            !f.trace.iter().any(|l| l.contains("<frozen")),
+            "{:?}",
+            f.trace
+        );
+        assert!(!f.trace.iter().any(|l| l == "???"), "{:?}", f.trace);
+    }
+
+    #[test]
+    fn failing_test_carries_its_captured_output_passing_one_does_not() {
+        let r = parse_fixture("captured-output.xml");
+        assert_eq!(r.failures.len(), 1);
+        let t = &r.failures[0].trace;
+        assert!(
+            t.contains(&"[stdout] computed total = 41".to_string()),
+            "{t:?}"
+        );
+        assert!(t.contains(&"[stderr] warning text".to_string()), "{t:?}");
+        assert!(!t.iter().any(|l| l.contains("Captured")), "{t:?}");
+    }
+
+    #[test]
+    fn captured_output_is_bounded() {
+        let body: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let xml = format!(
+            r#"<testsuite><testcase name="t" file="t.py" line="1"><failure message="boom">E boom</failure><system-out>{body}</system-out></testcase></testsuite>"#
+        );
+        let r = parse_junit(&xml).unwrap();
+        let t = &r.failures[0].trace;
+        assert!(t.contains(&"[stdout] line 29".to_string()), "{t:?}");
+        assert!(!t.contains(&"[stdout] line 0".to_string()), "{t:?}");
+        assert!(
+            t.iter().any(|l| l.contains("+20 captured lines omitted")),
+            "{t:?}"
+        );
     }
 
     #[test]

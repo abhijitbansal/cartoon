@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.184" timestamp="2026-10-02T03:20:33.557736+00:00" hostname="vm"><testcase classname="test_exit" name="test_a" file="test_exit.py" line="3" time="0.000"><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase time="0.000" /></testsuite></testsuites>
