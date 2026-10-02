@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn empty_list_renders_zero() {
-        assert_eq!(render_list(&[]), "runs[0]:");
+        assert_eq!(render_list(&[]), "runs: []");
     }
 
     #[test]
