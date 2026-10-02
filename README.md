@@ -348,7 +348,11 @@ aggressive tier, signal lines asserted intact):
 - If parsing fails, the original output passes through untouched (one
   warning on stderr). The safe tier preserves all non-redundant text;
   lossy tiers are opt-in and always leave a `raw_log` pointer to the
-  unmodified output.
+  unmodified output. One exception, at any tier: output larger than 4 MiB
+  (useless to an agent whole) is cut to its first 512 KiB, every error line
+  from the middle (up to 200), and its last 1 MiB, behind a marker stating
+  exactly what was omitted; the full text is in `raw_log`, and if the
+  archive can't be written the original passes through instead.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
   byte-identically. When an adapter injects a machine-readable flag
@@ -462,7 +466,7 @@ decision, not cartoon's.
 
 | Adapter | Trigger | Source |
 |---|---|---|
-| pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest` | injected `--junit-xml` |
+| pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest`, `poetry`/`pdm`/`hatch`/`pipenv`/`rye run pytest` | injected `--junit-xml` |
 | unittest | `python -m unittest`, `uv run [python] -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
 | vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |

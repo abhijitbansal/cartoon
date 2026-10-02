@@ -290,6 +290,14 @@ pub fn strip_uv_run(argv: &[String]) -> &[String] {
         "uvx" => &argv[1..],
         "uv" if arg(1) == Some("run") => &argv[2..],
         "uv" if arg(1) == Some("tool") && arg(2) == Some("run") => &argv[3..],
+        // Other Python project runners forward argv the same way. Their own
+        // options are not modelled, so only the bare `<tool> run <cmd>` form
+        // is unwrapped; anything else is left alone (fail open).
+        "poetry" | "pdm" | "hatch" | "pipenv" | "rye"
+            if arg(1) == Some("run") && arg(2).is_some_and(|a| !a.starts_with('-')) =>
+        {
+            return &argv[2..];
+        }
         _ => return argv,
     };
     skip_uv_opts(rest)
@@ -343,6 +351,22 @@ mod tests {
             strip_uv_run(&argv(&["uv", "run", "python", "-m", "pytest"])),
             &argv(&["python", "-m", "pytest"])[..]
         );
+    }
+
+    #[test]
+    fn strip_uv_run_unwraps_other_python_project_runners() {
+        for tool in ["poetry", "pdm", "hatch", "pipenv", "rye"] {
+            let a = argv(&[tool, "run", "pytest", "-q"]);
+            assert_eq!(strip_uv_run(&a), &a[2..], "{tool}");
+            assert!(
+                find_adapter(&a).is_some_and(|ad| ad.name() == "pytest"),
+                "{tool}"
+            );
+            // Runner-level options are not modelled: leave the argv alone.
+            let opt = argv(&[tool, "run", "--env", "x", "pytest"]);
+            assert_eq!(strip_uv_run(&opt), &opt[..], "{tool}");
+        }
+        assert_eq!(strip_uv_run(&argv(&["poetry", "install"])).len(), 2);
     }
 
     #[test]
