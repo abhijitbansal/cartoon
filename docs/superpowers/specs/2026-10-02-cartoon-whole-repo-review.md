@@ -134,3 +134,55 @@ Vendor the upstream conformance fixtures.
 - **Exit codes:** mirrored for normal exits, >255, death by signal (128+N) and not-found (127). Args after the command reach the child untouched. No pipe deadlock. Children get the default SIGPIPE disposition.
 - **Adapter parse-failure fallback:** works for missing JUnit files, non-JSON output, `--help` and `--version`.
 - **Guards:** exact-dup counts are disclosed, and savings were never negative in any test.
+
+## 10. Status after the fix pass (same branch)
+
+Everything in §1–§6 is fixed on `claude/fervent-faraday-uzqqid`, with a regression test per item. Gate: fmt and clippy are clean; `cargo test` passes 736 tests with 0 failures. The original reproductions were re-run against the release build. Measured results:
+
+- **Startup:** `cartoon true` went from 172–215 ms to about 5 ms.
+- **Memory:** `cartoon seq 1 5000000` went from 498 MB / 7.6 s to 65 MB / 0.6 s. Above 4 MiB, output is windowed; see the README guarantees.
+- **Benchmarks** (`benchmarks/run.py`, 600 tests with 20 failing):
+
+  | Runner | Verbose baseline | Quiet baseline |
+  |---|---|---|
+  | pytest | 82.7% | 0.2% |
+  | unittest | 89.2% | 14.8% |
+  | cargo test | 81.1% (was 43.3%) | 72.2% (was 16.9%) |
+  | go test | 93.3% | 0.2% (was −78%) |
+
+  No row is negative.
+- **Hook:** none of the §3.1 bypasses get `allow` any more; benign forms still rewrite.
+
+Added beyond the review list:
+- Adapters can provide a native-output baseline (`Adapter::native_stdout`), so injected `-json` / `--junit-xml` never makes cartoon cost more than the bare command.
+- `poetry`/`pdm`/`hatch`/`pipenv`/`rye run` wrappers are detected.
+
+Behaviour changes to note in the changelog:
+- **Hook:**
+  - `make NAME=value`, non-`run` pre-commit subcommands, `..` or out-of-project paths, and `;`/`|`/`||` compounds now go to the normal prompt instead of being auto-approved.
+  - `PYTEST_ADDOPTS` is no longer a safe prefix.
+- **TOON output follows spec 4.1:**
+  - an empty array prints as `key: []`;
+  - uniform objects print as keyed tables;
+  - strings containing brackets are quoted.
+- **Safe tier:** plain `Downloading 10%` lines without `\r` are no longer collapsed.
+- **Unknown cartoon flags** are an error (exit 2), not "command not found".
+- **npm platform packages** moved to the `@cartoon-wrap/` scope.
+
+Still open:
+- **Maintainer actions:**
+  - re-enable the `ci` workflow in the Actions UI;
+  - create the `@cartoon-wrap` npm org, bootstrap-publish the scoped packages and configure trusted publishing;
+  - cut a release (the glibc/musl and npm fixes only reach users then);
+  - bump the version (still 0.6.0; given the behaviour changes, 0.7.0).
+- **Partial:**
+  - TOON integers beyond u64 are emitted as their f64 approximation, because serde_json's `arbitrary_precision` feature isn't enabled.
+  - Transformed (non-passthrough) output is still written stdout first, then stderr; arrival order is preserved only in `--raw` and passthrough.
+- **Product items from §8, not started:**
+  - `cartoon last`/`diff`;
+  - `cartoon mcp`;
+  - gradle/maven surefire auto-harvest, `dotnet test`, `golangci-lint`;
+  - `npm run test` resolution;
+  - a Homebrew tap;
+  - a SessionStart "binary missing" plugin hook;
+  - an agent-task (fix-rate) benchmark.
