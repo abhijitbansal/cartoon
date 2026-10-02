@@ -128,14 +128,20 @@ pub fn record_counts(
     let Some(path) = crate::paths::stats_file() else {
         return;
     };
+    // The ledger records every command line run under cartoon: private to
+    // the user, like the raw-log archive (dir 0700, file 0600).
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let mut dir = std::fs::DirBuilder::new();
+        dir.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+        let _ = dir.create(parent);
     }
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let Ok(mut f) = opts.open(&path) else {
         return;
     };
     // One write_all of record+newline: a single O_APPEND write of a small

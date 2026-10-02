@@ -651,6 +651,11 @@ fn run_with_adapter(
                     adapter.name()
                 );
             }
+            if let Some(f) = &opts.dropped_filter {
+                // The report would have replaced the filter; the generic
+                // output does not, so say it was not applied.
+                eprintln!("cartoon: pipe filter `{f}` was not applied (adapter output unparsed)");
+            }
             Ok(emit_generic(
                 argv,
                 &run,

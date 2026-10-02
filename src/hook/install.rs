@@ -445,23 +445,10 @@ fn read_settings(path: &Path) -> Result<Option<String>> {
 /// symlinked settings file (dotfile managers) is updated at its target
 /// instead of being replaced by a regular file.
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
-    use std::io::Write;
-    let target = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
-        _ => path.to_path_buf(),
-    };
-    let dir = match target.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    std::fs::create_dir_all(&dir)?;
-    let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-    tmp.write_all(contents.as_bytes())?;
-    tmp.as_file().sync_all()?;
-    if let Ok(meta) = std::fs::metadata(&target) {
-        tmp.as_file().set_permissions(meta.permissions())?;
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
     }
-    tmp.persist(&target).map_err(|e| e.error)?;
+    crate::paths::write_atomic(path, contents.as_bytes())?;
     Ok(())
 }
 

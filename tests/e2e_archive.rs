@@ -179,6 +179,8 @@ fn archived_runs_are_readable_only_by_the_user() {
             assert_eq!(mode(&f.path()), 0o600, "{:?}", f.path());
         }
     }
+    // The stats ledger records every command line too.
+    assert_eq!(mode(&tmp.path().join("cartoon/stats.jsonl")), 0o600);
 }
 
 #[test]
