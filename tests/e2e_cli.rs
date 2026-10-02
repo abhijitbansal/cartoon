@@ -230,6 +230,50 @@ fn doctor_flags_invalid_levels_and_unknown_keys() {
 }
 
 #[test]
+fn doctor_sees_the_plugin_hook_and_representative_adapters() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+    std::fs::write(
+        home.path().join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"cartoon@cartoon": true}}"#,
+    )
+    .unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let out = cartoon()
+        .current_dir(cwd.path())
+        .env("HOME", home.path())
+        .arg("doctor")
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.contains("plugin_hook:\n  installed: true"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("→ cartoon hook install"), "{stdout}");
+    let gaps = stdout
+        .lines()
+        .find(|l| l.starts_with("allowlist_without_adapter"))
+        .unwrap();
+    assert!(!gaps.contains("vitest"), "{gaps}");
+    assert!(!gaps.contains("cargo nextest"), "{gaps}");
+    assert!(gaps.contains("make"), "{gaps}");
+
+    // Without the plugin, doctor still points at hook install.
+    let bare_home = tempfile::tempdir().unwrap();
+    let out = cartoon()
+        .current_dir(cwd.path())
+        .env("HOME", bare_home.path())
+        .arg("doctor")
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
+    assert!(stdout.contains("installed: false"), "{stdout}");
+    assert!(stdout.contains("→ cartoon hook install"), "{stdout}");
+}
+
+#[test]
 fn ingest_honors_the_max_tokens_flag() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("big.log");
