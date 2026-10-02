@@ -1,3 +1,4 @@
+mod common;
 use assert_cmd::Command;
 use predicates::str::contains;
 
@@ -115,12 +116,7 @@ fn logs_unknown_id_exits_2() {
 
 #[test]
 fn e2e_pytest_footer_points_at_original_report() {
-    let have = std::process::Command::new("pytest")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !have {
+    if !common::have("pytest") {
         eprintln!("SKIP: pytest not installed");
         return;
     }

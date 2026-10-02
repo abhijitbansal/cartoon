@@ -6,6 +6,10 @@
 //! It builds a throwaway SwiftPM package with one failing test, drives
 //! `xcodebuild test` through the cartoon binary, and asserts the TOON summary
 //! (not the raw xcodebuild log) is emitted.
+//!
+//! `CARTOON_E2E_STRICT=1` deliberately does not cover it: xcodebuild is
+//! Apple-only, so tests/common/mod.rs exempts it and the strict Linux CI job
+//! still passes.
 use std::fs;
 use std::process::Command;
 
