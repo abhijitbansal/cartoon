@@ -260,6 +260,8 @@ const NOISE: &[&str] = &[
     "node:internal",
     // CPython import machinery: `<frozen importlib._bootstrap>:1204: in …`
     "<frozen ",
+    // V8 frames with no source: `at new Promise (<anonymous>)`
+    "(<anonymous>)",
 ];
 
 /// pytest "short" trace style frame header: `path/file.py:126: in import_module`

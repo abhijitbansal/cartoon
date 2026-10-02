@@ -1,0 +1,20 @@
+
+ RUN  v5.0.3 /home/user/proj
+
+ ❯ src/missing.test.js (0 test)
+stdout | src/ok.test.js > fails
+debug value 42
+
+ ❯ src/ok.test.js (2 tests | 1 failed) 15ms
+   ✓ passes 2ms
+   × fails 10ms
+ ✓ src/unhandled.test.js (2 tests) 55ms
+ ❯ src/syntax.test.js (0 test)
+
+ Test Files  3 failed | 1 passed (4)
+      Tests  1 failed | 3 passed (4)
+     Errors  1 error
+   Start at  03:08:54
+   Duration  393ms (tests 45%, transform 24%, import 19%, worker 12%)
+
+JSON report written to /tmp/cartoon-vitest-x.json

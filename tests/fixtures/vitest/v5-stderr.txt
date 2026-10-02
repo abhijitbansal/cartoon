@@ -1,0 +1,81 @@
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/missing.test.js [ src/missing.test.js ]
+Error: Cannot find module './does-not-exist' imported from /home/user/proj/src/missing.test.js
+ ❯ src/missing.test.js:2:1
+      1| import { test, expect } from 'vitest';
+      2| import x from './does-not-exist';
+       | ^
+      3| test('never runs', () => { expect(x).toBe(1); });
+      4|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/syntax.test.js [ src/syntax.test.js ]
+RolldownError: Parse failure: Parse failed with 1 error:
+Expected `,` or `)` but found `}`
+1: test('broken', () => { expect(1).toBe(1)
+2: }};
+    ^
+1: test('broken', () => { expect(1).toBe(1)
+       ^
+2: }};
+At file: /src/syntax.test.js:2:1
+  File: /src/syntax.test.js:2:1
+  1  |  test('broken', () => { expect(1).toBe(1)
+  2  |  }};
+     |   ^
+  3  |  
+ ❯ error node_modules/rolldown/dist/shared/logs-D6uA606S.mjs:166:24
+ ❯ normalizeParseError node_modules/rolldown/dist/parse-ast-index.mjs:25:9
+ ❯ wrap node_modules/rolldown/dist/parse-ast-index.mjs:5:39
+ ❯ parseAstAsync node_modules/rolldown/dist/parse-ast-index.mjs:54:9
+ ❯ ssrTransformScript node_modules/vite/dist/node/chunks/node.js:16361:9
+ ❯ loadAndTransform node_modules/vite/dist/node/chunks/node.js:20022:64
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/ok.test.js > fails
+AssertionError: expected 2 to be 3 // Object.is equality
+
+- Expected
++ Received
+
+- 3
++ 2
+
+ ❯ src/ok.test.js:3:69
+      1| import { test, expect } from 'vitest';
+      2| test('passes', () => { expect(1).toBe(1); });
+      3| test('fails', () => { console.log('debug value', 42); expect(1 + 1).to…
+       |                                                                     ^
+      4|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯⎯ Uncaught Exception ⎯⎯⎯⎯⎯
+Error: late boom
+ ❯ Timeout._onTimeout src/unhandled.test.js:2:48
+      1| import { test, expect } from 'vitest';
+      2| test('leaks', () => { setTimeout(() => { throw new Error('late boom');…
+       |                                                ^
+      3| test('waits', async () => { await new Promise(r => setTimeout(r, 50));…
+      4|
+ ❯ listOnTimeout node:internal/timers:588:17
+ ❯ processTimers node:internal/timers:523:7
+
+This error originated in "src/unhandled.test.js" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The last test to run before this error was "waits". This means either:
+- the error was thrown while Vitest was running this test, or
+- the error was thrown after the test completed, and this was the most recent test at that point.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
