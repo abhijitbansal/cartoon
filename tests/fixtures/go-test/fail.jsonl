@@ -1,0 +1,13 @@
+{"Time":"2026-10-02T03:06:47.475711686Z","Action":"start","Package":"example.com/fx/fail"}
+{"Time":"2026-10-02T03:06:47.485470302Z","Action":"run","Package":"example.com/fx/fail","Test":"TestOK"}
+{"Time":"2026-10-02T03:06:47.485509746Z","Action":"output","Package":"example.com/fx/fail","Test":"TestOK","Output":"=== RUN   TestOK\n"}
+{"Time":"2026-10-02T03:06:47.485754101Z","Action":"output","Package":"example.com/fx/fail","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}
+{"Time":"2026-10-02T03:06:47.4857611Z","Action":"pass","Package":"example.com/fx/fail","Test":"TestOK","Elapsed":0}
+{"Time":"2026-10-02T03:06:47.485810091Z","Action":"run","Package":"example.com/fx/fail","Test":"TestBad"}
+{"Time":"2026-10-02T03:06:47.485812641Z","Action":"output","Package":"example.com/fx/fail","Test":"TestBad","Output":"=== RUN   TestBad\n"}
+{"Time":"2026-10-02T03:06:47.485816713Z","Action":"output","Package":"example.com/fx/fail","Test":"TestBad","Output":"    fail_test.go:10: Add(1,1) = 2, want 3\n"}
+{"Time":"2026-10-02T03:06:47.485829938Z","Action":"output","Package":"example.com/fx/fail","Test":"TestBad","Output":"--- FAIL: TestBad (0.00s)\n"}
+{"Time":"2026-10-02T03:06:47.485832193Z","Action":"fail","Package":"example.com/fx/fail","Test":"TestBad","Elapsed":0}
+{"Time":"2026-10-02T03:06:47.485834328Z","Action":"output","Package":"example.com/fx/fail","Output":"FAIL\n"}
+{"Time":"2026-10-02T03:06:47.486121014Z","Action":"output","Package":"example.com/fx/fail","Output":"FAIL\texample.com/fx/fail\t0.010s\n"}
+{"Time":"2026-10-02T03:06:47.486133888Z","Action":"fail","Package":"example.com/fx/fail","Elapsed":0.011}

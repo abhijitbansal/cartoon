@@ -1,0 +1,25 @@
+{"Time":"2026-10-02T03:06:48.832681897Z","Action":"start","Package":"example.com/fx/panicp"}
+{"Time":"2026-10-02T03:06:48.840676552Z","Action":"run","Package":"example.com/fx/panicp","Test":"TestPanics"}
+{"Time":"2026-10-02T03:06:48.840735815Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"=== RUN   TestPanics\n"}
+{"Time":"2026-10-02T03:06:48.840780655Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"--- FAIL: TestPanics (0.00s)\n"}
+{"Time":"2026-10-02T03:06:48.840783212Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"panic: runtime error: index out of range [5] with length 0 [recovered]\n"}
+{"Time":"2026-10-02T03:06:48.840788896Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\tpanic: runtime error: index out of range [5] with length 0\n"}
+{"Time":"2026-10-02T03:06:48.840791805Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\n"}
+{"Time":"2026-10-02T03:06:48.840794332Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"goroutine 6 [running]:\n"}
+{"Time":"2026-10-02T03:06:48.840796095Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"testing.tRunner.func1.2({0x567de0, 0xc00001c228})\n"}
+{"Time":"2026-10-02T03:06:48.840800407Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1734 +0x21c\n"}
+{"Time":"2026-10-02T03:06:48.840802394Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"testing.tRunner.func1()\n"}
+{"Time":"2026-10-02T03:06:48.840804034Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1737 +0x35e\n"}
+{"Time":"2026-10-02T03:06:48.840805907Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"panic({0x567de0?, 0xc00001c228?})\n"}
+{"Time":"2026-10-02T03:06:48.840809547Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/usr/local/go1.24.7/src/runtime/panic.go:792 +0x132\n"}
+{"Time":"2026-10-02T03:06:48.840810989Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"example.com/fx/panicp.helper(...)\n"}
+{"Time":"2026-10-02T03:06:48.840812815Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/home/dev/fx/panicp/p_test.go:7\n"}
+{"Time":"2026-10-02T03:06:48.840816227Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"example.com/fx/panicp.TestPanics(0xc000003880?)\n"}
+{"Time":"2026-10-02T03:06:48.840818279Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/home/dev/fx/panicp/p_test.go:11 +0x37\n"}
+{"Time":"2026-10-02T03:06:48.8408226Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"testing.tRunner(0xc000003880, 0x584388)\n"}
+{"Time":"2026-10-02T03:06:48.840824341Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1792 +0xf4\n"}
+{"Time":"2026-10-02T03:06:48.84082575Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"created by testing.(*T).Run in goroutine 1\n"}
+{"Time":"2026-10-02T03:06:48.840827327Z","Action":"output","Package":"example.com/fx/panicp","Test":"TestPanics","Output":"\t/usr/local/go1.24.7/src/testing/testing.go:1851 +0x413\n"}
+{"Time":"2026-10-02T03:06:48.840875631Z","Action":"fail","Package":"example.com/fx/panicp","Test":"TestPanics","Elapsed":0}
+{"Time":"2026-10-02T03:06:48.840878793Z","Action":"output","Package":"example.com/fx/panicp","Output":"FAIL\texample.com/fx/panicp\t0.008s\n"}
+{"Time":"2026-10-02T03:06:48.840885348Z","Action":"fail","Package":"example.com/fx/panicp","Elapsed":0.008}

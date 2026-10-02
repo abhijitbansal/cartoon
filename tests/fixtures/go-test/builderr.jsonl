@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/fx/builderr [example.com/fx/builderr.test]","Action":"build-output","Output":"# example.com/fx/builderr [example.com/fx/builderr.test]\n"}
+{"ImportPath":"example.com/fx/builderr [example.com/fx/builderr.test]","Action":"build-output","Output":"builderr/b.go:3:23: undefined: x\n"}
+{"ImportPath":"example.com/fx/builderr [example.com/fx/builderr.test]","Action":"build-fail"}
+{"Time":"2026-10-02T03:06:48.349050506Z","Action":"start","Package":"example.com/fx/builderr"}
+{"Time":"2026-10-02T03:06:48.34910197Z","Action":"output","Package":"example.com/fx/builderr","Output":"FAIL\texample.com/fx/builderr [build failed]\n"}
+{"Time":"2026-10-02T03:06:48.349108975Z","Action":"fail","Package":"example.com/fx/builderr","Elapsed":0,"FailedBuild":"example.com/fx/builderr [example.com/fx/builderr.test]"}
