@@ -69,15 +69,39 @@ fn diagnostic_regex() -> &'static Regex {
     })
 }
 
+/// A diagnostic with no source position: `error TS5083: Cannot read file
+/// '…/tsconfig.base.json'.` (config and option errors).
+fn global_diagnostic_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(?P<sev>error|warning) (?P<code>TS\d+): (?P<msg>.*)$").unwrap())
+}
+
 pub fn parse_stdout(stdout: &str) -> Value {
     let mut errors: u64 = 0;
     let mut warnings: u64 = 0;
     let mut diagnostics: Vec<Value> = Vec::new();
 
     for line in stdout.lines() {
-        // "Found N errors..." summary lines don't match the location pattern,
-        // so they are naturally excluded from the body.
-        let Some(caps) = diagnostic_regex().captures(line) else {
+        // tsc elaborates a diagnostic on the indented lines after it
+        // ("The types of 'a.b' are incompatible…" / "Type 'string' is not
+        // assignable to type 'number'."): the actual mismatch, so it is
+        // appended to the message rather than dropped.
+        if line.starts_with(' ') && !line.trim().is_empty() {
+            if let Some(Value::String(msg)) = diagnostics.last_mut().and_then(|d| d.get_mut("msg"))
+            {
+                msg.push(' ');
+                msg.push_str(line.trim());
+            }
+            continue;
+        }
+        // "Found N errors..." summary lines match neither pattern, so they
+        // are naturally excluded from the body.
+        let (loc, caps) = if let Some(caps) = diagnostic_regex().captures(line) {
+            let loc = format!("{}:{}:{}", &caps["file"], &caps["line"], &caps["col"]);
+            (loc, caps)
+        } else if let Some(caps) = global_diagnostic_regex().captures(line) {
+            (String::new(), caps)
+        } else {
             continue;
         };
         let severity = &caps["sev"];
@@ -87,7 +111,7 @@ pub fn parse_stdout(stdout: &str) -> Value {
             warnings += 1;
         }
         diagnostics.push(json!({
-            "loc": format!("{}:{}:{}", &caps["file"], &caps["line"], &caps["col"]),
+            "loc": loc,
             "severity": severity,
             "rule": &caps["code"],
             "msg": &caps["msg"],
@@ -173,6 +197,33 @@ Found 2 errors.
         assert!(!diags
             .iter()
             .any(|d| d["msg"].as_str().unwrap().contains("Found 2 errors")));
+    }
+
+    #[test]
+    fn elaboration_lines_and_location_less_errors_are_kept() {
+        // Real tsc 6.0 output (--pretty false).
+        let out = concat!(
+            "error TS5083: Cannot read file '/home/user/proj/missing-base.json'.\n",
+            "src/app.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+            "src/elab.ts(3,14): error TS2322: Type '{ a: { b: string; }; }' is not assignable to type 'A'.\n",
+            "  The types of 'a.b' are incompatible between these types.\n",
+            "    Type 'string' is not assignable to type 'number'.\n",
+        );
+        let v = parse_stdout(out);
+        assert_eq!(v["summary"]["errors"], 3);
+        let diags = v["diagnostics"].as_array().unwrap();
+        assert_eq!(diags[0]["loc"], "");
+        assert_eq!(diags[0]["rule"], "TS5083");
+        assert_eq!(
+            diags[2]["msg"],
+            "Type '{ a: { b: string; }; }' is not assignable to type 'A'. \
+The types of 'a.b' are incompatible between these types. \
+Type 'string' is not assignable to type 'number'."
+        );
+        assert_eq!(
+            diags[1]["msg"],
+            "Type 'string' is not assignable to type 'number'."
+        );
     }
 
     #[test]
