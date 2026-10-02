@@ -75,6 +75,28 @@ fn traceback_span(block: &str, exception_idx: Option<usize>) -> &str {
     &block[start..end]
 }
 
+/// Lines after the exception line in a failure block: the `- `/`+ ` lines
+/// of unittest's diff when present (the `?` hint lines and the "First list
+/// contains…" prose are dropped), else the last few lines of explanation.
+/// Bounded either way: the full detail stays in raw_log.
+fn diff_tail(block: &str, exception_idx: usize) -> Vec<String> {
+    const MAX: usize = 6;
+    let lines: Vec<&str> = block
+        .lines()
+        .skip(exception_idx + 1)
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty() && !l.chars().all(|c| c == '-'))
+        .collect();
+    let diff: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| l.starts_with("- ") || l.starts_with("+ "))
+        .collect();
+    let picked = if diff.is_empty() { lines } else { diff };
+    let skip = picked.len().saturating_sub(MAX);
+    picked[skip..].iter().map(|l| l.to_string()).collect()
+}
+
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).unwrap())
 }
@@ -97,7 +119,7 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
 
     // tail counts: "FAILED (failures=1, errors=2, skipped=1)" or "OK (skipped=1)"
     let tail = re(&TAIL, r"(?m)^(OK|FAILED)\s*(?:\(([^)]*)\))?");
-    let (mut n_fail, mut n_err, mut n_skip) = (0u64, 0u64, 0u64);
+    let (mut n_fail, mut n_err, mut n_skip, mut n_unexpected) = (0u64, 0u64, 0u64, 0u64);
     let tail_str = &stderr[caps.get(0).map(|m| m.end()).unwrap_or(0)..];
     if let Some(t) = tail.captures(tail_str) {
         if let Some(details) = t.get(2) {
@@ -109,15 +131,21 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
                     n_err = v.parse().unwrap_or(0);
                 } else if let Some(v) = part.strip_prefix("skipped=") {
                     n_skip = v.parse().unwrap_or(0);
+                } else if let Some(v) = part.strip_prefix("unexpected successes=") {
+                    // An @expectedFailure test that passed fails the run.
+                    n_unexpected = v.parse().unwrap_or(0);
                 }
             }
         }
     }
-    let failed = n_fail + n_err;
+    let failed = n_fail + n_err + n_unexpected;
     let skipped = n_skip;
     let passed = total.saturating_sub(failed + skipped);
 
-    let header = re(&HEADER, r"(?m)^(FAIL|ERROR): (\S+) \(([^)]+)\)");
+    let header = re(
+        &HEADER,
+        r"(?m)^(FAIL|ERROR|UNEXPECTED SUCCESS): (\S+) \(([^)]+)\)",
+    );
     let file_line = re(&FILE_LINE, r#"File "([^"]+)", line (\d+)"#);
     let mut failures = Vec::new();
     for block in body.split(SEPARATOR) {
@@ -125,6 +153,16 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
             continue;
         };
         let id = h[3].to_string();
+        if &h[1] == "UNEXPECTED SUCCESS" {
+            // Python 3.11+ lists these as blocks with no traceback.
+            failures.push(Failure {
+                id,
+                loc: String::new(),
+                msg: "unexpected success (test marked @expectedFailure passed)".into(),
+                trace: Vec::new(),
+            });
+            continue;
+        }
         let loc = file_line
             .captures_iter(block)
             .filter(|c| !c[1].contains("site-packages") && !c[1].contains("/unittest/"))
@@ -132,10 +170,9 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
             .map(|c| format!("{}:{}", &c[1], &c[2]))
             .unwrap_or_default();
         // The exception line ("AssertionError: Lists differ: …") is the
-        // message; unittest's multi-line diff explanation after it is detail
-        // the trace carries. Fall back to the last non-separator line.
+        // message. Fall back to the last non-separator line.
         let exception_idx = block.lines().position(|l| is_exception_line(l.trim()));
-        let msg = exception_idx
+        let mut msg = exception_idx
             .and_then(|i| block.lines().nth(i))
             .or_else(|| {
                 block.lines().rev().find(|l| {
@@ -146,11 +183,26 @@ pub fn parse_text(stderr: &str) -> Result<TestReport> {
             .unwrap_or("")
             .trim()
             .to_string();
-        // Trace: from "Traceback" through the exception line. The FAIL header
-        // (already the id), the dashed separator, and the diff explanation
-        // would otherwise make the report larger than unittest's own output.
+        // Trace: the frames from "Traceback" up to the exception line, which
+        // is not repeated (it is `msg`). The FAIL header (already the id)
+        // and the dashed separator are dropped.
         let trace_block = traceback_span(block, exception_idx);
-        let trace = trim_trace(trace_block);
+        let mut trace = trim_trace(trace_block);
+        if trace.last().is_some_and(|l| *l == msg) {
+            trace.pop();
+        }
+        // Multi-line assertion detail (a list/dict/string diff) follows the
+        // exception line; keep its compact tail, which also carries the
+        // user's own message (`… : unexpected roles for alpha`).
+        let detail = exception_idx
+            .map(|i| diff_tail(block, i))
+            .unwrap_or_default();
+        if let Some((_, custom)) = detail.last().and_then(|l| l.rsplit_once(" : ")) {
+            if !msg.contains(custom) {
+                msg = format!("{msg} : {custom}");
+            }
+        }
+        trace.extend(detail);
         failures.push(Failure {
             id,
             loc,
@@ -210,8 +262,30 @@ mod tests {
             "{:?}",
             f.trace
         );
+        // The user's own message survives, in msg and in the diff tail.
         assert!(
-            f.trace.last().unwrap().starts_with("AssertionError"),
+            f.msg.ends_with(" : unexpected roles for alpha"),
+            "{}",
+            f.msg
+        );
+        assert_eq!(
+            f.trace.last().unwrap(),
+            "+ ['admin', 'editor'] : unexpected roles for alpha"
+        );
+        assert!(
+            f.trace
+                .contains(&"- ['admin', 'editor', 'viewer']".to_string()),
+            "{:?}",
+            f.trace
+        );
+        // msg is not repeated as a trace line.
+        assert!(
+            !f.trace.iter().any(|l| l.starts_with("AssertionError")),
+            "{:?}",
+            f.trace
+        );
+        assert!(
+            !f.trace.iter().any(|l| l.starts_with("? ")),
             "{:?}",
             f.trace
         );
@@ -235,6 +309,29 @@ mod tests {
             "{:?}",
             f.trace
         );
+    }
+
+    #[test]
+    fn unexpected_successes_count_as_failures() {
+        // Captured from Python 3.11: one plain failure with a custom
+        // message, one expected failure, one unexpected success.
+        let r = parse_fixture("unexpected-success.txt");
+        assert_eq!((r.total, r.passed, r.failed, r.skipped), (4, 2, 2, 0));
+        let ids: Vec<&str> = r.failures.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["test_us.T.test_fail", "test_us.T.test_unexpected"]
+        );
+        assert_eq!(r.failures[0].msg, "AssertionError: 1 != 2 : custom note");
+        assert!(r.failures[1].msg.starts_with("unexpected success"));
+    }
+
+    #[test]
+    fn unexpected_successes_counted_without_blocks() {
+        // Python < 3.11 prints only the tail count.
+        let stderr = "u\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nFAILED (unexpected successes=1)\n";
+        let r = parse_text(stderr).unwrap();
+        assert_eq!((r.total, r.passed, r.failed), (1, 0, 1));
     }
 
     #[test]

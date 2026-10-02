@@ -69,7 +69,12 @@ impl AdapterReport {
     pub fn render(&self, trace_lines: usize, fast_note: Option<&str>) -> String {
         match self {
             AdapterReport::Tests(r) => report::render(r, trace_lines, fast_note),
-            AdapterReport::Value(v) => crate::toon::encode(v),
+            AdapterReport::Value(v) => {
+                // Same cwd-relative paths as test reports (report::render).
+                let mut v = v.clone();
+                report::relativize_value(&mut v);
+                crate::toon::encode(&v)
+            }
         }
     }
 }

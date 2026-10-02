@@ -1,0 +1,19 @@
+
+ RUN  v3.2.7 /home/user/proj
+
+stdout | src/ok.test.js > fails
+debug value [33m42[39m
+
+ ❯ src/ok.test.js (2 tests | 1 failed) 15ms
+   ✓ passes 1ms
+   × fails 13ms
+     → expected 2 to be 3 // Object.is equality
+ ✓ src/unhandled.test.js (2 tests) 54ms
+
+ Test Files  3 failed | 1 passed (4)
+      Tests  1 failed | 3 passed (4)
+     Errors  1 error
+   Start at  03:08:45
+   Duration  1.06s (transform 103ms, setup 0ms, collect 69ms, tests 68ms, environment 1ms, prepare 546ms)
+
+JSON report written to /tmp/cartoon-vitest-x.json
