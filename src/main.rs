@@ -98,11 +98,15 @@ fn main() {
             source,
             compress,
             tags,
+            max_tokens,
         }) => {
             let mut cfg = cartoon::config::load_for_cwd();
-            cfg.max_tokens = std::env::var("CARTOON_MAX_TOKENS")
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
+            cfg.max_tokens = max_tokens
+                .or_else(|| {
+                    std::env::var("CARTOON_MAX_TOKENS")
+                        .ok()
+                        .and_then(|v| v.trim().parse().ok())
+                })
                 .or(cfg.max_tokens);
             match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
                 Ok(level) => {
@@ -116,6 +120,10 @@ fn main() {
                     2
                 }
             }
+        }
+        Ok(cartoon::cli::Mode::Help(text)) => {
+            println!("{text}");
+            0
         }
         Err(e) => {
             eprintln!("cartoon: {e}");
