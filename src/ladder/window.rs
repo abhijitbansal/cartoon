@@ -1,23 +1,9 @@
-use regex::Regex;
-use std::sync::OnceLock;
+use super::is_error_line;
 
 const HEAD_LINES: usize = 15;
 const TAIL_LINES: usize = 15;
 const ERROR_CONTEXT: usize = 3;
 const MIN_TOTAL_LINES: usize = 80; // below this, windowing saves too little
-
-fn is_error_line(line: &str) -> bool {
-    static PAT: OnceLock<Regex> = OnceLock::new();
-    let pat = PAT.get_or_init(|| {
-        // Keyword list plus identifier-glued names (`KeyError:`,
-        // `NullPointerException`) that `\b…\b` alone would miss.
-        Regex::new(
-            r"(?i)\b(error|err!|fail|failed|failure|exception|panic|fatal|traceback)\b|[A-Za-z_][A-Za-z0-9_]*(Error|Exception)\b",
-        )
-        .unwrap()
-    });
-    pat.is_match(line)
-}
 
 /// Keep head + tail + windows around error keywords; replace elided spans
 /// with `  (skipped K lines, see raw_log)`.
@@ -99,6 +85,24 @@ mod tests {
         assert!(out.contains("NullPointerException"), "{out}");
         assert!(out.contains("line 58"), "context kept: {out}");
         assert!(!out.contains("line 30"), "middle elided: {out}");
+    }
+
+    #[test]
+    fn broadened_markers_anchor_a_window() {
+        for marker in [
+            "thread 'main' panicked at src/main.rs:2:5",
+            "npm ERR! code ELIFECYCLE",
+            "Segmentation fault (core dumped)",
+            "Killed",
+            "E       assert 500 == 200",
+            "cp: cannot create 'x': Permission denied",
+        ] {
+            let mut lines: Vec<String> = (0..120).map(|i| format!("line {i}")).collect();
+            lines[60] = marker.into();
+            let out = window_errors(&lines.join("\n"));
+            assert!(out.contains(marker), "{marker}: {out}");
+            assert!(out.contains("line 58"), "{marker}: context kept: {out}");
+        }
     }
 
     #[test]
