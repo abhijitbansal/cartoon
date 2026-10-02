@@ -1,0 +1,3 @@
+Vendored from https://github.com/toon-format/spec (tests/fixtures/encode),
+commit 216d88005894ee6a4aaedfbde3d8603d51f46685 (spec 4.1), MIT licensed (see LICENSE).
+Run by tests/toon_fixtures.rs. Refresh by copying the upstream encode/*.json.

@@ -1,0 +1,18 @@
+nvidia-smi poll
+GPU0 util: 12%
+GPU1 util: 99%
+GPU2 util: 7%
+Coverage total: 45%
+Downloading model 10%Downloading model 55%Downloading model 100%
+[====>     ] 4/10
+[========> ] 8/10
+[==========] 10/10
+epoch 1 loss 0.91
+epoch 2 loss 0.55
+ diff context line   
++	indented change  
+ 
+
+
+
+FATAL out of memory on GPU1
