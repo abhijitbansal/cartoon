@@ -1,0 +1,29 @@
+
+running 3 tests
+test tests::ok ... ok
+test tests::bad_unwrap ... FAILED
+test tests::bad_eq ... FAILED
+
+failures:
+
+---- tests::bad_unwrap stdout ----
+
+thread 'tests::bad_unwrap' (25455) panicked at src/lib.rs:23:11:
+value must be present
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::bad_eq stdout ----
+some test output
+
+thread 'tests::bad_eq' (25454) panicked at src/lib.rs:17:9:
+assertion `left == right` failed: custom ctx
+  left: 2
+ right: 3
+
+
+failures:
+    tests::bad_eq
+    tests::bad_unwrap
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
