@@ -29,6 +29,8 @@ use clap::Parser;
                                              — covers the pipe case the hook can't
   ingest (<file> | -)                        compress an existing log file
                                              (or stdin: some-cmd | cartoon -)
+  mcp                                        MCP server on stdio (run, logs,
+                                             stats tools) for hookless agents
 
 Every wrapped run archives its complete raw stdout/stderr and prints the
 location as a `raw_log:` footer — `cartoon logs grep` that instead of
@@ -39,7 +41,7 @@ progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
 `stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, `shim`, \
-`instructions`, and `ingest` are reserved words (each takes --help); to wrap a \
+`instructions`, `ingest`, and `mcp` are reserved words (each takes --help); to wrap a \
 binary literally named `stats`, use: cartoon env stats. A command whose name \
 starts with `-` goes after `--`: cartoon -- --weird-bin"
 )]
@@ -87,7 +89,7 @@ pub struct Cli {
 
     /// Command to wrap plus its args (or a reserved subcommand: stats |
     /// adapters | doctor | init | logs | learn | hook | shim | instructions |
-    /// ingest). Unknown `--flags` before the command are an error, not a
+    /// ingest | mcp). Unknown `--flags` before the command are an error, not a
     /// command name; use `--` to run a binary whose name starts with `-`.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -133,6 +135,10 @@ pub enum Mode {
         compress: Option<String>,
         tags: Vec<String>,
         max_tokens: Option<usize>,
+    },
+    /// Model Context Protocol server on stdin/stdout.
+    Mcp {
+        args: Vec<String>,
     },
     /// `<subcommand> --help`: print this usage and exit 0 without running.
     Help(&'static str),
@@ -360,6 +366,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "instructions" => Ok(Mode::Instructions {
             args: cli.command[1..].to_vec(),
         }),
+        "mcp" => Ok(Mode::Mcp {
+            args: cli.command[1..].to_vec(),
+        }),
         "ingest" => match &cli.command[1..] {
             [source] => Ok(Mode::Ingest {
                 source: source.clone(),
@@ -460,6 +469,13 @@ fn help_text(sub: &str) -> Option<&'static str> {
             "       some-cmd | cartoon -\n\n",
             "Compress an existing log file (or stdin) through the same flow as a\n",
             "wrapped run, archiving the raw text."
+        ),
+        "mcp" => concat!(
+            "usage: cartoon mcp\n\n",
+            "Model Context Protocol server over stdio (JSON-RPC, one message per\n",
+            "line) for agents without a PreToolUse hook: tools run, logs_grep,\n",
+            "logs_list and stats. Register it in the agent's MCP config, e.g.\n",
+            "claude mcp add cartoon -- cartoon mcp"
         ),
         _ => return None,
     })
@@ -976,6 +992,7 @@ mod tests {
             ("shim", "cartoon shim"),
             ("instructions", "cartoon instructions"),
             ("ingest", "ingest (<file> | -)"),
+            ("mcp", "cartoon mcp"),
         ] {
             for flag in ["--help", "-h"] {
                 match mode(&["cartoon", sub, flag]) {
@@ -1002,6 +1019,11 @@ mod tests {
     }
 
     #[test]
+    fn mcp_subcommand_collects_args() {
+        assert_eq!(mode(&["cartoon", "mcp"]), Mode::Mcp { args: vec![] });
+    }
+
+    #[test]
     fn learn_usage_error_names_learn() {
         let e = parse_mode(Cli::parse_from(["cartoon", "learn", "--bogus"])).unwrap_err();
         assert!(e.to_string().contains("cartoon learn"), "{e}");
@@ -1022,6 +1044,7 @@ mod tests {
             "shim",
             "instructions",
             "ingest",
+            "mcp",
         ] {
             assert!(
                 help.contains(&format!("`{sub}`")),

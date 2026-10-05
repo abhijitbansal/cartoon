@@ -12,6 +12,7 @@ pub mod instructions;
 pub mod ladder;
 pub mod learn;
 pub mod logs_cmd;
+pub mod mcp;
 pub mod paths;
 pub mod runner;
 pub mod shim;
