@@ -360,15 +360,13 @@ It is off by default because it changes fd semantics: with it on,
 stderr, and a `| grep` sees stderr lines too. cartoon's own notices
 (`cartoon: …`) stay on stderr.
 
-The hook's `cartoon -c` rewrite does not turn it on yet. One Claude Code
-release was checked (2.1.42). Its Bash tool reads a command's stdout and
-stderr on separate pipes and shows the model stdout, then stderr, so it
-never shows the real interleaving, wrapped or not. Merged mode would give
-agents that order back. It stays opt-in for three reasons: newer builds
-and the other hook targets (Copilot CLI, VS Code) were not checked, `-c`
-is also a human-facing flag, and folding stderr into stdout changes what
-the output looks like to an agent. Agents can opt in with `[compress]
-merge_streams = true`.
+The auto-wrap hook turns it on: its rewrite is `cartoon --merge-streams -c
+'<command>'`. Agent shells (Claude Code's Bash tool among them) read a
+command's stdout and stderr on separate pipes and show stdout first, so
+the model never sees where a warning landed; merged, it does. The fd
+caveat above can't bite there: the hook never rewrites a command that
+carries a redirection or a pipe. Typed `cartoon -c` stays unmerged unless
+you pass the flag or set `[compress] merge_streams = true`.
 
 ### Content sniffing
 

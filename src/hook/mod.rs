@@ -796,7 +796,14 @@ pub fn wrap_command_in(
         }
     }
     let escaped = trimmed.replace('\'', r"'\''");
-    Some((format!("cartoon -c '{escaped}'"), force_deny))
+    // `--merge-streams`: agent shells (Claude Code's Bash tool among them)
+    // capture stdout and stderr separately and show stdout first, so the
+    // model never sees where a warning landed among the output. Merged, the
+    // compressed result keeps arrival order on stdout.
+    Some((
+        format!("cartoon --merge-streams -c '{escaped}'"),
+        force_deny,
+    ))
 }
 
 /// How a segment qualified for wrapping.
@@ -1346,7 +1353,7 @@ mod tests {
     fn wraps_noisy_simple_command() {
         assert_eq!(
             wrap_command("pytest -q tests/").as_deref(),
-            Some("cartoon -c 'pytest -q tests/'")
+            Some("cartoon --merge-streams -c 'pytest -q tests/'")
         );
     }
 
@@ -1354,7 +1361,7 @@ mod tests {
     fn wraps_compound_only_when_every_segment_noisy() {
         assert_eq!(
             wrap_command("cargo build --release && cargo test").as_deref(),
-            Some("cartoon -c 'cargo build --release && cargo test'")
+            Some("cartoon --merge-streams -c 'cargo build --release && cargo test'")
         );
         // one non-allowlisted segment poisons the whole compound: a rewrite
         // auto-approves, so nothing may ride along
@@ -1374,7 +1381,7 @@ mod tests {
     fn policy_matches_declared_project_script_and_forces_deny() {
         let (wrapped, force_deny) =
             wrap_command_with_policy("./build.sh -d", &["./build.sh".to_string()]).unwrap();
-        assert_eq!(wrapped, "cartoon -c './build.sh -d'");
+        assert_eq!(wrapped, "cartoon --merge-streams -c './build.sh -d'");
         assert!(force_deny, "a project script must never be auto-approved");
     }
 
@@ -1388,7 +1395,10 @@ mod tests {
         let (wrapped, force_deny) =
             wrap_command_with_policy("./build.sh -d && pytest -q", &["./build.sh".to_string()])
                 .unwrap();
-        assert_eq!(wrapped, "cartoon -c './build.sh -d && pytest -q'");
+        assert_eq!(
+            wrapped,
+            "cartoon --merge-streams -c './build.sh -d && pytest -q'"
+        );
         assert!(force_deny);
     }
 
@@ -1438,7 +1448,7 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v["hookSpecificOutput"]["updatedInput"]["command"],
-            "cartoon -c 'pytest -q'"
+            "cartoon --merge-streams -c 'pytest -q'"
         );
     }
 
@@ -1481,7 +1491,7 @@ mod tests {
     fn uv_run_noisy_tools_wrapped() {
         assert_eq!(
             wrap_command("uv run pytest tests -v").as_deref(),
-            Some("cartoon -c 'uv run pytest tests -v'")
+            Some("cartoon --merge-streams -c 'uv run pytest tests -v'")
         );
         assert!(wrap_command("uvx pytest").is_some());
         assert!(wrap_command("uv tool run pytest").is_some());
@@ -1501,14 +1511,17 @@ mod tests {
     fn env_prefix_does_not_hide_noisy_command() {
         assert_eq!(
             wrap_command("CI=1 pytest -x").as_deref(),
-            Some("cartoon -c 'CI=1 pytest -x'")
+            Some("cartoon --merge-streams -c 'CI=1 pytest -x'")
         );
     }
 
     #[test]
     fn single_quotes_escaped() {
         let w = wrap_command("pytest -k 'not slow'").unwrap();
-        assert_eq!(w, r#"cartoon -c 'pytest -k '\''not slow'\'''"#);
+        assert_eq!(
+            w,
+            r#"cartoon --merge-streams -c 'pytest -k '\''not slow'\'''"#
+        );
     }
 
     #[test]
@@ -1532,7 +1545,10 @@ mod tests {
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["hookEventName"], "PreToolUse");
         assert_eq!(hso["permissionDecision"], "allow");
-        assert_eq!(hso["updatedInput"]["command"], "cartoon -c 'pytest -q'");
+        assert_eq!(
+            hso["updatedInput"]["command"],
+            "cartoon --merge-streams -c 'pytest -q'"
+        );
         assert_eq!(hso["updatedInput"]["timeout"], 5000);
     }
 
@@ -1549,7 +1565,7 @@ mod tests {
         assert!(hso["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("cartoon -c './build.sh -d'"));
+            .contains("cartoon --merge-streams -c './build.sh -d'"));
     }
 
     #[test]
@@ -1581,7 +1597,10 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["permissionDecision"], "allow");
-        assert_eq!(hso["updatedInput"]["command"], "cartoon -c 'pytest -q'");
+        assert_eq!(
+            hso["updatedInput"]["command"],
+            "cartoon --merge-streams -c 'pytest -q'"
+        );
         // unrelated fields preserved
         assert_eq!(hso["updatedInput"]["description"], "tests");
     }
@@ -1611,7 +1630,7 @@ mod tests {
         assert!(hso["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("cartoon -c 'pytest -q'"));
+            .contains("cartoon --merge-streams -c 'pytest -q'"));
     }
 
     #[test]
@@ -2087,12 +2106,20 @@ mod tests {
         let trimmed = cmd.trim();
         assert_eq!(
             wrapped,
-            format!("cartoon -c '{}'", trimmed.replace('\'', r"'\''")),
+            format!(
+                "cartoon --merge-streams -c '{}'",
+                trimmed.replace('\'', r"'\''")
+            ),
             "{cmd:?}"
         );
         assert_eq!(
             shell_words::split(wrapped).unwrap(),
-            vec!["cartoon".to_string(), "-c".into(), trimmed.into()],
+            vec![
+                "cartoon".to_string(),
+                "--merge-streams".into(),
+                "-c".into(),
+                trimmed.into()
+            ],
             "{cmd:?}"
         );
         let mut quote = None;
