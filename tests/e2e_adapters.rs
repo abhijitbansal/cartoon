@@ -61,10 +61,19 @@ fn e2e_unittest_tiny_suite_passes_through_when_report_costs_more() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
+    // Run from a short temp copy: unittest prints the test file's absolute
+    // path, so a deep checkout (worktrees, CI workspaces) would inflate the
+    // raw output past the report and flip the guard's decision.
+    let proj = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        format!("{}/test_sample_unittest.py", fixture("unittestproj")),
+        proj.path().join("test_sample_unittest.py"),
+    )
+    .unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
         .env("XDG_CONFIG_HOME", tmp.path())
-        .current_dir(fixture("unittestproj"))
+        .current_dir(proj.path())
         .args(["python3", "-m", "unittest", "discover"])
         .assert()
         .code(1);

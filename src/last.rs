@@ -20,6 +20,7 @@ pub fn stored_from(rep: &AdapterReport, rendered: &str) -> StoredReport {
             kind: "tests".into(),
             runner: r.runner.into(),
             failed: r.failed.max(r.failures.len() as u64),
+            total: Some(r.total),
             items: r
                 .failures
                 .iter()
@@ -54,6 +55,7 @@ pub fn stored_from(rep: &AdapterReport, rendered: &str) -> StoredReport {
                 kind: "diagnostics".into(),
                 runner: text(&v["runner"]),
                 failed: items.len() as u64,
+                total: None,
                 items,
                 rendered: rendered.into(),
             }
@@ -87,7 +89,12 @@ pub fn on_archived(
     }
     let d = compare(&prev, &cur);
     Some(format!(
-        "fixed {}; still {}; new {} (cartoon diff)",
+        "{} {}; still {}; new {} (cartoon diff)",
+        if fewer_tests(&prev, &cur) {
+            "fixed or not run"
+        } else {
+            "fixed"
+        },
         d.fixed.len(),
         d.still.len(),
         d.new.len()
@@ -165,6 +172,13 @@ fn file_of(loc: &str) -> &str {
         s = head;
     }
     s
+}
+
+/// The current run executed fewer tests than the previous one (stopped at
+/// the first failure, a `-k` filter, a crash): a previous failure missing
+/// from it may simply not have run.
+fn fewer_tests(prev: &StoredReport, cur: &StoredReport) -> bool {
+    matches!((prev.total, cur.total), (Some(p), Some(c)) if c < p)
 }
 
 pub fn compare(prev: &StoredReport, cur: &StoredReport) -> Delta {
@@ -339,14 +353,30 @@ pub fn render_diff(
     };
     let side =
         |m: &RunMeta, r: &StoredReport| json!({"id": m.id, "exit": m.exit, "failed": r.failed});
-    let v = json!({
+    let fewer = fewer_tests(&prev, &cur);
+    let mut v = json!({
         "command": display_command(&cm.argv),
         "previous": side(pm, &prev),
         "current": side(cm, &cur),
-        "fixed": d.fixed.iter().map(|i| entry(i, false)).collect::<Vec<_>>(),
         "still_failing": d.still.iter().map(|i| entry(i, true)).collect::<Vec<_>>(),
         "new_failures": d.new.iter().map(|i| entry(i, true)).collect::<Vec<_>>(),
     });
+    let fixed: Vec<Value> = d.fixed.iter().map(|i| entry(i, false)).collect();
+    let o = v.as_object_mut().expect("object");
+    if fewer {
+        o.insert(
+            "note".into(),
+            json!(format!(
+                "current run executed {} tests vs {} before (stopped early or filtered): \
+                 previous failures it lacks may not have run",
+                cur.total.unwrap_or(0),
+                prev.total.unwrap_or(0)
+            )),
+        );
+        o.insert("fixed_or_not_run".into(), json!(fixed));
+    } else {
+        o.insert("fixed".into(), json!(fixed));
+    }
     Ok(crate::toon::encode(&v))
 }
 
@@ -378,6 +408,7 @@ mod tests {
             kind: kind.into(),
             runner: "x".into(),
             failed: items.len() as u64,
+            total: None,
             items,
             rendered: format!("runner: {kind}\n"),
         }
@@ -508,6 +539,22 @@ mod tests {
         if let Some(r) = r {
             assert!(archive::write_report(&dir, r));
         }
+    }
+
+    #[test]
+    fn fewer_tests_in_the_current_run_is_not_called_fixed() {
+        let mut prev = rep(
+            "tests",
+            vec![test_item("t::a", "t.py:3"), test_item("t::b", "t.py:9")],
+        );
+        prev.total = Some(40);
+        let mut cur = rep("tests", vec![test_item("t::a", "t.py:3")]);
+        cur.total = Some(3);
+        assert!(fewer_tests(&prev, &cur));
+        cur.total = Some(40);
+        assert!(!fewer_tests(&prev, &cur));
+        prev.total = None;
+        assert!(!fewer_tests(&prev, &cur), "unknown totals: no claim");
     }
 
     #[test]

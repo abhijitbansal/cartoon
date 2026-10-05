@@ -295,6 +295,10 @@ pub struct StoredReport {
     pub runner: String,
     /// Failed tests, or diagnostics reported.
     pub failed: u64,
+    /// Tests the run executed (test reports only). A re-run that executed
+    /// fewer (`pytest -x`, `-k`) can't tell "fixed" from "not run".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
     pub items: Vec<StoredItem>,
     /// The TOON report exactly as the run printed it (before footers).
     pub rendered: String,
@@ -721,6 +725,7 @@ mod tests {
             kind: "tests".into(),
             runner: "pytest".into(),
             failed: 1,
+            total: Some(2),
             items: vec![StoredItem {
                 id: "t.py::test_a".into(),
                 loc: "t.py:3".into(),
