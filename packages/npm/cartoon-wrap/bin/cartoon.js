@@ -2,14 +2,14 @@
 const { spawn } = require("node:child_process");
 const os = require("node:os");
 
-// One scoped package per platform (scripts/npm-platform-packages.mjs).
+// One package per platform (scripts/npm-platform-packages.mjs).
 // Linux binaries are static musl builds, so they run on glibc and musl alike.
 const PLATFORMS = {
-  "darwin-arm64": "@cartoon-wrap/darwin-arm64",
-  "darwin-x64": "@cartoon-wrap/darwin-x64",
-  "linux-arm64": "@cartoon-wrap/linux-arm64",
-  "linux-x64": "@cartoon-wrap/linux-x64",
-  "win32-x64": "@cartoon-wrap/win32-x64",
+  "darwin-arm64": "cartoon-wrap-darwin-arm64",
+  "darwin-x64": "cartoon-wrap-darwin-x64",
+  "linux-arm64": "cartoon-wrap-linux-arm64",
+  "linux-x64": "cartoon-wrap-linux-x64",
+  "win32-x64": "cartoon-wrap-windows-x64",
 };
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 

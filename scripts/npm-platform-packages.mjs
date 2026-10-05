@@ -2,9 +2,9 @@
 // binDir layout: <binDir>/cartoon-bin-<rust-target>/cartoon[.exe]
 // Writes one package per platform to <outDir>/<key>/ (e.g. npm-out/linux-x64).
 //
-// Platform packages live under the @cartoon-wrap scope: the unscoped
-// `cartoon-wrap-win32-x64` name is held by npm's security placeholder, so
-// Windows could never be published there. Linux targets are static musl
+// Platform packages are unscoped `cartoon-wrap-<platform>` names. Windows is
+// `cartoon-wrap-windows-x64`: `cartoon-wrap-win32-x64` is held by npm's
+// `0.0.1-security` placeholder and can never be published. Linux targets are static musl
 // builds that run on glibc and musl distros alike, so the packages carry no
 // `libc` field (one would only make npm skip a binary that works).
 import fs from "node:fs";
@@ -16,13 +16,12 @@ if (!version || !binDir || !outDir) {
   process.exit(1);
 }
 
-const SCOPE = "@cartoon-wrap";
 const TARGETS = {
-  "aarch64-apple-darwin": { key: "darwin-arm64", os: "darwin", cpu: "arm64" },
-  "x86_64-apple-darwin": { key: "darwin-x64", os: "darwin", cpu: "x64" },
-  "aarch64-unknown-linux-musl": { key: "linux-arm64", os: "linux", cpu: "arm64" },
-  "x86_64-unknown-linux-musl": { key: "linux-x64", os: "linux", cpu: "x64" },
-  "x86_64-pc-windows-msvc": { key: "win32-x64", os: "win32", cpu: "x64" },
+  "aarch64-apple-darwin": { key: "darwin-arm64", pkg: "cartoon-wrap-darwin-arm64", os: "darwin", cpu: "arm64" },
+  "x86_64-apple-darwin": { key: "darwin-x64", pkg: "cartoon-wrap-darwin-x64", os: "darwin", cpu: "x64" },
+  "aarch64-unknown-linux-musl": { key: "linux-arm64", pkg: "cartoon-wrap-linux-arm64", os: "linux", cpu: "arm64" },
+  "x86_64-unknown-linux-musl": { key: "linux-x64", pkg: "cartoon-wrap-linux-x64", os: "linux", cpu: "x64" },
+  "x86_64-pc-windows-msvc": { key: "win32-x64", pkg: "cartoon-wrap-windows-x64", os: "win32", cpu: "x64" },
 };
 
 let made = 0;
@@ -35,7 +34,7 @@ for (const [target, t] of Object.entries(TARGETS)) {
     missing.push(target);
     continue;
   }
-  const name = `${SCOPE}/${t.key}`;
+  const name = t.pkg;
   const dir = path.join(outDir, t.key);
   const binOut = path.join(dir, "bin");
   fs.mkdirSync(binOut, { recursive: true });

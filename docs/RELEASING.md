@@ -31,7 +31,7 @@ test ───────────┼─► build ─┬─► github-releas
 | `test` | nothing: fmt, clippy, `cargo test`, npm wrapper test | — |
 | `build` → `github-release` | 5 binary tarballs + `SHA256SUMS` + build provenance on the GitHub release | `GITHUB_TOKEN` |
 | `pypi-wheels` + `pypi-sdist` → `pypi-publish` | 7 wheels + 1 sdist to PyPI | Trusted Publishing (OIDC) |
-| `npm-publish` | `cartoon-wrap` + 5 `@cartoon-wrap/*` platform packages | Trusted Publishing (OIDC) |
+| `npm-publish` | `cartoon-wrap` + 5 `cartoon-wrap-<platform>` packages | Trusted Publishing (OIDC) |
 | `crates-publish` | `cartoon` to crates.io | Trusted Publishing (OIDC) |
 
 A failure in `verify-version` or `test` publishes nothing. After that the
@@ -42,13 +42,13 @@ jobs) are independent: a red PyPI job does not block npm, and vice versa.
 
 | Target | Tarball / npm package | Wheel |
 |---|---|---|
-| `x86_64-unknown-linux-musl` (static) | `cartoon-x86_64-unknown-linux-musl.tar.gz`, `@cartoon-wrap/linux-x64` | `musllinux_1_2_x86_64` |
-| `aarch64-unknown-linux-musl` (static) | `cartoon-aarch64-unknown-linux-musl.tar.gz`, `@cartoon-wrap/linux-arm64` | `musllinux_1_2_aarch64` |
+| `x86_64-unknown-linux-musl` (static) | `cartoon-x86_64-unknown-linux-musl.tar.gz`, `cartoon-wrap-linux-x64` | `musllinux_1_2_x86_64` |
+| `aarch64-unknown-linux-musl` (static) | `cartoon-aarch64-unknown-linux-musl.tar.gz`, `cartoon-wrap-linux-arm64` | `musllinux_1_2_aarch64` |
 | `x86_64-unknown-linux-gnu` | — | `manylinux2014_x86_64` (glibc ≥ 2.17) |
 | `aarch64-unknown-linux-gnu` | — | `manylinux2014_aarch64` (glibc ≥ 2.17) |
-| `x86_64-apple-darwin` | `cartoon-x86_64-apple-darwin.tar.gz`, `@cartoon-wrap/darwin-x64` | macOS x86_64 |
-| `aarch64-apple-darwin` | `cartoon-aarch64-apple-darwin.tar.gz`, `@cartoon-wrap/darwin-arm64` | macOS arm64 |
-| `x86_64-pc-windows-msvc` | `cartoon-x86_64-pc-windows-msvc.tar.gz`, `@cartoon-wrap/win32-x64` | Windows x86_64 |
+| `x86_64-apple-darwin` | `cartoon-x86_64-apple-darwin.tar.gz`, `cartoon-wrap-darwin-x64` | macOS x86_64 |
+| `aarch64-apple-darwin` | `cartoon-aarch64-apple-darwin.tar.gz`, `cartoon-wrap-darwin-arm64` | macOS arm64 |
+| `x86_64-pc-windows-msvc` | `cartoon-x86_64-pc-windows-msvc.tar.gz`, `cartoon-wrap-windows-x64` | Windows x86_64 |
 
 Linux tarballs and npm binaries are static musl builds, so one binary runs
 on every distro (glibc or musl, old or new). Until 0.6.0 they were built
@@ -97,23 +97,22 @@ If a trusted publisher config drifts (renamed workflow file, transferred
 repo), the publish job fails with an auth error — fix the registry-side
 config, not the workflow.
 
-### Before the next release: the `@cartoon-wrap` npm scope
+### Before the next release: the Windows npm package
 
-The platform packages moved from `cartoon-wrap-<platform>` to
-`@cartoon-wrap/<platform>`: the unscoped `cartoon-wrap-win32-x64` name is
-npm's `0.0.1-security` placeholder, so Windows never got a binary. On
-2026-10-02 the scope was free (`npm view @cartoon-wrap/linux-x64` → 404,
-org lookup → "Scope not found"). Before tagging, the maintainer must:
+The four existing platform packages keep their unscoped names. Windows is
+published as `cartoon-wrap-windows-x64`: `cartoon-wrap-win32-x64` is npm's
+`0.0.1-security` placeholder and can never be published, so Windows never
+got a binary. npm only lets a Trusted Publisher be configured on a package
+that already exists, so once, before tagging:
 
-1. Create the npm org `cartoon-wrap` (npmjs.com → Add Organization; free
-   for public packages).
-2. Bootstrap-publish the five `@cartoon-wrap/*` packages once with a
-   short-lived granular token (see above), or let the first release do it
-   with such a token, then configure a Trusted Publisher (this repo,
-   `release.yml`) on each of the five and delete the token.
-3. Optionally deprecate the old unscoped packages:
-   `npm deprecate cartoon-wrap-linux-x64 "moved to @cartoon-wrap/linux-x64"`
-   (and darwin-arm64, darwin-x64, linux-arm64).
+1. Bootstrap-publish `cartoon-wrap-windows-x64` with a short-lived granular
+   token (see above): any placeholder version works, e.g. publish the
+   current release's Windows binary by hand, or let the first release
+   publish it with that token.
+2. Configure its Trusted Publisher (this repo, `release.yml`), like the
+   other four, and delete the token.
+
+No npm org or scope is needed.
 
 The npm job now fails if any platform package fails to publish; it no
 longer skips Windows silently.

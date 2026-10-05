@@ -15,7 +15,7 @@ const key = `${process.platform}-${process.arch}`;
 const posix = process.platform !== "win32";
 
 // <tmp>/node_modules/cartoon-wrap/bin/cartoon.js + (optionally)
-// <tmp>/node_modules/@cartoon-wrap/<key>/bin/cartoon containing `script`.
+// <tmp>/node_modules/<platform package>/bin/cartoon containing `script`.
 function layout(script, { mode = 0o755 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cartoon-wrap-"));
   const wrapDir = path.join(root, "node_modules", "cartoon-wrap", "bin");
@@ -23,9 +23,10 @@ function layout(script, { mode = 0o755 } = {}) {
   fs.copyFileSync(WRAPPER, path.join(wrapDir, "cartoon.js"));
   let bin = null;
   if (script !== null) {
-    const platDir = path.join(root, "node_modules", "@cartoon-wrap", key);
+    const pkg = key === "win32-x64" ? "cartoon-wrap-windows-x64" : `cartoon-wrap-${key}`;
+    const platDir = path.join(root, "node_modules", pkg);
     fs.mkdirSync(path.join(platDir, "bin"), { recursive: true });
-    fs.writeFileSync(path.join(platDir, "package.json"), JSON.stringify({ name: `@cartoon-wrap/${key}` }));
+    fs.writeFileSync(path.join(platDir, "package.json"), JSON.stringify({ name: pkg }));
     bin = path.join(platDir, "bin", "cartoon");
     fs.writeFileSync(bin, `#!/bin/sh\n${script}\n`);
     fs.chmodSync(bin, mode);
@@ -87,7 +88,7 @@ test("generated platform packages, optionalDependencies and the wrapper agree", 
   const repo = path.join(here, "..", "..", "..", "..");
   const parent = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8"));
   const deps = Object.keys(parent.optionalDependencies).sort();
-  const wrapperNames = [...fs.readFileSync(WRAPPER, "utf8").matchAll(/"(@cartoon-wrap\/[a-z0-9-]+)"/g)]
+  const wrapperNames = [...fs.readFileSync(WRAPPER, "utf8").matchAll(/"(cartoon-wrap-[a-z0-9-]+)"/g)]
     .map((m) => m[1])
     .sort();
   assert.deepEqual(wrapperNames, deps);

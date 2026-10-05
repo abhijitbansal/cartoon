@@ -7,7 +7,7 @@ structured format built for LLM agents. Same exit codes, same behavior,
 [benchmark](https://github.com/abhijitbansal/cartoon/blob/main/benchmarks/README.md)).
 
 This package installs the `cartoon` binary (prebuilt per platform via the
-`@cartoon-wrap/<platform>` optionalDependencies — no Rust toolchain needed).
+`cartoon-wrap-<platform>` optionalDependencies — no Rust toolchain needed).
 Prebuilt: Linux x64/arm64 (static, any distro), macOS x64/arm64, Windows
 x64. Elsewhere, or if optional dependencies are disabled, use
 `cargo install cartoon`.
