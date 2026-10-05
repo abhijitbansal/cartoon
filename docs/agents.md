@@ -122,6 +122,69 @@ tools the agent runs bare; path-invoked binaries (`./gradlew`) aren't
 caught. Tools with non-identifier names (`pre-commit`) and `python -m` /
 `xcodebuild` invocations aren't shimmed either — the hook covers those.
 
+### No hook? MCP server (Cursor, Codex, Windsurf, Claude Desktop)
+
+`cartoon mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server on stdio. Instead of asking the agent to prefix `cartoon`, it gives
+the agent a `run` tool that *is* cartoon: every call goes through the same
+pipeline as `cartoon -c '<command>'` (adapters, net-savings guard, raw-log
+archive, stats ledger, signal forwarding — the server re-invokes its own
+binary).
+
+| Tool | Does | Like |
+|---|---|---|
+| `run` | `{command, cwd?, timeout_s?, compress?, max_tokens?}` → cartoon's compact report, stderr labelled, then `exit_code: N` | `cartoon -c '<command>'` |
+| `logs_grep` | `{pattern, run_id?, context?}` → matching raw-log lines (default: last run) | `cartoon logs grep` |
+| `logs_list` | `{tag?, limit?}` → recent runs: id, command, adapter, exit | `cartoon logs` |
+| `stats` | `{since?}` → tokens saved per adapter | `cartoon stats` |
+
+A failing test run is a normal result (`isError: false`) whose text ends in
+`exit_code: 1`; `isError: true` means the command could not run at all (a
+bad `cwd`, say). `timeout_s` defaults to 600 (max 3600): on expiry cartoon
+is sent SIGTERM, forwards it to the command, and still returns (and
+archives) what was printed, marked `timed_out: true`; anything still alive
+5 s later is SIGKILLed. Cancelling the call from the client does the same.
+
+> **Security:** `run` executes arbitrary shell commands with your user's
+> privileges — that is its purpose. The only gate is your MCP client's tool
+> approval prompt; cartoon adds no allowlist and no auto-approval of its
+> own. Don't put `run` on an "always allow" list you wouldn't give a plain
+> shell tool. `logs_grep`, `logs_list` and `stats` are read-only.
+
+Register it (the binary must be on `PATH`, or give its absolute path):
+
+```bash
+# Claude Code (it has the hook too — MCP is optional there)
+claude mcp add cartoon -- cartoon mcp
+```
+
+```jsonc
+// Cursor: .cursor/mcp.json (project) or ~/.cursor/mcp.json (global)
+// Claude Desktop: claude_desktop_config.json
+// Windsurf: ~/.codeium/windsurf/mcp_config.json
+{
+  "mcpServers": {
+    "cartoon": { "command": "cartoon", "args": ["mcp"] }
+  }
+}
+```
+
+```toml
+# Codex: ~/.codex/config.toml
+[mcp_servers.cartoon]
+command = "cartoon"
+args = ["mcp"]
+tool_timeout_sec = 900   # Codex's default (60 s) cuts off real test suites
+```
+
+Most clients time tool calls out on their own clock; raise it (Claude Code:
+`MCP_TOOL_TIMEOUT` in ms) above the longest `timeout_s` you expect. Pair the
+server with the [instructions directive](#instructions-directive-one-command-or-copy-paste)
+or a line in `AGENTS.md` ("run tests, builds and linters with the cartoon
+`run` tool") — the agent still chooses between `run` and its own shell. The
+server speaks protocol revisions 2025-06-18, 2025-03-26 and 2024-11-05;
+stdout carries JSON-RPC only, diagnostics go to stderr.
+
 ## Instructions directive (one command, or copy-paste)
 
 A directive in your instruction file (`CLAUDE.md` / `AGENTS.md`) is not just
