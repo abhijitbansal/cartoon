@@ -125,6 +125,16 @@ fn main() {
                 }
             }
         }
+        Ok(cartoon::cli::Mode::Last { cmd }) => cartoon::last::run_last(cmd.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
+        Ok(cartoon::cli::Mode::Diff { ids, cmd }) => cartoon::last::run_diff(ids, cmd.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
         Ok(cartoon::cli::Mode::Help(text)) => {
             println!("{text}");
             0

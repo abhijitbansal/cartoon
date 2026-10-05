@@ -238,6 +238,8 @@ cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
 cartoon logs grep ERROR --last # search a raw log instead of re-reading it
+cartoon last                   # re-show the newest run's report, no re-run
+cartoon diff                   # fixed / still failing / new vs the previous run
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
 cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
@@ -273,6 +275,39 @@ in whole lines and the middle is replaced by one marker that is itself a
 ready-to-run `cartoon logs grep` command. Opt-in, because with a ceiling set
 even passthrough output may be cut — that is the point. The raw log is
 archived as always.
+
+### `cartoon last` and `cartoon diff`: the edit → run → fix loop
+
+Each adapter run (tests, lint, typecheck, build) stores its structured report
+next to the raw log. `cartoon last [--cmd <substring>]` re-shows the newest
+run's report without re-running anything (a run no adapter parsed gets a
+short summary and its `raw_log` path). After an edit and a re-run,
+`cartoon diff` compares the newest adapter run with the previous run of the
+same command in the same directory (or `cartoon diff <id-a> <id-b>`):
+
+```text
+command: pytest
+previous:
+  id: 20261005-225301-ae02
+  exit: 1
+  failed: 2
+current:
+  id: 20261005-225302-87f5
+  exit: 1
+  failed: 2
+fixed[1]{id,loc}:
+  "test_loop.py::test_alpha","test_loop.py:1"
+still_failing[1]{id,loc,msg}:
+  "test_loop.py::test_beta","test_loop.py:7","AssertionError: beta is broken"
+new_failures[1]{id,loc,msg}:
+  "test_loop.py::test_gamma","test_loop.py:11","AssertionError: gamma is broken"
+```
+
+Tests match by id; diagnostics by file + rule + message, so a warning that
+only moved lines is not reported as fixed. The re-run itself already ends
+with a one-line `vs_previous: fixed 1; still 1; new 1 (cartoon diff)`
+footer. `diff` exits 0, or 1 when there is no comparable pair. Only these
+forms are reserved: `cartoon diff a.txt b.txt` still wraps the system diff.
 
 ### Content sniffing
 

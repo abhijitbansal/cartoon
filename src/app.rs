@@ -542,8 +542,16 @@ fn run_with_adapter(
             // non-zero.
             let unexplained = code != 0 && !report_shows_failure(&report);
             let mut out = report.render(cfg.trace_lines, fast_note.as_deref());
+            // `cartoon last` / `cartoon diff`: store the report beside the
+            // raw log; compare with the previous run of this command.
+            let vs_previous = archived
+                .as_ref()
+                .and_then(|r| crate::last::on_archived(r, argv, &report, &out));
             if code != 0 {
                 out.push_str(&footer(json!({ "exit_code": code })));
+            }
+            if let Some(v) = vs_previous {
+                out.push_str(&footer(json!({ "vs_previous": v })));
             }
             if let Some(r) = &archived {
                 out.push_str(&raw_log_footer(&r.dir));

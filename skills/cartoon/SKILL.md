@@ -102,7 +102,8 @@ cartoon logs grep "ERROR" --last -C 2   # matching lines + context, capped
 ```
 
 Only read `<raw_log path>/stdout.log` in full when a targeted grep can't
-answer the question.
+answer the question. After fixing and re-running, `cartoon diff` lists what
+got fixed / still fails / newly fails; `cartoon last` re-shows a report.
 
 ## Why wrapping is safe
 
