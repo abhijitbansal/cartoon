@@ -2,10 +2,11 @@
 //! The upstream encode conformance fixtures are vendored under
 //! `tests/fixtures/toon/spec/` and run by `tests/toon_fixtures.rs`.
 //!
-//! Numeric domain: serde_json is built without `arbitrary_precision`, so an
-//! integer outside i64/u64 is already an f64 when it reaches the encoder. It
-//! is emitted as the canonical decimal of that f64 (spec §2 permits emitting
-//! the host's numeric approximation); precision beyond 2^53 is lost.
+//! Numeric domain: unbounded and lossless. serde_json is built with
+//! `arbitrary_precision`, so a parsed number keeps its exact JSON text and
+//! the encoder canonicalizes that text with decimal string arithmetic
+//! (never through f64): big integers keep every digit and `1e400` stays
+//! `1e+400` instead of overflowing. See `canonical_number`.
 use serde_json::{Map, Value};
 
 /// Encoder options (spec §13). `delimiter` is the document delimiter:
@@ -297,34 +298,64 @@ fn scalar(v: &Value, delim: char) -> String {
     }
 }
 
-/// Canonical number form (spec §2): no exponent in [1e-6, 1e21), no
-/// trailing fractional zeros, `1.0` -> `1`, `-0` -> `0`.
+/// Canonical number form (spec §2), computed from the number's exact JSON
+/// text (serde_json's `arbitrary_precision` keeps it), so nothing is
+/// rounded through f64: no exponent in [1e-6, 1e21), no trailing
+/// fractional zeros, `1.0` -> `1`, `-0` -> `0`. An integer literal (digits
+/// only) is always plain digits, whatever its size. Other values outside
+/// the range use JSON exponent form with a lowercase `e` and explicit sign.
 fn number(n: &serde_json::Number) -> String {
-    if let Some(i) = n.as_i64() {
-        return i.to_string();
-    }
-    if let Some(u) = n.as_u64() {
-        return u.to_string();
-    }
-    let f = n.as_f64().unwrap_or(0.0);
-    if !f.is_finite() {
-        return "null".into();
-    }
-    if f == 0.0 {
+    canonical_number(&n.to_string())
+}
+
+/// `text` is a JSON number literal (RFC 8259 §6 grammar).
+fn canonical_number(text: &str) -> String {
+    let (neg, body) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let (mantissa, exp_text) = match body.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e)),
+        None => (body, None),
+    };
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let integer_literal = exp_text.is_none() && frac_part.is_empty();
+    let Some(exp) = exp_text.map_or(Some(0), |e| e.parse::<i128>().ok()) else {
+        // An exponent beyond i128 is far outside the canonical range:
+        // keep the literal, normalized to lowercase `e` and a signed
+        // exponent (still lossless and valid JSON).
+        let e = exp_text.unwrap_or_default();
+        let sign = if e.starts_with(['-', '+']) { "" } else { "+" };
+        return format!("{}{mantissa}e{sign}{e}", if neg { "-" } else { "" });
+    };
+    // value = digits × 10^scale
+    let all = format!("{int_part}{frac_part}");
+    let digits = all.trim_start_matches('0');
+    if digits.is_empty() {
         return "0".into();
     }
-    let a = f.abs();
-    if (1e-6..1e21).contains(&a) {
-        // Rust's Display for f64 is the shortest round-trip decimal and
-        // never uses exponent notation.
-        return format!("{f}");
+    let trimmed = digits.trim_end_matches('0');
+    let scale = exp - frac_part.len() as i128 + (digits.len() - trimmed.len()) as i128;
+    let digits = trimmed;
+    let sign = if neg { "-" } else { "" };
+    // Decimal exponent of the leading digit: 10^lead <= |value| < 10^(lead+1).
+    let lead = digits.len() as i128 - 1 + scale;
+    if integer_literal || (-6..21).contains(&lead) {
+        if scale >= 0 {
+            return format!("{sign}{digits}{}", "0".repeat(scale as usize));
+        }
+        let point = digits.len() as i128 + scale;
+        return if point > 0 {
+            let (i, f) = digits.split_at(point as usize);
+            format!("{sign}{i}.{f}")
+        } else {
+            format!("{sign}0.{}{digits}", "0".repeat((-point) as usize))
+        };
     }
-    // Outside the canonical range: JSON exponent form with explicit sign.
-    let s = format!("{f:e}");
-    match s.split_once('e') {
-        Some((m, e)) if !e.starts_with('-') => format!("{m}e+{e}"),
-        _ => s,
-    }
+    let (first, rest) = digits.split_at(1);
+    let dot = if rest.is_empty() { "" } else { "." };
+    let esign = if lead >= 0 { "+" } else { "" };
+    format!("{sign}{first}{dot}{rest}e{esign}{lead}")
 }
 
 /// Spec §4/§7.2 numeric-like: `^[+-]?[0-9]+(\.[0-9]+)?(e[+-]?[0-9]+)?$`i.
@@ -523,12 +554,62 @@ mod tests {
         assert_eq!(encode(&v), "1000000");
     }
 
+    fn parsed(text: &str) -> String {
+        encode(&serde_json::from_str::<Value>(text).unwrap())
+    }
+
     #[test]
-    fn integers_beyond_u64_use_the_f64_approximation() {
-        // Documented domain limit (module docs): no arbitrary_precision.
-        let v: Value = serde_json::from_str("18446744073709551617").unwrap();
-        assert_eq!(encode(&v), "18446744073709552000");
+    fn integers_beyond_u64_keep_every_digit() {
+        assert_eq!(
+            parsed(r#"{"n": 123456789012345678901234567890}"#),
+            "n: 123456789012345678901234567890"
+        );
+        assert_eq!(parsed("18446744073709551617"), "18446744073709551617");
+        assert_eq!(parsed("-18446744073709551617"), "-18446744073709551617");
         assert_eq!(encode(&json!(u64::MAX)), "18446744073709551615");
+        assert_eq!(encode(&json!(i64::MIN)), "-9223372036854775808");
+    }
+
+    #[test]
+    fn parsed_numbers_are_canonicalized_from_their_exact_text() {
+        assert_eq!(parsed("1.50"), "1.5");
+        assert_eq!(parsed("1.0"), "1");
+        assert_eq!(parsed("-0"), "0");
+        assert_eq!(parsed("-0.0e5"), "0");
+        assert_eq!(parsed("1E6"), "1000000");
+        assert_eq!(parsed("-1E+03"), "-1000");
+        assert_eq!(parsed("1e-06"), "0.000001");
+        assert_eq!(parsed("0.000123e2"), "0.0123");
+        assert_eq!(parsed("12.5e-1"), "1.25");
+        assert_eq!(parsed("1.5e20"), "150000000000000000000");
+        // Beyond f64's precision: lossless rather than rounded.
+        assert_eq!(
+            parsed("0.1000000000000000000000001"),
+            "0.1000000000000000000000001"
+        );
+        assert_eq!(
+            parsed("3.141592653589793238462643383279"),
+            "3.141592653589793238462643383279"
+        );
+    }
+
+    #[test]
+    fn out_of_range_non_integer_literals_use_exponent_form() {
+        // Spec §2: outside [1e-6, 1e21) an encoder MAY use JSON exponent
+        // form (lowercase e, explicit sign). Values f64 cannot hold stay
+        // exact instead of overflowing to null.
+        assert_eq!(parsed("1e400"), "1e+400");
+        assert_eq!(parsed("-2.50e-400"), "-2.5e-400");
+        assert_eq!(parsed("1.5e21"), "1.5e+21");
+        assert_eq!(parsed("1.23e-7"), "1.23e-7");
+        assert_eq!(parsed("10e20"), "1e+21");
+        assert_eq!(
+            parsed("1e999999999999999999999"),
+            "1e+999999999999999999999"
+        );
+        // Exponent beyond i128: kept verbatim, sign made explicit.
+        let huge = format!("2.5E{}", "9".repeat(40));
+        assert_eq!(canonical_number(&huge), format!("2.5e+{}", "9".repeat(40)));
     }
 
     #[test]

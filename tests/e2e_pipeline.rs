@@ -77,6 +77,25 @@ fn ndjson_is_encoded_as_one_array() {
     assert!(out.contains("39,running,us-east-1a"), "{out}");
 }
 
+#[test]
+fn json_numbers_reach_toon_exactly() {
+    // serde_json's arbitrary_precision: no f64 rounding on the way through.
+    let state = tempfile::tempdir().unwrap();
+    // NDJSON large enough for the TOON table to beat the raw_log footer.
+    let script = r#"i=10; while [ $i -lt 50 ]; do echo "{\"id\": 1234567890123456789012345678$i, \"ratio\": 1.50, \"tiny\": 1e-400, \"zero\": -0}"; i=$((i+1)); done"#;
+    let a = cartoon(state.path())
+        .args(["sh", "-c", script])
+        .assert()
+        .success();
+    let (out, _) = out_of(&a);
+    assert!(out.contains("[40]{id,ratio,tiny,zero}:"), "{out}");
+    assert!(
+        out.contains("\n  123456789012345678901234567810,1.5,1e-400,0\n"),
+        "{out}"
+    );
+    assert!(out.contains("123456789012345678901234567849,1.5"), "{out}");
+}
+
 // §1.2 ---------------------------------------------------------------------
 
 fn pytest_project(dir: &Path, body: &str) {
