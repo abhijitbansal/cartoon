@@ -169,20 +169,36 @@ Behaviour changes to note in the changelog:
 - **Unknown cartoon flags** are an error (exit 2), not "command not found".
 - **npm platform packages** moved to the `@cartoon-wrap/` scope.
 
+### Second pass (2026-10-05): the open items
+
+Done on the same branch. CI is re-enabled and green; `cargo test` passes 853 tests with 0 failures.
+- **npm:** no org needed after all. The four existing unscoped platform packages stay; only Windows gets a new name, `cartoon-wrap-windows-x64`.
+- **TOON numbers are exact:** `arbitrary_precision` is on, and numbers are canonicalized from their JSON text (`123456789012345678901234567890`, `1e+400`, `-0` → `0`).
+- **`--merge-streams`:** compresses stdout+stderr as one text in arrival order, written to stdout. The hook's rewrite turns it on, since agent shells show stdout before stderr.
+- **`cartoon last` / `cartoon diff`:**
+  - Adapter reports are stored as `report.json`.
+  - Diff reports fixed / still failing / new failures. If the re-run executed fewer tests, the missing ones are listed as `fixed_or_not_run`.
+  - Wrapped runs end with a `vs_previous` footer.
+- **`cartoon mcp`:** a stdio MCP server with the tools `run`, `logs_grep`, `logs_list`, `last`, `diff` and `stats`.
+- **New adapters:**
+  - gradle and maven: harvest JUnit reports, nothing injected;
+  - `dotnet test`: TRX;
+  - golangci-lint: v1 and v2 JSON;
+  - `npm|pnpm|yarn|bun` test scripts that run jest or vitest.
+
+  That makes 24 adapters. The hook now also wraps `npm t`, `npm|pnpm|yarn run test` and `mvnw`. golangci-lint stays prompt-only, because its config can load plugins.
+- **Homebrew:** an in-repo tap (`Formula/cartoon.rb`). `release.yml` regenerates it through a PR.
+- **Plugin `SessionStart` hook:** says once when the binary is missing or older than the plugin.
+- **`benchmarks/agent_bench`:** a fix-rate harness that runs `claude -p` with and without cartoon. Tasks are verified; it has not been run, because running it starts paid agent sessions.
+
 Still open:
 - **Maintainer actions:**
-  - re-enable the `ci` workflow in the Actions UI;
-  - create the `@cartoon-wrap` npm org, bootstrap-publish the scoped packages and configure trusted publishing;
-  - cut a release (the glibc/musl and npm fixes only reach users then);
-  - bump the version (still 0.6.0; given the behaviour changes, 0.7.0).
-- **Partial:**
-  - TOON integers beyond u64 are emitted as their f64 approximation, because serde_json's `arbitrary_precision` feature isn't enabled.
-  - Transformed (non-passthrough) output is still written stdout first, then stderr; arrival order is preserved only in `--raw` and passthrough.
-- **Product items from §8, not started:**
-  - `cartoon last`/`diff`;
-  - `cartoon mcp`;
-  - gradle/maven surefire auto-harvest, `dotnet test`, `golangci-lint`;
-  - `npm run test` resolution;
-  - a Homebrew tap;
-  - a SessionStart "binary missing" plugin hook;
-  - an agent-task (fix-rate) benchmark.
+  - publish `cartoon-wrap-windows-x64` once by hand, then configure its Trusted Publisher;
+  - enable "Allow GitHub Actions to create and approve pull requests" for the Homebrew formula PR;
+  - bump the version (still 0.6.0; given the behaviour changes, 0.7.0) and cut a release;
+  - run `benchmarks/agent_bench` when paid sessions are acceptable.
+- **Known limits:**
+  - In a terminal, `npm test` with a bare `vitest` script is left in watch mode (cartoon doesn't inject `--run`).
+  - Microsoft.Testing.Platform `dotnet test` is not supported.
+  - The 0.6.0 Homebrew Linux bottles are glibc-2.39 builds until the next release.
+  - An MCP `run` cancelled within milliseconds of spawning can leave the command running.
