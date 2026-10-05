@@ -141,7 +141,7 @@ the hook) can't see surrounding pipes, so keep them to tools you run bare.
 
 `cartoon mcp` serves cartoon over the Model Context Protocol (stdio): a
 `run` tool that behaves exactly like `cartoon -c '<command>'`, plus
-`logs_grep`, `logs_list` and `stats`.
+`logs_grep`, `logs_list`, `last`, `diff` and `stats`.
 
 ```bash
 claude mcp add cartoon -- cartoon mcp                          # Claude Code

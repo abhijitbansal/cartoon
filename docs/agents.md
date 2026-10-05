@@ -136,6 +136,8 @@ binary).
 | `run` | `{command, cwd?, timeout_s?, compress?, max_tokens?}` → cartoon's compact report, stderr labelled, then `exit_code: N` | `cartoon -c '<command>'` |
 | `logs_grep` | `{pattern, run_id?, context?}` → matching raw-log lines (default: last run) | `cartoon logs grep` |
 | `logs_list` | `{tag?, limit?}` → recent runs: id, command, adapter, exit | `cartoon logs` |
+| `last` | `{cmd?}` → the newest run's report, without re-running | `cartoon last` |
+| `diff` | `{cmd?, id_a?, id_b?}` → fixed / still failing / new since the previous run | `cartoon diff` |
 | `stats` | `{since?}` → tokens saved per adapter | `cartoon stats` |
 
 A failing test run is a normal result (`isError: false`) whose text ends in
@@ -149,7 +151,7 @@ archives) what was printed, marked `timed_out: true`; anything still alive
 > privileges — that is its purpose. The only gate is your MCP client's tool
 > approval prompt; cartoon adds no allowlist and no auto-approval of its
 > own. Don't put `run` on an "always allow" list you wouldn't give a plain
-> shell tool. `logs_grep`, `logs_list` and `stats` are read-only.
+> shell tool. `logs_grep`, `logs_list`, `last`, `diff` and `stats` are read-only.
 
 Register it (the binary must be on `PATH`, or give its absolute path):
 

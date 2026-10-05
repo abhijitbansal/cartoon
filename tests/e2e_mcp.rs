@@ -138,7 +138,10 @@ fn initialize_and_list_tools() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["run", "logs_grep", "logs_list", "stats"]);
+    assert_eq!(
+        names,
+        ["run", "logs_grep", "logs_list", "last", "diff", "stats"]
+    );
     assert_eq!(s.request(2, "ping", json!({}))["result"], json!({}));
     assert_eq!(
         s.request(3, "prompts/list", json!({}))["error"]["code"],
@@ -207,6 +210,16 @@ fn run_failing_pytest_gets_the_adapter_report_then_grep_the_raw_log() {
 
     let r = s.call(4, "stats", json!({}));
     assert!(text(&r).contains("pytest"), "{r}");
+
+    let r = s.call(5, "last", json!({}));
+    assert!(text(&r).contains("test_sample.py::test_fail"), "{r}");
+    // One run only: nothing to compare yet, reported as a tool error.
+    let r = s.call(6, "diff", json!({}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    let r = s.call(7, "run", json!({"command": "pytest", "cwd": proj.path()}));
+    assert!(text(&r).contains("still 1"), "{r}");
+    let r = s.call(8, "diff", json!({}));
+    assert!(text(&r).contains("still_failing[1]"), "{r}");
     s.finish();
 }
 

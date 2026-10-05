@@ -115,6 +115,42 @@ pub fn definitions() -> Value {
             }
         },
         {
+            "name": "last",
+            "title": "Re-read the last report",
+            "description": "Re-show the newest archived run's report without re-running it (like `cartoon last`). Optional `cmd` picks the newest run whose command contains that substring.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "cmd": { "type": "string", "description": "Only runs whose command contains this substring." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Re-read the last report",
+                "readOnlyHint": true,
+                "openWorldHint": false
+            }
+        },
+        {
+            "name": "diff",
+            "title": "What changed since the previous run",
+            "description": "Compare the newest run with the previous run of the same command in the same directory (like `cartoon diff`): fixed, still failing and new failures. Pass both `id_a` and `id_b` to compare two specific runs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "cmd": { "type": "string", "description": "Only runs whose command contains this substring." },
+                    "id_a": { "type": "string", "description": "Older run id (with id_b)." },
+                    "id_b": { "type": "string", "description": "Newer run id (with id_a)." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "What changed since the previous run",
+                "readOnlyHint": true,
+                "openWorldHint": false
+            }
+        },
+        {
             "name": "stats",
             "title": "Token savings",
             "description": "Tokens saved by cartoon-wrapped runs, per adapter, from the local ledger (like `cartoon stats`).",
@@ -135,7 +171,10 @@ pub fn definitions() -> Value {
 }
 
 pub fn exists(name: &str) -> bool {
-    matches!(name, "run" | "logs_grep" | "logs_list" | "stats")
+    matches!(
+        name,
+        "run" | "logs_grep" | "logs_list" | "last" | "diff" | "stats"
+    )
 }
 
 /// A successful (`isError: false`) or failed tool result with one text block.
@@ -175,6 +214,31 @@ pub fn call(name: &str, args: &Value, exe: &Path, cancel: &AtomicBool) -> Result
             let tag = opt_str(args, "tag")?;
             let limit = opt_u64(args, "limit")?.unwrap_or(DEFAULT_LIST_LIMIT).max(1) as usize;
             Ok(text_result(logs_list(tag, limit), false))
+        }
+        "last" => {
+            let cmd = opt_str(args, "cmd")?;
+            let Some(root) = crate::paths::runs_dir() else {
+                return Ok(text_result("no state directory".into(), true));
+            };
+            Ok(match crate::last::render_last(&root, cmd) {
+                Some(text) => text_result(text.trim_end().to_string(), false),
+                None => text_result("no archived run matches".into(), true),
+            })
+        }
+        "diff" => {
+            let cmd = opt_str(args, "cmd")?;
+            let ids = match (opt_str(args, "id_a")?, opt_str(args, "id_b")?) {
+                (Some(a), Some(b)) => Some((a.to_string(), b.to_string())),
+                (None, None) => None,
+                _ => return Err(RpcError::invalid_params("`id_a` and `id_b` go together")),
+            };
+            let Some(root) = crate::paths::runs_dir() else {
+                return Ok(text_result("no state directory".into(), true));
+            };
+            Ok(match crate::last::render_diff(&root, ids, cmd) {
+                Ok(text) => text_result(text.trim_end().to_string(), false),
+                Err(msg) => text_result(msg, true),
+            })
         }
         "stats" => {
             let since = opt_str(args, "since")?;
