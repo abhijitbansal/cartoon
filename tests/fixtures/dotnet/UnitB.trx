@@ -1,0 +1,67 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="3e8ec9ac-e1bc-4803-b3d2-c322caa8c3bf" name="@vm 2026-10-05 22:49:28" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-05T22:49:28.9810764+00:00" queuing="2026-10-05T22:49:28.9810765+00:00" start="2026-10-05T22:49:25.7500515+00:00" finish="2026-10-05T22:49:29.0196372+00:00" />
+  <TestSettings name="default" id="0b4e510a-6f79-4c87-888a-52b9bad6ad27">
+    <Deployment runDeploymentRoot="_vm_2026-10-05_22_49_28" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="4211dd7e-5f8f-43da-b66a-ee9492256f1c" testId="a20f1cc2-d790-b6df-3a26-0210c6eb7d61" testName="UnitB.StringTests.Lower" computerName="vm" duration="00:00:00.0237826" startTime="2026-10-05T22:49:28.5851563+00:00" endTime="2026-10-05T22:49:28.5851838+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4211dd7e-5f8f-43da-b66a-ee9492256f1c">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure
+          ↓ (pos 0)
+Expected: abc
+Actual:   ABC
+          ↑ (pos 0)</Message>
+          <StackTrace>   at UnitB.StringTests.Lower() in /home/dev/dn/UnitB/UnitTest1.cs:line 14
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="c41a7608-55c6-4b3c-85a0-178466be6ccb" testId="a973a092-bcee-e1d5-7393-aa8b75f28aff" testName="UnitB.StringTests.Upper" computerName="vm" duration="00:00:00.0011551" startTime="2026-10-05T22:49:28.6104640+00:00" endTime="2026-10-05T22:49:28.6104641+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c41a7608-55c6-4b3c-85a0-178466be6ccb" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="UnitB.StringTests.Lower" storage="/home/dev/dn/unitb/bin/debug/net8.0/unitb.dll" id="a20f1cc2-d790-b6df-3a26-0210c6eb7d61">
+      <Execution id="4211dd7e-5f8f-43da-b66a-ee9492256f1c" />
+      <TestMethod codeBase="/home/dev/dn/UnitB/bin/Debug/net8.0/UnitB.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitB.StringTests" name="Lower" />
+    </UnitTest>
+    <UnitTest name="UnitB.StringTests.Upper" storage="/home/dev/dn/unitb/bin/debug/net8.0/unitb.dll" id="a973a092-bcee-e1d5-7393-aa8b75f28aff">
+      <Execution id="c41a7608-55c6-4b3c-85a0-178466be6ccb" />
+      <TestMethod codeBase="/home/dev/dn/UnitB/bin/Debug/net8.0/UnitB.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitB.StringTests" name="Upper" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="a20f1cc2-d790-b6df-3a26-0210c6eb7d61" executionId="4211dd7e-5f8f-43da-b66a-ee9492256f1c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a973a092-bcee-e1d5-7393-aa8b75f28aff" executionId="c41a7608-55c6-4b3c-85a0-178466be6ccb" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="2" executed="2" passed="1" failed="1" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.4.5+1caef2f33e (64-bit .NET 8.0.31)
+[xUnit.net 00:00:01.01]   Discovering: UnitB
+[xUnit.net 00:00:01.20]   Discovered:  UnitB
+[xUnit.net 00:00:01.22]   Starting:    UnitB
+[xUnit.net 00:00:01.74]       Assert.Equal() Failure
+[xUnit.net 00:00:01.74]                 ↓ (pos 0)
+[xUnit.net 00:00:01.74]       Expected: abc
+[xUnit.net 00:00:01.74]       Actual:   ABC
+[xUnit.net 00:00:01.74]                 ↑ (pos 0)
+[xUnit.net 00:00:01.74]       Stack Trace:
+[xUnit.net 00:00:01.74]         /home/dev/dn/UnitB/UnitTest1.cs(14,0): at UnitB.StringTests.Lower()
+[xUnit.net 00:00:01.74]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:01.74]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:01.83]   Finished:    UnitB
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="vm" outcome="Error" timestamp="2026-10-05T22:49:28.6216574+00:00">
+        <Text>[xUnit.net 00:00:01.74]     UnitB.StringTests.Lower [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

@@ -1,0 +1,45 @@
+
+5 tests completed, 3 failed, 1 skipped
+/home/dev/gr/lib/src/test/java/demo/Broken.java:3: error: incompatible types: String cannot be converted to int
+  int x = "s";
+          ^
+/home/dev/gr/lib/src/test/java/demo/Broken.java:4: error: cannot find symbol
+  void f() { undefinedCall(); }
+             ^
+  symbol:   method undefinedCall()
+  location: class Broken
+2 errors
+
+FAILURE: Build completed with 2 failures.
+
+1: Task failed with an exception.
+-----------
+* What went wrong:
+Execution failed for task ':app:test'.
+> There were failing tests. See the report at: file:///home/dev/gr/app/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights.
+==============================================================================
+
+2: Task failed with an exception.
+-----------
+* What went wrong:
+Execution failed for task ':lib:compileTestJava'.
+> Compilation failed; see the compiler output below.
+  /home/dev/gr/lib/src/test/java/demo/Broken.java:3: error: incompatible types: String cannot be converted to int
+    int x = "s";
+            ^
+  /home/dev/gr/lib/src/test/java/demo/Broken.java:4: error: cannot find symbol
+    void f() { undefinedCall(); }
+               ^
+    symbol:   method undefinedCall()
+    location: class Broken
+  2 errors
+
+* Try:
+> Check your code and dependencies to fix the compilation error(s)
+> Run with --scan to get full insights.
+==============================================================================
+
+BUILD FAILED in 3s

@@ -580,15 +580,20 @@ decision, not cartoon's.
 | phpunit | `phpunit`, `vendor/bin/phpunit` | injected `--log-junit` |
 | rspec | `rspec`, `bundle exec rspec` | injected `--format json --out <file>` |
 | swiftlint | `swiftlint`, `swiftlint lint` (never `--fix`/`autocorrect`) | injected `--reporter json` |
+| gradle | `gradle`/`./gradlew` `test`, `check`, `build`, `*Test` tasks (not `--continuous`) | nothing injected: the `build/test-results/**/TEST-*.xml` files this run wrote (every module), plus javac/kotlinc errors and failed tasks from the console |
+| maven | `mvn`/`./mvnw` `test`, `verify`, `package`, `install` (not `-DskipTests`) | nothing injected: the `target/{surefire,failsafe}-reports/TEST-*.xml` files this run wrote (every module), plus compiler errors and failed goals |
+| dotnet-test | `dotnet test` (VSTest; not Microsoft.Testing.Platform) | injected `--logger trx --results-directory <temp>` (a user's own trx logger / results directory is kept), one `.trx` per test project, plus MSBuild errors |
+| golangci-lint | `golangci-lint run` | injected `--output.json.path=stdout` (v2) or `--out-format json` (v1), picked by `--version` |
+| pkg-script | `npm test`, `npm run test`, `pnpm test`, `yarn test`, `bun run test` when package.json's `test` script is a plain `jest …` / `vitest …` (no `&&`, pipes, quotes, `pretest`/`posttest`; a bare `vitest` only when it would not watch) | the jest / vitest adapter's flags, forwarded to the script (after `--` for npm) |
 
 No adapter match → content sniffing (xcodebuild / XCTest / JUnit shapes) →
 JSON auto-detection → compression ladder (safe tier by default, aggressive
 opt-in) → passthrough when nothing pays for itself. Hook-allowlisted tools
-with no adapter (`make`, `gradle`, `mvn`, `dotnet`, `npm test`, …) get the
-ladder only; `cartoon doctor` lists them.
+with no adapter (`make`, `dotnet build`, `bun test`, an `npm test` whose
+script is not plain jest/vitest, …) get the ladder only; `cartoon doctor`
+lists them.
 
-Want another runner (`dotnet test`, `bun test`, `deno test`, gradle/maven
-without `--junit`, ...)? See [CONTRIBUTING.md](CONTRIBUTING.md) — adapters
+Want another runner (`bun test`, `deno test`, ...)? See [CONTRIBUTING.md](CONTRIBUTING.md) — adapters
 are one trait impl + fixtures.
 The roadmap lives in
 [docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md](docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md).

@@ -1,11 +1,17 @@
 pub mod cargo_build;
 pub mod cargo_test;
 pub mod diagnostics;
+pub mod dotnet_test;
 pub mod eslint;
 pub mod go_test;
+pub mod golangci_lint;
+pub mod gradle;
 pub mod jest;
+pub mod jvm_reports;
+pub mod maven;
 pub mod mypy;
 pub mod phpunit;
+pub mod pkg_script;
 pub mod pre_commit;
 pub mod pytest;
 pub mod report;
@@ -132,6 +138,11 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(phpunit::Phpunit),
         Box::new(rspec::Rspec),
         Box::new(swiftlint::Swiftlint),
+        Box::new(gradle::Gradle),
+        Box::new(maven::Maven),
+        Box::new(dotnet_test::DotnetTest),
+        Box::new(golangci_lint::GolangciLint),
+        Box::new(pkg_script::PkgScript),
     ]
 }
 
@@ -504,6 +515,11 @@ mod tests {
                 "phpunit",
                 "rspec",
                 "swiftlint",
+                "gradle",
+                "maven",
+                "dotnet-test",
+                "golangci-lint",
+                "pkg-script",
             ]
         );
     }
