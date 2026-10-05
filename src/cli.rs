@@ -17,6 +17,9 @@ use clap::Parser;
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
   learn [--since <7d|24h|30m>]               config suggestions from your runs
+  last [--cmd <substring>]                   re-show the newest run's report
+  diff [<id-a> <id-b>] [--cmd <substring>]   fixed / still failing / new
+                                             failures vs the previous run
   hook (install|uninstall|status|rewrite)    agent auto-wrap hook
                                              (Claude Code, Copilot CLI,
                                              VS Code Copilot Chat)
@@ -40,8 +43,9 @@ progress, duplicate and blank collapse — non-lossy in practice);
 
 `stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, `shim`, \
 `instructions`, and `ingest` are reserved words (each takes --help); to wrap a \
-binary literally named `stats`, use: cartoon env stats. A command whose name \
-starts with `-` goes after `--`: cartoon -- --weird-bin"
+binary literally named `stats`, use: cartoon env stats. `last` and `diff` are \
+reserved only in the forms above (`cartoon diff a.txt b.txt` wraps diff). A \
+command whose name starts with `-` goes after `--`: cartoon -- --weird-bin"
 )]
 pub struct Cli {
     /// Compression level for non-adapter output: safe (default) | aggressive
@@ -133,6 +137,15 @@ pub enum Mode {
         compress: Option<String>,
         tags: Vec<String>,
         max_tokens: Option<usize>,
+    },
+    /// `cartoon last [--cmd <s>]`: re-show the newest archived run's report.
+    Last {
+        cmd: Option<String>,
+    },
+    /// `cartoon diff [<id-a> <id-b>] [--cmd <s>]`: compare two runs' reports.
+    Diff {
+        ids: Option<(String, String)>,
+        cmd: Option<String>,
     },
     /// `<subcommand> --help`: print this usage and exit 0 without running.
     Help(&'static str),
@@ -340,6 +353,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
     if let Some(text) = subcommand_help(&cli.command) {
         return Ok(Mode::Help(text));
     }
+    if let Some(m) = parse_last_diff(&cli.command) {
+        return Ok(m);
+    }
     match cli.command[0].as_str() {
         "stats" => Ok(Mode::Stats {
             since: parse_since(&cli.command[1..], STATS_USAGE)?,
@@ -398,6 +414,30 @@ fn parse_since(args: &[String], usage: &'static str) -> anyhow::Result<Option<St
     }
 }
 
+/// `last [--cmd <s>]`, `diff [--cmd <s>]`, `diff <run-id> <run-id>`; None
+/// for any other shape (so `cartoon diff a.txt b.txt` wraps the system diff).
+fn parse_last_diff(command: &[String]) -> Option<Mode> {
+    let (sub, rest) = command.split_first()?;
+    if sub != "last" && sub != "diff" {
+        return None;
+    }
+    let cmd = match rest {
+        [] => None,
+        [flag, s] if flag == "--cmd" => Some(s.clone()),
+        [a, b] if sub == "diff" && [a, b].iter().all(|x| crate::archive::looks_like_run_id(x)) => {
+            return Some(Mode::Diff {
+                ids: Some((a.clone(), b.clone())),
+                cmd: None,
+            })
+        }
+        _ => return None,
+    };
+    Some(match sub.as_str() {
+        "last" => Mode::Last { cmd },
+        _ => Mode::Diff { ids: None, cmd },
+    })
+}
+
 const STATS_USAGE: &str = "usage: cartoon stats [--since <e.g. 7d|24h|30m>]";
 const LEARN_USAGE: &str = "usage: cartoon learn [--since <e.g. 7d|24h|30m>]";
 const INGEST_USAGE: &str =
@@ -454,6 +494,21 @@ fn help_text(sub: &str) -> Option<&'static str> {
             "       cartoon instructions (status | print)\n\n",
             "Write the wrap/never-pipe directive into CLAUDE.md if present, else\n",
             "AGENTS.md (or the file the flag names)."
+        ),
+        "last" => concat!(
+            "usage: cartoon last [--cmd <substring>]\n\n",
+            "Re-show the newest archived run's report (or, for a run no adapter\n",
+            "parsed, a short summary and its raw_log path) without re-running it.\n",
+            "--cmd picks the newest run whose command contains <substring>."
+        ),
+        "diff" => concat!(
+            "usage: cartoon diff [--cmd <substring>]\n",
+            "       cartoon diff <id-a> <id-b>\n\n",
+            "Compare the newest adapter run (test/lint/build) with the previous run\n",
+            "of the same command in the same directory, or run <id-a> with <id-b>:\n",
+            "fixed, still_failing and new_failures. Tests match by id; diagnostics\n",
+            "by file + rule + message (line numbers shift as you edit). Exits 0, or\n",
+            "1 when there is no comparable pair. Other args wrap the system diff."
         ),
         "ingest" => concat!(
             "usage: cartoon [--compress <level>] [--max-tokens <n>] [--tag <t>] ingest (<file> | -)\n",
@@ -999,6 +1054,58 @@ mod tests {
             mode(&["cartoon", "logs", "grep", "-h"]),
             Mode::Logs(LogsQuery::Grep { ref pattern, .. }) if pattern == "-h"
         ));
+    }
+
+    #[test]
+    fn last_and_diff_parse_only_their_query_forms() {
+        assert_eq!(mode(&["cartoon", "last"]), Mode::Last { cmd: None });
+        assert_eq!(
+            mode(&["cartoon", "last", "--cmd", "pytest"]),
+            Mode::Last {
+                cmd: Some("pytest".into())
+            }
+        );
+        assert_eq!(
+            mode(&["cartoon", "diff"]),
+            Mode::Diff {
+                ids: None,
+                cmd: None
+            }
+        );
+        assert_eq!(
+            mode(&["cartoon", "diff", "--cmd", "ruff"]),
+            Mode::Diff {
+                ids: None,
+                cmd: Some("ruff".into())
+            }
+        );
+        assert_eq!(
+            mode(&[
+                "cartoon",
+                "diff",
+                "20261005-100000-0001",
+                "20261005-100003-00ab"
+            ]),
+            Mode::Diff {
+                ids: Some(("20261005-100000-0001".into(), "20261005-100003-00ab".into())),
+                cmd: None
+            }
+        );
+        // Anything else is the system tool, wrapped as before.
+        assert!(matches!(
+            mode(&["cartoon", "diff", "a.txt", "b.txt"]),
+            Mode::Wrap { ref argv, .. } if *argv == sv(&["diff", "a.txt", "b.txt"])
+        ));
+        assert!(matches!(
+            mode(&["cartoon", "last", "-n", "5"]),
+            Mode::Wrap { .. }
+        ));
+        for sub in ["last", "diff"] {
+            assert!(matches!(
+                mode(&["cartoon", sub, "--help"]),
+                Mode::Help(t) if t.contains(&format!("cartoon {sub}"))
+            ));
+        }
     }
 
     #[test]
