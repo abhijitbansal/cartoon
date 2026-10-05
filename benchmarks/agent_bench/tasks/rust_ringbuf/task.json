@@ -1,0 +1,7 @@
+{
+  "description": "Rust: RingBuffer::get() forgets the modulo after wraparound (index panics); cargo test, 12 tests, 6 failing",
+  "prompt": "`cargo test` fails in this crate. Run it to see the failures, then fix the bug in src/. Do not modify tests/ or Cargo.toml. You are done when `cargo test` passes.",
+  "check": "cargo test --offline --quiet",
+  "protected": ["tests", "Cargo.toml"],
+  "requires": ["cargo"]
+}

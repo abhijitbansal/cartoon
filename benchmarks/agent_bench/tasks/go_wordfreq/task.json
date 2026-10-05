@@ -1,0 +1,7 @@
+{
+  "description": "Go: TopN() breaks count ties reverse-alphabetically; go test, 3 tests / 15 subtests, 4 failing",
+  "prompt": "`go test ./...` fails in this module. Run it to see the failures, then fix the bug in the non-test code. Do not modify *_test.go files or go.mod. You are done when `go test ./...` passes.",
+  "check": "go test -count=1 ./...",
+  "protected": ["wordfreq_test.go", "go.mod"],
+  "requires": ["go"]
+}

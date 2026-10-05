@@ -6,7 +6,13 @@ must_survive = [
   "mismatched types",
   "borrow of moved value: `s`",
   "error: could not compile `cartoon-fixture-proj` (lib) due to 3 previous errors",
+  "help: a local variable with a similar name exists",
+  "expected `u8`, found `&str`",
 ]
 # Measured 2026-06-11: safe 0.002, aggressive 0.615 (rustc block extraction).
+# 2026-10-02: aggressive 0.456. The table now carries each block's primary
+# span label and its help:/note: lines (the review found them dropped), and
+# TOON spec 4.1 quotes `error[E0425]` (brackets). Floor lowered for that
+# signal; the remaining elision is snippet scaffolding only.
 min_reduction_safe = 0.0
-min_reduction_aggressive = 0.55
+min_reduction_aggressive = 0.42

@@ -3,7 +3,9 @@
 **Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-~70%+ fewer tokens on test runs.
+far fewer tokens: 43–89% less than a verbose test run in the
+[benchmark](benchmarks/README.md) (~70% is the rough average; against
+already-quiet flags like `pytest -q` the gain is small).
 
 A cartoon is a compressed rendering of reality. So is this.
 
@@ -19,8 +21,31 @@ tracebacks — and drops the rest.
 ```bash
 uv tool install cartoon        # or: pipx install cartoon
 npm install -g cartoon-wrap    # installs the `cartoon` binary
-cargo install cartoon
+cargo install cartoon          # build from source
+cargo binstall cartoon         # prebuilt binary via cargo-binstall
+brew tap abhijitbansal/cartoon https://github.com/abhijitbansal/cartoon
+brew install cartoon           # macOS / Linux Homebrew (this repo is the tap)
+curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh
 ```
+
+Prebuilt binaries cover Linux (x86_64, aarch64), macOS (x86_64, arm64) and
+Windows (x86_64). The Linux binaries are static (musl), so they run on any
+distro: old glibc, Alpine, `python:*` images. PyPI also ships an sdist, so
+`pip` builds from source (needs a Rust toolchain) where no wheel fits.
+
+`install.sh` puts the binary in `~/.local/bin` (override with
+`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.7.0`) after
+checking it against the release's `SHA256SUMS`. Release tarballs also carry
+build provenance: `gh attestation verify cartoon-<target>.tar.gz -R
+abhijitbansal/cartoon`.
+
+The Homebrew formula lives in this repo (`Formula/cartoon.rb`) and installs
+the release tarballs; the tap needs its URL because the repo isn't named
+`homebrew-cartoon`. Upgrade with `brew upgrade cartoon`.
+
+The Claude Code plugin's hooks need the binary. Without it, the plugin tells
+the agent once per version (SessionStart) how to install it, and it hints
+when the binary is older than the plugin.
 
 ## For agents (Claude Code, Codex, Copilot, Cursor, …)
 
@@ -122,6 +147,22 @@ Activate for the non-interactive shells agents spawn with
 `CARTOON_NO_SHIM=1`. Shims wrap the same allowlist as the hook, but (unlike
 the hook) can't see surrounding pipes, so keep them to tools you run bare.
 
+### No hook? MCP server (Cursor, Codex, Windsurf, Claude Desktop)
+
+`cartoon mcp` serves cartoon over the Model Context Protocol (stdio): a
+`run` tool that behaves exactly like `cartoon -c '<command>'`, plus
+`logs_grep`, `logs_list`, `last`, `diff` and `stats`.
+
+```bash
+claude mcp add cartoon -- cartoon mcp                          # Claude Code
+# Cursor / Claude Desktop / Windsurf: {"mcpServers": {"cartoon": {"command": "cartoon", "args": ["mcp"]}}}
+# Codex (~/.codex/config.toml): [mcp_servers.cartoon] command = "cartoon", args = ["mcp"]
+```
+
+`run` executes arbitrary shell commands; your client's tool-approval prompt
+is the only gate. Config locations, timeouts and the tool reference:
+[docs/agents.md](docs/agents.md#no-hook-mcp-server-cursor-codex-windsurf-claude-desktop).
+
 ### Copilot tips & limitations
 
 Tips:
@@ -152,7 +193,7 @@ Limitations:
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
 `mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
-`npm test|ci`, …), including those run through uv (`uv run pytest`,
+`npm test|t|ci`, `npm|pnpm|yarn run test`, `mvnw test`, …), including those run through uv (`uv run pytest`,
 `uvx ruff check`, `uv run -m pytest`). Because a rewrite auto-approves the
 call, the allowlist is deliberately conservative: infra CLIs (docker,
 kubectl, terraform, gh, aws) and mutating subcommands (`cargo publish`,
@@ -162,11 +203,11 @@ change shell state (`cd`, `export`, `source`) pass through untouched, and
 anything unrecognized is left alone (fail-open). The net-savings guard
 still applies — worst case the output is byte-identical.
 
-### What the hook will not auto-approve (0.6.0)
+### What the hook will not auto-approve (0.7.0)
 
 Because a rewrite is emitted with `permissionDecision: "allow"`, the
-allowlist tightened in 0.6.0 — some previously auto-approved commands now
-reach your normal permission prompt instead:
+allowlist is deliberately narrow; anything below reaches your normal
+permission prompt instead (0.7.0 tightened it further — marked *new*):
 
 - A leading `NAME=value` prefix rides along only for benign names (`CI`,
   `RUST_LOG`, `NO_COLOR`, …). `PATH=… pytest`, `LD_PRELOAD=… cargo test`,
@@ -174,8 +215,18 @@ reach your normal permission prompt instead:
 - `ruff` is gated to `ruff check`; `ruff format`, `--fix`, `eslint --fix`,
   `eslint -c <path>`, `swiftlint --fix` / `autocorrect` are never wrapped.
 - `npx`/`bunx`/`pnpx` launch only `jest`, `vitest`, `tsc`, `eslint`.
-- `make` and `pre-commit` stay allowlisted by explicit decision: they are
-  the canonical dev-loop entry points and the agent already has write
+- *new:* flags that load or run code from outside the project are refused
+  per tool: `go test -exec/-toolexec`, `cargo --config/-Z/+toolchain`,
+  `make -f/-C/NAME=value`, `jest|vitest --config/--setupFiles…`,
+  `pytest -p <plugin>/-c/--rootdir`, `mypy --config-file`,
+  `gradle -I/-D/-P`, `mvn -s/-f`, `dotnet -p:` and the like.
+- *new:* `..` paths or absolute paths outside the project, `;`/`|`/`||`
+  compounds, and anything with `$`, backticks, backslashes or globs are
+  never rewritten (only `&&` compounds of eligible commands are).
+- *new:* `PYTEST_ADDOPTS=…` no longer rides along; `pre-commit` is
+  wrapped for `run` only.
+- `make` and `pre-commit run` stay allowlisted by explicit decision: they
+  are the canonical dev-loop entry points and the agent already has write
   access to the repo. Install with `--deny` if you disagree.
 - `cartoon hook install --deny` on an existing install switches the mode
   in place (and back without the flag).
@@ -223,9 +274,12 @@ cartoon --tag api pytest       # tag the archived run
 cartoon logs                   # list archived raw logs
 cartoon logs --last --stdout   # full raw output of the newest run
 cartoon logs grep ERROR --last # search a raw log instead of re-reading it
+cartoon last                   # re-show the newest run's report, no re-run
+cartoon diff                   # fixed / still failing / new vs the previous run
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
 cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
+cartoon --merge-streams make         # stdout+stderr compressed in arrival order, on stdout
 cartoon -c 'pytest -v | tail -5'     # pure output filters are dropped; the report replaces them
 cartoon doctor                 # health report: hook, config, allowlist gaps, ledger damage
 ```
@@ -258,6 +312,71 @@ in whole lines and the middle is replaced by one marker that is itself a
 ready-to-run `cartoon logs grep` command. Opt-in, because with a ceiling set
 even passthrough output may be cut — that is the point. The raw log is
 archived as always.
+
+### `cartoon last` and `cartoon diff`: the edit → run → fix loop
+
+Each adapter run (tests, lint, typecheck, build) stores its structured report
+next to the raw log. `cartoon last [--cmd <substring>]` re-shows the newest
+run's report without re-running anything (a run no adapter parsed gets a
+short summary and its `raw_log` path). After an edit and a re-run,
+`cartoon diff` compares the newest adapter run with the previous run of the
+same command in the same directory (or `cartoon diff <id-a> <id-b>`):
+
+```text
+command: pytest
+previous:
+  id: 20261005-225301-ae02
+  exit: 1
+  failed: 2
+current:
+  id: 20261005-225302-87f5
+  exit: 1
+  failed: 2
+fixed[1]{id,loc}:
+  "test_loop.py::test_alpha","test_loop.py:1"
+still_failing[1]{id,loc,msg}:
+  "test_loop.py::test_beta","test_loop.py:7","AssertionError: beta is broken"
+new_failures[1]{id,loc,msg}:
+  "test_loop.py::test_gamma","test_loop.py:11","AssertionError: gamma is broken"
+```
+
+Tests match by id; diagnostics by file + rule + message, so a warning that
+only moved lines is not reported as fixed. The re-run itself already ends
+with a one-line `vs_previous: fixed 1; still 1; new 1 (cartoon diff)`
+footer. `diff` exits 0, or 1 when there is no comparable pair. Only these
+forms are reserved: `cartoon diff a.txt b.txt` still wraps the system diff.
+
+### `--merge-streams`: keep stdout/stderr interleaving
+
+By default a transformed run writes its compressed stdout first, then its
+compressed stderr, so a reader of `2>&1` loses where a warning landed among
+the progress lines. `cartoon --merge-streams <cmd>` (or `merge_streams =
+true` under `[compress]` or a `[command.<name>]`; the flag wins, then the
+command entry, then `[compress]`) compresses the two streams **as one text
+in arrival order** and writes the result to **stdout only**:
+
+- **Generic output:** the ladder runs over the combined text and the guard
+  compares against the combined original. A structured rendering of stdout
+  (JSON as TOON, a sniffed or `--junit` report) comes first, followed by
+  stderr.
+- **Adapter reports:** the report stays first on stdout. Any stderr the
+  adapter keeps (an unexplained failure, a tool warning) follows it on
+  stdout instead of going to stderr.
+- **Passthrough** (nothing paid for itself) is unchanged: both streams are
+  replayed byte-exact to their own fds, in arrival order.
+
+It is off by default because it changes fd semantics: with it on,
+`cartoon --merge-streams cmd 2>/dev/null` no longer hides the command's
+stderr, and a `| grep` sees stderr lines too. cartoon's own notices
+(`cartoon: …`) stay on stderr.
+
+The auto-wrap hook turns it on: its rewrite is `cartoon --merge-streams -c
+'<command>'`. Agent shells (Claude Code's Bash tool among them) read a
+command's stdout and stderr on separate pipes and show stdout first, so
+the model never sees where a warning landed; merged, it does. The fd
+caveat above can't bite there: the hook never rewrites a command that
+carries a redirection or a pipe. Typed `cartoon -c` stays unmerged unless
+you pass the flag or set `[compress] merge_streams = true`.
 
 ### Content sniffing
 
@@ -316,8 +435,9 @@ stage that understands the content wins:
    byte-identically. Trying cartoon is zero-risk by construction.
 
 Every rule is a pure function that no-ops when its pattern is absent, so
-plain prose is never mangled. Measured on the golden corpus that runs in
-CI (token reduction at the aggressive tier, signal lines asserted intact):
+plain prose is never mangled. Measured on the golden corpus by the test
+suite (`tests/corpus.rs`, part of `cargo test`; token reduction at the
+aggressive tier, signal lines asserted intact):
 
 | Fixture | Reduction | Signal kept |
 |---|---|---|
@@ -332,10 +452,19 @@ CI (token reduction at the aggressive tier, signal lines asserted intact):
 - If parsing fails, the original output passes through untouched (one
   warning on stderr). The safe tier preserves all non-redundant text;
   lossy tiers are opt-in and always leave a `raw_log` pointer to the
-  unmodified output.
+  unmodified output. One exception, at any tier: output larger than 4 MiB
+  (useless to an agent whole) is cut to its first 512 KiB, every error line
+  from the middle (up to 200), and its last 1 MiB, behind a marker stating
+  exactly what was omitted; the full text is in `raw_log`, and if the
+  archive can't be written the original passes through instead.
 - A transform must pay for itself: if the TOON rendering (footer included)
   wouldn't beat the original token count, the original is emitted
-  byte-identically. Savings are never negative.
+  byte-identically. When an adapter injects a machine-readable flag
+  (`go test -json`, `--junit-xml`, ...), the guard measures against what
+  the command would have printed *without* that flag (reconstructed from
+  the machine stream), and emits that native output when the report would
+  not beat it — so savings are never negative relative to the command as
+  you typed it ([benchmarks](benchmarks/README.md)).
 
 ## Raw log archive
 
@@ -375,6 +504,7 @@ max_archive_mb = 50  # max total archive size
 
 [compress]
 level = "safe"       # default for non-adapter output: safe | aggressive
+# merge_streams = true  # stdout+stderr in arrival order, on stdout (see --merge-streams)
 
 [command.docker]
 level = "aggressive" # per-command pin; CLI --compress wins over config
@@ -441,7 +571,7 @@ decision, not cartoon's.
 
 | Adapter | Trigger | Source |
 |---|---|---|
-| pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest` | injected `--junit-xml` |
+| pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest`, `poetry`/`pdm`/`hatch`/`pipenv`/`rye run pytest` | injected `--junit-xml` |
 | unittest | `python -m unittest`, `uv run [python] -m unittest` | stderr text parse |
 | jest | `jest`, `npx jest` | injected `--json` |
 | vitest | `vitest run` (watch mode passes through) | injected `--reporter=json` |
@@ -460,15 +590,21 @@ decision, not cartoon's.
 | phpunit | `phpunit`, `vendor/bin/phpunit` | injected `--log-junit` |
 | rspec | `rspec`, `bundle exec rspec` | injected `--format json --out <file>` |
 | swiftlint | `swiftlint`, `swiftlint lint` (never `--fix`/`autocorrect`) | injected `--reporter json` |
+| gradle | `gradle`/`./gradlew` `test`, `check`, `build`, `*Test` tasks (not `--continuous`) | nothing injected: the `build/test-results/**/TEST-*.xml` files this run wrote (every module), plus javac/kotlinc errors and failed tasks from the console |
+| maven | `mvn`/`./mvnw` `test`, `verify`, `package`, `install` (not `-DskipTests`) | nothing injected: the `target/{surefire,failsafe}-reports/TEST-*.xml` files this run wrote (every module), plus compiler errors and failed goals |
+| dotnet-test | `dotnet test` (VSTest; not Microsoft.Testing.Platform) | injected `--logger trx --results-directory <temp>` (a user's own trx logger / results directory is kept), one `.trx` per test project, plus MSBuild errors |
+| golangci-lint | `golangci-lint run` | injected `--output.json.path=stdout` (v2) or `--out-format json` (v1), picked by `--version` |
+| pkg-script | `npm test`, `npm run test`, `pnpm test`, `yarn test`, `bun run test` when package.json's `test` script is a plain `jest …` / `vitest …` (no `&&`, pipes, quotes, `pretest`/`posttest`; a bare `vitest` only when it would not watch) | the jest / vitest adapter's flags, forwarded to the script (after `--` for npm) |
 
 No adapter match → content sniffing (xcodebuild / XCTest / JUnit shapes) →
 JSON auto-detection → compression ladder (safe tier by default, aggressive
 opt-in) → passthrough when nothing pays for itself. Hook-allowlisted tools
-with no adapter (`make`, `gradle`, `mvn`, `dotnet`, `npm test`, …) get the
-ladder only; `cartoon doctor` lists them.
+with no adapter (`make`, `dotnet build`, `bun test`, an `npm test` whose
+script is not plain jest/vitest, …) get the ladder only; `cartoon doctor`
+lists them.
 
-Want another runner (cargo test, go test, rspec)? See
-[CONTRIBUTING.md](CONTRIBUTING.md) — adapters are one trait impl + fixtures.
+Want another runner (`bun test`, `deno test`, ...)? See [CONTRIBUTING.md](CONTRIBUTING.md) — adapters
+are one trait impl + fixtures.
 The roadmap lives in
 [docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md](docs/superpowers/specs/2026-06-11-cartoon-v02-roadmap.md).
 

@@ -1,0 +1,41 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  UnitA -> /home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll
+Test run for /home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll (.NETCoreApp,Version=v8.0)
+Microsoft (R) Test Execution Command Line Tool Version 17.8.0 (x64)
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+/home/dev/dn/UnitB/Broken.cs(2,31): error CS0029: Cannot implicitly convert type 'string' to 'int' [/home/dev/dn/UnitB/UnitB.csproj]
+hello from test
+[xUnit.net 00:00:01.71]     UnitA.CalculatorTests.Divides [SKIP]
+  Failed UnitA.CalculatorTests.Throws [< 1 ms]
+  Error Message:
+   System.InvalidOperationException : boom
+  Stack Trace:
+     at UnitA.CalculatorTests.Throws() in /home/dev/dn/UnitA/UnitTest1.cs:line 33
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed UnitA.CalculatorTests.SubtractsNumbers [2 ms]
+  Error Message:
+   Assert.Equal() Failure
+Expected: 1
+Actual:   2
+  Stack Trace:
+     at UnitA.CalculatorTests.SubtractsNumbers() in /home/dev/dn/UnitA/UnitTest1.cs:line 14
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+  Failed UnitA.CalculatorTests.IsOdd(n: 2) [< 1 ms]
+  Error Message:
+   2 is not odd
+Expected: True
+Actual:   False
+  Stack Trace:
+     at UnitA.CalculatorTests.IsOdd(Int32 n) in /home/dev/dn/UnitA/UnitTest1.cs:line 27
+   at InvokeStub_CalculatorTests.IsOdd(Object, Span`1)
+   at System.Reflection.MethodBaseInvoker.InvokeWithOneArg(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+  Skipped UnitA.CalculatorTests.Divides [1 ms]
+Results File: /home/dev/dn/res/_vm_2026-10-05_22_56_15.trx
+
+Failed!  - Failed:     3, Passed:     3, Skipped:     1, Total:     7, Duration: 33 ms - UnitA.dll (net8.0)

@@ -3,38 +3,77 @@ on:
   push:
     tags: ["v*"]
 
+# Nothing by default; every job below grants exactly what it needs.
+permissions: {}
+
+# Third-party actions are pinned by commit SHA (the tag is in the comment);
+# .github/dependabot.yml keeps the pins current.
 jobs:
   # Every manifest (Cargo.toml, plugin.json, docs/index.html) must agree with
-  # the tag before anything is published anywhere. Cheap, and the only gate
-  # left on GitHub since ci.yml is disabled by decision.
+  # the tag before anything is published anywhere.
   verify-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
       - run: node scripts/check-versions.mjs --tag "$GITHUB_REF_NAME"
 
+  # The tag must pass the same gate as main before any binary is built.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: node --test packages/npm/cartoon-wrap/test/wrapper.test.mjs
+
   build:
-    needs: verify-version
+    needs: [verify-version, test]
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true }
+          # Linux binaries are static musl: they run on any distro, glibc or
+          # musl, old or new (a native ubuntu-24.04 gnu build needs glibc
+          # 2.39 and fails on Ubuntu 22.04 / Debian 12 / RHEL 9).
+          # x86_64 musl links with the host toolchain (Rust ships the musl
+          # CRT); aarch64 needs a cross linker, hence cross.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - name: install cross
         if: matrix.cross
-        run: cargo install cross --locked
+        run: cargo install cross --locked --version 0.2.5
       - name: build
         shell: bash
         run: |
@@ -43,19 +82,25 @@ jobs:
           else
             cargo build --release --target "${{ matrix.target }}"
           fi
+      - name: check static linking
+        if: contains(matrix.target, 'linux')
+        run: |
+          file "target/${{ matrix.target }}/release/cartoon" | tee /dev/stderr | grep -q 'static'
       - name: package tarball
         shell: bash
+        # Names are a contract: install.sh and [package.metadata.binstall]
+        # in Cargo.toml download cartoon-<target>.tar.gz.
         run: |
           bin=cartoon
           [[ "${{ matrix.target }}" == *windows* ]] && bin=cartoon.exe
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/$bin" dist/
           tar -C dist -czf "cartoon-${{ matrix.target }}.tar.gz" "$bin"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tarball-${{ matrix.target }}
           path: cartoon-*.tar.gz
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cartoon-bin-${{ matrix.target }}
           path: |
@@ -67,53 +112,143 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the release, upload assets
+      id-token: write # sign the provenance attestation
+      attestations: write # store it
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: tarball-*
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      # install.sh verifies downloads against this file.
+      - name: checksums
+        run: sha256sum cartoon-*.tar.gz | tee SHA256SUMS
+      # Verify with: gh attestation verify cartoon-<target>.tar.gz -R abhijitbansal/cartoon
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          files: cartoon-*.tar.gz
+          subject-path: cartoon-*.tar.gz
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            cartoon-*.tar.gz
+            SHA256SUMS
+
+  # This repo is its own Homebrew tap (Formula/cartoon.rb). Regenerate the
+  # formula from the release's SHA256SUMS and open a PR against main: a PR,
+  # not a push, so a human reviews the URLs/checksums before users get them.
+  # Needs Settings -> Actions -> General -> "Allow GitHub Actions to create
+  # and approve pull requests". PRs opened with GITHUB_TOKEN don't trigger
+  # ci.yml.
+  homebrew-formula:
+    needs: github-release
+    # Pre-release tags (v1.2.3-rc.1) don't move the tap.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the formula branch
+      pull-requests: write # open the PR
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: main
+          # This job pushes a branch, so it keeps the token.
+          persist-credentials: true
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+      - name: regenerate Formula/cartoon.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+          node scripts/update-formula.mjs --self-test
+          node scripts/update-formula.mjs "$GITHUB_REF_NAME" "$RUNNER_TEMP/SHA256SUMS"
+      - name: open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- Formula/cartoon.rb; then
+            echo "Formula/cartoon.rb already up to date"
+            exit 0
+          fi
+          branch="homebrew/$GITHUB_REF_NAME"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -m "chore(homebrew): cartoon $GITHUB_REF_NAME" -- Formula/cartoon.rb
+          git push --force origin "$branch"
+          if [ -z "$(gh pr list --head "$branch" --json number --jq '.[]')" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(homebrew): cartoon $GITHUB_REF_NAME" \
+              --body "Regenerated by release.yml from the $GITHUB_REF_NAME SHA256SUMS (scripts/update-formula.mjs). Check locally: brew install --formula ./Formula/cartoon.rb && brew test cartoon"
+          fi
 
   pypi-wheels:
-    needs: verify-version
+    needs: [verify-version, test]
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest }
+          # manylinux2014 (glibc 2.17) containers, so the wheel installs on
+          # every glibc distro pip supports, not just the runner's.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2014" }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, manylinux: "2014" }
+          # Alpine and other musl distros.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, manylinux: musllinux_1_2 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, manylinux: musllinux_1_2 }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: PyO3/maturin-action@v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           command: build
           args: --release --out wheels
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.target }}
           path: wheels
 
+  # Fallback for platforms without a wheel: pip builds it with cargo.
+  pypi-sdist:
+    needs: [verify-version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out wheels
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-sdist
+          path: wheels
+
   pypi-publish:
-    needs: pypi-wheels
+    needs: [pypi-wheels, pypi-sdist]
     runs-on: ubuntu-latest
     permissions:
       # PyPI Trusted Publishing (OIDC) — no API token; PyPI trusts this
-      # repo + workflow via the pending publisher configured on pypi.org.
+      # repo + workflow via the publisher configured on pypi.org.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: wheels-*
           merge-multiple: true
           path: wheels
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: wheels
           skip-existing: true
@@ -122,44 +257,47 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       # npm Trusted Publishing (OIDC) — each package's Trusted Publisher on
       # npmjs.com points at this repo + workflow; no NPM_TOKEN secret.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
       # Trusted publishing needs npm >= 11.5; Node 22 bundles an older npm.
-      - run: npm install -g npm@latest
-      - uses: actions/download-artifact@v8
+      # Pinned, not @latest: this job holds a publish credential.
+      - run: npm install -g npm@11.21.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: cartoon-bin-*
           path: bins
+      # Every platform package must publish before the parent that depends
+      # on them; any failure fails the job. One exception: a package that has
+      # never been published (a new platform name) can't use Trusted
+      # Publishing until the maintainer bootstraps it once by hand
+      # (docs/RELEASING.md). It is skipped with a warning and left out of the
+      # parent's optionalDependencies for this release.
       - name: publish platform packages
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/npm-platform-packages.mjs "$VERSION" bins npm-out
-          fails=""
+          : > "$RUNNER_TEMP/npm-unpublished"
           for d in npm-out/*/; do
             pkg=$(node -p "require('./$d/package.json').name")
             if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then
               echo "skip $pkg@$VERSION: already published"
+            elif ! npm view "$pkg" name >/dev/null 2>&1; then
+              echo "::warning::$pkg has never been published; bootstrap it by hand (docs/RELEASING.md). Leaving it out of cartoon-wrap@$VERSION."
+              echo "$pkg" >> "$RUNNER_TEMP/npm-unpublished"
             else
-              (cd "$d" && npm publish --access public) || fails="$fails $pkg"
+              (cd "$d" && npm publish --access public)
             fi
           done
-          # cartoon-wrap-win32-x64 is spam-blocked pending npm support
-          # (docs/RELEASING.md "Known issues"); its failure must not stop
-          # the parent publish. Any other failure still fails the job.
-          # TODO: drop this exception once the name is unblocked.
-          fails="${fails# }"
-          if [ -n "$fails" ] && [ "$fails" != "cartoon-wrap-win32-x64" ]; then
-            echo "::error::platform publish failed:$fails"
-            exit 1
-          fi
-          [ -z "$fails" ] || echo "::warning::skipped known-blocked:$fails"
       - name: publish parent package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -167,20 +305,27 @@ jobs:
             echo "skip cartoon-wrap@$VERSION: already published"
             exit 0
           fi
-          node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap
+          omit=$(paste -sd, "$RUNNER_TEMP/npm-unpublished")
+          node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap --omit "$omit"
+          node -p "JSON.stringify(require('./packages/npm/cartoon-wrap/package.json').optionalDependencies)"
           (cd packages/npm/cartoon-wrap && npm publish --access public)
 
   crates-publish:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       # crates.io Trusted Publishing (OIDC) — the crate's Trusted Publisher
       # settings point at this repo + workflow; no CRATES_TOKEN secret.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
       - run: cargo publish
         env:

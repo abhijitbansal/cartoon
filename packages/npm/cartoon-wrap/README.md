@@ -3,10 +3,14 @@
 **Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-~70%+ fewer tokens on test runs.
+~70% fewer tokens on verbose test runs (an estimate; see the
+[benchmark](https://github.com/abhijitbansal/cartoon/blob/main/benchmarks/README.md)).
 
-This package installs the `cartoon` binary (prebuilt per platform via
-optionalDependencies — no Rust toolchain needed).
+This package installs the `cartoon` binary (prebuilt per platform via the
+`cartoon-wrap-<platform>` optionalDependencies — no Rust toolchain needed).
+Prebuilt: Linux x64/arm64 (static, any distro), macOS x64/arm64, Windows
+x64. Elsewhere, or if optional dependencies are disabled, use
+`cargo install cartoon`.
 
 ```bash
 npm install -g cartoon-wrap

@@ -1,0 +1,140 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="64709ebc-adfb-4827-b283-3a8e2f600d4c" name="@vm 2026-10-05 22:49:28" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-05T22:49:28.8970927+00:00" queuing="2026-10-05T22:49:28.8970927+00:00" start="2026-10-05T22:49:25.7637810+00:00" finish="2026-10-05T22:49:28.9392759+00:00" />
+  <TestSettings name="default" id="367e3c2e-66cc-4fd8-b3c0-36db03467ff9">
+    <Deployment runDeploymentRoot="_vm_2026-10-05_22_49_28" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="345266ac-510f-4972-90f8-a0ccee10cf45" testId="32dee1af-76ac-9c0a-2ad5-fffbcfd86528" testName="UnitA.CalculatorTests.SubtractsNumbers" computerName="vm" duration="00:00:00.0020685" startTime="2026-10-05T22:49:28.4845716+00:00" endTime="2026-10-05T22:49:28.4845717+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="345266ac-510f-4972-90f8-a0ccee10cf45">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure
+Expected: 1
+Actual:   2</Message>
+          <StackTrace>   at UnitA.CalculatorTests.SubtractsNumbers() in /home/dev/dn/UnitA/UnitTest1.cs:line 14
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="55289cbe-5c9a-4eb5-b587-c06038bdd4cb" testId="99c69724-2c13-9376-1e72-ff3eb353a642" testName="UnitA.CalculatorTests.Throws" computerName="vm" duration="00:00:00.0008537" startTime="2026-10-05T22:49:28.4426940+00:00" endTime="2026-10-05T22:49:28.4426942+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="55289cbe-5c9a-4eb5-b587-c06038bdd4cb">
+      <Output>
+        <ErrorInfo>
+          <Message>System.InvalidOperationException : boom</Message>
+          <StackTrace>   at UnitA.CalculatorTests.Throws() in /home/dev/dn/UnitA/UnitTest1.cs:line 33
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="aa678a28-61fd-4436-85db-c2f49678cd46" testId="373316ce-ef0c-61dc-78fe-c3a0bafc0ee1" testName="UnitA.CalculatorTests.IsOdd(n: 2)" computerName="vm" duration="00:00:00.0006173" startTime="2026-10-05T22:49:28.4850999+00:00" endTime="2026-10-05T22:49:28.4851000+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="aa678a28-61fd-4436-85db-c2f49678cd46">
+      <Output>
+        <ErrorInfo>
+          <Message>2 is not odd
+Expected: True
+Actual:   False</Message>
+          <StackTrace>   at UnitA.CalculatorTests.IsOdd(Int32 n) in /home/dev/dn/UnitA/UnitTest1.cs:line 27
+   at InvokeStub_CalculatorTests.IsOdd(Object, Span`1)
+   at System.Reflection.MethodBaseInvoker.InvokeWithOneArg(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="26e227e8-849b-4251-816f-d7a7aad2f34c" testId="0f5fd9c4-615b-80d9-d909-b0c7b57cbee8" testName="UnitA.CalculatorTests.WritesOutput" computerName="vm" duration="00:00:00.0376186" startTime="2026-10-05T22:49:28.4833249+00:00" endTime="2026-10-05T22:49:28.4833251+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="26e227e8-849b-4251-816f-d7a7aad2f34c" />
+    <UnitTestResult executionId="0803e0f4-5217-47dc-b204-add7ecc34e5d" testId="e7658581-4644-84e1-9672-9fb087787277" testName="UnitA.CalculatorTests.Divides" computerName="vm" duration="00:00:00.0010000" startTime="2026-10-05T22:49:28.4861169+00:00" endTime="2026-10-05T22:49:28.4861170+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0803e0f4-5217-47dc-b204-add7ecc34e5d">
+      <Output>
+        <StdOut>not ready</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="406ba1db-f22f-4127-9ceb-8363683e92cf" testId="7d775d73-071d-aed1-9390-69b4fc8a0b90" testName="UnitA.CalculatorTests.AddsNumbers" computerName="vm" duration="00:00:00.0543872" startTime="2026-10-05T22:49:28.3648198+00:00" endTime="2026-10-05T22:49:28.3648450+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="406ba1db-f22f-4127-9ceb-8363683e92cf" />
+    <UnitTestResult executionId="745493e3-ae38-4633-b3bd-40acafd3dc9a" testId="a3551749-4437-120f-a791-3ea34b864470" testName="UnitA.CalculatorTests.IsOdd(n: 1)" computerName="vm" duration="00:00:00.0004145" startTime="2026-10-05T22:49:28.4847124+00:00" endTime="2026-10-05T22:49:28.4847124+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="745493e3-ae38-4633-b3bd-40acafd3dc9a" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="UnitA.CalculatorTests.IsOdd(n: 2)" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="373316ce-ef0c-61dc-78fe-c3a0bafc0ee1">
+      <Execution id="aa678a28-61fd-4436-85db-c2f49678cd46" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="IsOdd" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.Throws" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="99c69724-2c13-9376-1e72-ff3eb353a642">
+      <Execution id="55289cbe-5c9a-4eb5-b587-c06038bdd4cb" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="Throws" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.WritesOutput" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="0f5fd9c4-615b-80d9-d909-b0c7b57cbee8">
+      <Execution id="26e227e8-849b-4251-816f-d7a7aad2f34c" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="WritesOutput" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.AddsNumbers" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="7d775d73-071d-aed1-9390-69b4fc8a0b90">
+      <Execution id="406ba1db-f22f-4127-9ceb-8363683e92cf" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="AddsNumbers" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.Divides" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="e7658581-4644-84e1-9672-9fb087787277">
+      <Execution id="0803e0f4-5217-47dc-b204-add7ecc34e5d" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="Divides" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.SubtractsNumbers" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="32dee1af-76ac-9c0a-2ad5-fffbcfd86528">
+      <Execution id="345266ac-510f-4972-90f8-a0ccee10cf45" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="SubtractsNumbers" />
+    </UnitTest>
+    <UnitTest name="UnitA.CalculatorTests.IsOdd(n: 1)" storage="/home/dev/dn/unita/bin/debug/net8.0/unita.dll" id="a3551749-4437-120f-a791-3ea34b864470">
+      <Execution id="745493e3-ae38-4633-b3bd-40acafd3dc9a" />
+      <TestMethod codeBase="/home/dev/dn/UnitA/bin/Debug/net8.0/UnitA.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="UnitA.CalculatorTests" name="IsOdd" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="32dee1af-76ac-9c0a-2ad5-fffbcfd86528" executionId="345266ac-510f-4972-90f8-a0ccee10cf45" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="99c69724-2c13-9376-1e72-ff3eb353a642" executionId="55289cbe-5c9a-4eb5-b587-c06038bdd4cb" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="373316ce-ef0c-61dc-78fe-c3a0bafc0ee1" executionId="aa678a28-61fd-4436-85db-c2f49678cd46" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0f5fd9c4-615b-80d9-d909-b0c7b57cbee8" executionId="26e227e8-849b-4251-816f-d7a7aad2f34c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e7658581-4644-84e1-9672-9fb087787277" executionId="0803e0f4-5217-47dc-b204-add7ecc34e5d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7d775d73-071d-aed1-9390-69b4fc8a0b90" executionId="406ba1db-f22f-4127-9ceb-8363683e92cf" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a3551749-4437-120f-a791-3ea34b864470" executionId="745493e3-ae38-4633-b3bd-40acafd3dc9a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="7" executed="6" passed="3" failed="3" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v2.4.5+1caef2f33e (64-bit .NET 8.0.31)
+[xUnit.net 00:00:01.02]   Discovering: UnitA
+[xUnit.net 00:00:01.34]   Discovered:  UnitA
+[xUnit.net 00:00:01.35]   Starting:    UnitA
+[xUnit.net 00:00:01.77]       System.InvalidOperationException : boom
+[xUnit.net 00:00:01.77]       Stack Trace:
+[xUnit.net 00:00:01.77]         /home/dev/dn/UnitA/UnitTest1.cs(33,0): at UnitA.CalculatorTests.Throws()
+[xUnit.net 00:00:01.78]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:01.78]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:01.82]       Assert.Equal() Failure
+[xUnit.net 00:00:01.82]       Expected: 1
+[xUnit.net 00:00:01.82]       Actual:   2
+[xUnit.net 00:00:01.82]       Stack Trace:
+[xUnit.net 00:00:01.82]         /home/dev/dn/UnitA/UnitTest1.cs(14,0): at UnitA.CalculatorTests.SubtractsNumbers()
+[xUnit.net 00:00:01.82]            at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+[xUnit.net 00:00:01.82]            at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+[xUnit.net 00:00:01.82]       2 is not odd
+[xUnit.net 00:00:01.82]       Expected: True
+[xUnit.net 00:00:01.82]       Actual:   False
+[xUnit.net 00:00:01.82]       Stack Trace:
+[xUnit.net 00:00:01.82]         /home/dev/dn/UnitA/UnitTest1.cs(27,0): at UnitA.CalculatorTests.IsOdd(Int32 n)
+[xUnit.net 00:00:01.82]            at InvokeStub_CalculatorTests.IsOdd(Object, Span`1)
+[xUnit.net 00:00:01.82]            at System.Reflection.MethodBaseInvoker.InvokeWithOneArg(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+[xUnit.net 00:00:01.82]       not ready
+[xUnit.net 00:00:01.84]   Finished:    UnitA
+Test 'UnitA.CalculatorTests.Divides' was skipped in the test run.
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="vm" outcome="Error" timestamp="2026-10-05T22:49:28.5561334+00:00">
+        <Text>[xUnit.net 00:00:01.77]     UnitA.CalculatorTests.Throws [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="vm" outcome="Error" timestamp="2026-10-05T22:49:28.5564709+00:00">
+        <Text>[xUnit.net 00:00:01.82]     UnitA.CalculatorTests.SubtractsNumbers [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="vm" outcome="Error" timestamp="2026-10-05T22:49:28.5564959+00:00">
+        <Text>[xUnit.net 00:00:01.82]     UnitA.CalculatorTests.IsOdd(n: 2) [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="vm" outcome="Warning" timestamp="2026-10-05T22:49:28.5565231+00:00">
+        <Text>[xUnit.net 00:00:01.82]     UnitA.CalculatorTests.Divides [SKIP]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

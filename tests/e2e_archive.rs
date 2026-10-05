@@ -1,3 +1,4 @@
+mod common;
 use assert_cmd::Command;
 use predicates::str::contains;
 
@@ -115,12 +116,7 @@ fn logs_unknown_id_exits_2() {
 
 #[test]
 fn e2e_pytest_footer_points_at_original_report() {
-    let have = std::process::Command::new("pytest")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !have {
+    if !common::have("pytest") {
         eprintln!("SKIP: pytest not installed");
         return;
     }
@@ -156,4 +152,55 @@ fn passthrough_without_trailing_newline_is_byte_identical() {
         .assert()
         .success()
         .stdout("plain"); // exact bytes — no newline added
+}
+
+#[cfg(unix)]
+#[test]
+fn archived_runs_are_readable_only_by_the_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    // Both the transform path (reserve + write) and the passthrough path.
+    for cmd in [BIG_JSON_CMD, "echo tiny"] {
+        cartoon()
+            .env("XDG_STATE_HOME", tmp.path())
+            .args(["sh", "-c", cmd])
+            .assert()
+            .success();
+    }
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let runs = tmp.path().join("cartoon/runs");
+    assert_eq!(mode(&tmp.path().join("cartoon")), 0o700);
+    assert_eq!(mode(&runs), 0o700);
+    let dirs: Vec<_> = std::fs::read_dir(&runs).unwrap().flatten().collect();
+    assert_eq!(dirs.len(), 2);
+    for d in dirs {
+        assert_eq!(mode(&d.path()), 0o700, "{:?}", d.path());
+        for f in std::fs::read_dir(d.path()).unwrap().flatten() {
+            assert_eq!(mode(&f.path()), 0o600, "{:?}", f.path());
+        }
+    }
+    // The stats ledger records every command line too.
+    assert_eq!(mode(&tmp.path().join("cartoon/stats.jsonl")), 0o600);
+}
+
+#[test]
+fn back_to_back_runs_keep_every_raw_log() {
+    // A concurrent or rapid-fire run must never prune a sibling's run that
+    // was just written (keep_runs = 1 would otherwise delete it at once).
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(config.path().join("cartoon")).unwrap();
+    std::fs::write(config.path().join("cartoon/config.toml"), "keep_runs = 1\n").unwrap();
+    for _ in 0..3 {
+        cartoon()
+            .env("XDG_STATE_HOME", tmp.path())
+            .env("XDG_CONFIG_HOME", config.path())
+            .args(["sh", "-c", "echo hi"])
+            .assert()
+            .success();
+    }
+    let n = std::fs::read_dir(tmp.path().join("cartoon/runs"))
+        .unwrap()
+        .count();
+    assert_eq!(n, 3);
 }

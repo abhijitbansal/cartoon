@@ -1,6 +1,6 @@
 [package]
 name = "cartoon"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Token-optimized TOON output wrapper for any CLI"
 license = "MIT"
@@ -8,16 +8,35 @@ repository = "https://github.com/abhijitbansal/cartoon"
 readme = "README.md"
 keywords = ["llm", "agents", "tokens", "cli", "testing"]
 categories = ["command-line-utilities", "development-tools::testing"]
+# The crate is the Rust source only: docs, the site, plans and test fixtures
+# are not needed to build it (they made the published crate 1.1 MB).
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
+
+# `cargo binstall cartoon` downloads the GitHub release tarball instead of
+# compiling. Names must match the `package tarball` step in release.yml.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+# Linux ships static musl binaries only (they run on any glibc or musl
+# distro), so a gnu host fetches the musl tarball.
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-x86_64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/cartoon-aarch64-unknown-linux-musl.tar.gz"
 
 [dependencies]
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
+libc = "0.2"
 regex = "1"
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 shell-words = "1"
 tempfile = "3"
 tiktoken-rs = "0.6"
@@ -28,3 +47,9 @@ assert_cmd = "2"
 insta = "1"
 predicates = "3"
 tempfile = "3"
+
+# Every npm/PyPI/tarball user downloads this binary: keep it small.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

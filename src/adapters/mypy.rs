@@ -94,6 +94,10 @@ struct MypyFinding {
     line: i64,
     column: i64,
     message: String,
+    /// `Hint: "python3 -m pip install types-PyYAML"` and similar notes
+    /// that mypy's text output prints as separate `note:` lines.
+    #[serde(default)]
+    hint: Option<String>,
     code: Option<String>,
     severity: String,
 }
@@ -145,16 +149,23 @@ pub fn parse_stdout(stdout: &str) -> Result<serde_json::Value> {
             // surfaced but not counted in the error/warning summary.
             _ => {}
         }
+        // The JSON column is 0-based; mypy's own text output (and every
+        // editor) is 1-based.
         let loc = if finding.line < 0 || finding.column < 0 {
             finding.file.clone()
         } else {
-            format!("{}:{}:{}", finding.file, finding.line, finding.column)
+            format!("{}:{}:{}", finding.file, finding.line, finding.column + 1)
         };
+        let mut msg = finding.message.lines().next().unwrap_or("").to_string();
+        // Its first line is the actionable part (the rest is boilerplate).
+        if let Some(hint) = finding.hint.as_deref().and_then(|h| h.lines().next()) {
+            msg = format!("{msg} ({hint})");
+        }
         diagnostics_out.push(json!({
             "loc": loc,
             "severity": finding.severity,
             "rule": finding.code.clone().unwrap_or_default(),
-            "msg": finding.message.lines().next().unwrap_or("").to_string(),
+            "msg": msg,
         }));
     }
 
@@ -246,7 +257,8 @@ Found 2 errors in 1 file (checked 3 source files)
         // Errors + the trailing note, all surfaced; only errors/warnings
         // are counted in the summary.
         assert_eq!(diags.len(), 3);
-        assert_eq!(diags[0]["loc"], "src/a.py:10:4");
+        // JSON column 4 (0-based) is column 5 in mypy's text output.
+        assert_eq!(diags[0]["loc"], "src/a.py:10:5");
         assert_eq!(diags[0]["severity"], "error");
         assert_eq!(diags[0]["rule"], "return-value");
         assert_eq!(
@@ -254,6 +266,27 @@ Found 2 errors in 1 file (checked 3 source files)
             "Incompatible return value type (got \"str\", expected \"int\")"
         );
         assert_eq!(diags[2]["severity"], "note");
+    }
+
+    #[test]
+    fn real_mypy_json_columns_are_one_based_and_hints_kept() {
+        // Real mypy 1.20 `--output json`; its text mode prints a.py:1:1,
+        // a.py:5:12 for the same findings.
+        let out = r#"{"file": "a.py", "line": 1, "column": 0, "end_line": 1, "end_column": 1, "message": "Library stubs not installed for \"yaml\"", "hint": "Hint: \"python3 -m pip install types-PyYAML\"\n(or run \"mypy --install-types\" to install all missing stub packages)\nSee https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports", "code": "import-untyped", "severity": "error"}
+{"file": "a.py", "line": 5, "column": 11, "end_line": 5, "end_column": 14, "message": "Incompatible return value type (got \"str\", expected \"int\")", "hint": null, "code": "return-value", "severity": "error"}
+"#;
+        let v = parse_stdout(out).unwrap();
+        let diags = v["diagnostics"].as_array().unwrap();
+        assert_eq!(diags[0]["loc"], "a.py:1:1");
+        assert_eq!(diags[1]["loc"], "a.py:5:12");
+        assert_eq!(
+            diags[0]["msg"],
+            "Library stubs not installed for \"yaml\" (Hint: \"python3 -m pip install types-PyYAML\")"
+        );
+        assert_eq!(
+            diags[1]["msg"],
+            "Incompatible return value type (got \"str\", expected \"int\")"
+        );
     }
 
     #[test]

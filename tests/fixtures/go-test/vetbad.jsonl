@@ -1,0 +1,7 @@
+{"ImportPath":"example.com/fx/vetbad [example.com/fx/vetbad.test]","Action":"build-output","Output":"# example.com/fx/vetbad\n"}
+{"ImportPath":"example.com/fx/vetbad [example.com/fx/vetbad.test]","Action":"build-output","Output":"# [example.com/fx/vetbad]\n"}
+{"ImportPath":"example.com/fx/vetbad [example.com/fx/vetbad.test]","Action":"build-output","Output":"vetbad/v_test.go:8:28: fmt.Printf format %d has arg \"s\" of wrong type string\n"}
+{"ImportPath":"example.com/fx/vetbad [example.com/fx/vetbad.test]","Action":"build-fail"}
+{"Time":"2026-10-02T03:07:36.738470397Z","Action":"start","Package":"example.com/fx/vetbad"}
+{"Time":"2026-10-02T03:07:36.738571337Z","Action":"output","Package":"example.com/fx/vetbad","Output":"FAIL\texample.com/fx/vetbad [build failed]\n"}
+{"Time":"2026-10-02T03:07:36.738580416Z","Action":"fail","Package":"example.com/fx/vetbad","Elapsed":0,"FailedBuild":"example.com/fx/vetbad [example.com/fx/vetbad.test]"}

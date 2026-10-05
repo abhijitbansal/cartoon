@@ -29,6 +29,25 @@ fn rustc_arrow_pat() -> &'static Regex {
     PAT.get_or_init(|| Regex::new(r"^\s*-->\s+(?P<loc>\S+:\d+(?::\d+)?)\s*$").unwrap())
 }
 
+/// `help: …` / `note: …` (also the `= help: …` form under a snippet).
+fn rustc_aside_pat() -> &'static Regex {
+    static PAT: OnceLock<Regex> = OnceLock::new();
+    PAT.get_or_init(|| Regex::new(r"^\s*(?:= )?(?P<kind>help|note): (?P<text>.+)$").unwrap())
+}
+
+/// The primary span label on a snippet's caret line: `  |   ^^^ label`.
+fn rustc_label_pat() -> &'static Regex {
+    static PAT: OnceLock<Regex> = OnceLock::new();
+    PAT.get_or_init(|| Regex::new(r"^\s*\d*\s*\|[\s|\-]*\^+\s+(?P<text>\S.*)$").unwrap())
+}
+
+/// Snippet scaffolding inside a rustc block: gutter lines (`  |`, `2 |`),
+/// suggestion diffs (`2 -`, `2 +`), `...` and secondary locations.
+fn rustc_snippet_pat() -> &'static Regex {
+    static PAT: OnceLock<Regex> = OnceLock::new();
+    PAT.get_or_init(|| Regex::new(r"^\s*(?:\d*\s*[|+\-~]|\.\.\.|-->|:::)").unwrap())
+}
+
 /// True for a line the extractor would treat as a compiler diagnostic
 /// (single-line gcc/clang shape or a rustc `error[E…]:` header). Used by
 /// `collapse_near_dups` so three same-message diagnostics that differ only
@@ -46,10 +65,31 @@ struct Diag {
 /// Pull compiler diagnostics into a TOON table appended to the remaining
 /// text. Two shapes: single-line `file:line[:col]: severity: msg`
 /// (gcc/clang/eslint) and rustc's multi-line block (`error[Exxxx]: msg`
-/// followed by ` --> loc`). rustc snippet/help lines until the blank line
-/// are elided: the aggressive tier is lossy and raw_log keeps them.
-/// No-op below MIN_DIAGNOSTICS total.
+/// followed by ` --> loc`). No-op below MIN_DIAGNOSTICS total.
 pub fn extract_diagnostics(text: &str) -> String {
+    match split_diagnostics(text) {
+        None => text.to_string(),
+        Some((body, table)) => {
+            let sep = super::safe::line_sep(text);
+            if body.trim().is_empty() {
+                table
+            } else {
+                format!("{body}{sep}{table}")
+            }
+        }
+    }
+}
+
+/// The body with diagnostics removed and the TOON table, separately, so a
+/// later stage (windowing) can process the body without cutting the table.
+/// `None` below MIN_DIAGNOSTICS.
+///
+/// A rustc block keeps its message, its primary span label and its
+/// `help:`/`note:` lines (folded into `msg`, `; `-separated); snippet
+/// scaffolding is elided (the aggressive tier is lossy and raw_log keeps
+/// it), any other line that signals an error stays in the body, and the
+/// blank line that ends the block goes with it.
+pub(crate) fn split_diagnostics(text: &str) -> Option<(String, String)> {
     let sep = super::safe::line_sep(text);
     let lines: Vec<&str> = text.lines().collect();
     let mut diags: Vec<Diag> = Vec::new();
@@ -76,17 +116,45 @@ pub fn extract_diagnostics(text: &str) -> String {
                     Some(code) => format!("{}[{}]", &c["sev"], code.as_str()),
                     None => c["sev"].to_string(),
                 };
+                let mut msg = c["msg"].trim().to_string();
+                let mut extras: Vec<String> = Vec::new();
+                let mut label_taken = false;
+                // Walk the block (snippet/help/note) until the blank line.
+                let mut j = aj + 1;
+                while j < lines.len() && !lines[j].trim().is_empty() {
+                    let l = lines[j];
+                    let extra = if let Some(n) = rustc_aside_pat().captures(l) {
+                        Some(format!("{}: {}", &n["kind"], n["text"].trim()))
+                    } else if let Some(n) = rustc_label_pat().captures(l) {
+                        // Only the main snippet's label; carets under a
+                        // note's own snippet repeat what the note says.
+                        let first = !label_taken;
+                        label_taken = true;
+                        first.then(|| n["text"].trim().to_string())
+                    } else {
+                        if !rustc_snippet_pat().is_match(l) && super::is_error_line(l) {
+                            rest.push(l);
+                        }
+                        None
+                    };
+                    if let Some(e) = extra {
+                        if !extras.contains(&e) {
+                            extras.push(e);
+                        }
+                    }
+                    j += 1;
+                }
+                for e in extras {
+                    msg.push_str("; ");
+                    msg.push_str(&e);
+                }
                 diags.push(Diag {
                     loc: a["loc"].to_string(),
                     sev,
-                    msg: c["msg"].trim().to_string(),
+                    msg,
                 });
-                // Skip the block (snippet/help/note) until the blank line.
-                let mut j = aj + 1;
-                while j < lines.len() && !lines[j].trim().is_empty() {
-                    j += 1;
-                }
-                i = j;
+                // The block's terminating blank line goes with the block.
+                i = j + 1;
                 continue;
             }
         }
@@ -94,19 +162,14 @@ pub fn extract_diagnostics(text: &str) -> String {
         i += 1;
     }
     if diags.len() < MIN_DIAGNOSTICS {
-        return text.to_string();
+        return None;
     }
     let rows: Vec<_> = diags
         .iter()
         .map(|d| json!({ "loc": d.loc, "severity": d.sev, "msg": d.msg }))
         .collect();
     let table = crate::toon::encode(&json!({ "diagnostics": rows }));
-    let body = rest.join(sep);
-    if body.trim().is_empty() {
-        table
-    } else {
-        format!("{body}{sep}{table}")
-    }
+    Some((rest.join(sep), table))
 }
 
 #[cfg(test)]
@@ -135,10 +198,11 @@ mod tests {
         assert_eq!(extract_diagnostics(input), input);
     }
 
+    const RUSTC: &str = "   Compiling demo v0.1.0\nerror[E0425]: cannot find value `c` in this scope\n --> src/lib.rs:2:9\n  |\n2 |     a + c\n  |         ^ not found in this scope\n  |\nhelp: a local variable with a similar name exists\n  |\n2 -     a + c\n2 +     a + a\n  |\n\nerror[E0308]: mismatched types\n  --> src/lib.rs:10:5\n   |\n10 |     \"oops\"\n   |     ^^^^^^ expected `u8`, found `&str`\n   = note: expected type `u8`\n\nwarning: unused variable: `y`\n --> src/lib.rs:4:9\n  |\n\nerror: could not compile `demo` (lib) due to 2 previous errors";
+
     #[test]
     fn extracts_rustc_blocks_keeps_summary() {
-        let input = "   Compiling demo v0.1.0\nerror[E0425]: cannot find value `c` in this scope\n --> src/lib.rs:2:9\n  |\n2 |     a + c\n  |         ^\n\nerror[E0308]: mismatched types\n  --> src/lib.rs:10:5\n   |\n10 |     \"oops\"\n\nwarning: unused variable: `y`\n --> src/lib.rs:4:9\n  |\n\nerror: could not compile `demo` (lib) due to 2 previous errors";
-        let out = extract_diagnostics(input);
+        let out = extract_diagnostics(RUSTC);
         assert!(out.contains("diagnostics"));
         assert!(out.contains("src/lib.rs:2:9"));
         assert!(out.contains("error[E0425]"));
@@ -147,6 +211,30 @@ mod tests {
         assert!(out.contains("error: could not compile `demo` (lib) due to 2 previous errors"));
         // snippet lines elided
         assert!(!out.contains("a + c"));
+    }
+
+    #[test]
+    fn rustc_blocks_keep_help_note_and_primary_label() {
+        let out = extract_diagnostics(RUSTC);
+        assert!(
+            out.contains(
+                "cannot find value `c` in this scope; not found in this scope; help: a local variable with a similar name exists"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("mismatched types; expected `u8`, found `&str`; note: expected type `u8`"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn rustc_extraction_leaves_no_stray_blank_lines() {
+        let (body, _) = split_diagnostics(RUSTC).unwrap();
+        assert_eq!(
+            body,
+            "   Compiling demo v0.1.0\nerror: could not compile `demo` (lib) due to 2 previous errors"
+        );
     }
 
     #[test]

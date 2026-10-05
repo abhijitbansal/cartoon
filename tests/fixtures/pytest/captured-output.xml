@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="0.020" timestamp="2026-10-02T03:20:34.349765+00:00" hostname="vm"><testcase classname="test_cap" name="test_prints_then_fails" file="test_cap.py" line="3" time="0.001"><failure message="assert 41 == 42">def test_prints_then_fails():
+        print("computed total = 41")
+        print("warning text", file=sys.stderr)
+&gt;       assert 41 == 42
+E       assert 41 == 42
+
+test_cap.py:7: AssertionError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+computed total = 41
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+warning text
+
+</system-err></testcase><testcase classname="test_cap" name="test_prints_and_passes" file="test_cap.py" line="9" time="0.000"><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+noise from a passing test
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase></testsuite></testsuites>

@@ -1,11 +1,17 @@
 pub mod cargo_build;
 pub mod cargo_test;
 pub mod diagnostics;
+pub mod dotnet_test;
 pub mod eslint;
 pub mod go_test;
+pub mod golangci_lint;
+pub mod gradle;
 pub mod jest;
+pub mod jvm_reports;
+pub mod maven;
 pub mod mypy;
 pub mod phpunit;
+pub mod pkg_script;
 pub mod pre_commit;
 pub mod pytest;
 pub mod report;
@@ -69,7 +75,12 @@ impl AdapterReport {
     pub fn render(&self, trace_lines: usize, fast_note: Option<&str>) -> String {
         match self {
             AdapterReport::Tests(r) => report::render(r, trace_lines, fast_note),
-            AdapterReport::Value(v) => crate::toon::encode(v),
+            AdapterReport::Value(v) => {
+                // Same cwd-relative paths as test reports (report::render).
+                let mut v = v.clone();
+                report::relativize_value(&mut v);
+                crate::toon::encode(&v)
+            }
         }
     }
 }
@@ -95,6 +106,15 @@ pub trait Adapter {
     fn fast_args(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What the tool would have printed on stdout for the user's own argv,
+    /// had `prepare()` not injected a machine format (plain `go test` vs
+    /// `go test -json`, which is far larger). When present, the net-savings
+    /// guard measures the report against this view instead of the bulky
+    /// machine stream, and emits it when the report would not pay for
+    /// itself. Default: none (the captured stream is already the baseline).
+    fn native_stdout(&self, _user_argv: &[String], _captured: &Captured) -> Option<String> {
+        None
+    }
 }
 
 pub fn registry() -> Vec<Box<dyn Adapter>> {
@@ -118,6 +138,11 @@ pub fn registry() -> Vec<Box<dyn Adapter>> {
         Box::new(phpunit::Phpunit),
         Box::new(rspec::Rspec),
         Box::new(swiftlint::Swiftlint),
+        Box::new(gradle::Gradle),
+        Box::new(maven::Maven),
+        Box::new(dotnet_test::DotnetTest),
+        Box::new(golangci_lint::GolangciLint),
+        Box::new(pkg_script::PkgScript),
     ]
 }
 
@@ -276,6 +301,14 @@ pub fn strip_uv_run(argv: &[String]) -> &[String] {
         "uvx" => &argv[1..],
         "uv" if arg(1) == Some("run") => &argv[2..],
         "uv" if arg(1) == Some("tool") && arg(2) == Some("run") => &argv[3..],
+        // Other Python project runners forward argv the same way. Their own
+        // options are not modelled, so only the bare `<tool> run <cmd>` form
+        // is unwrapped; anything else is left alone (fail open).
+        "poetry" | "pdm" | "hatch" | "pipenv" | "rye"
+            if arg(1) == Some("run") && arg(2).is_some_and(|a| !a.starts_with('-')) =>
+        {
+            return &argv[2..];
+        }
         _ => return argv,
     };
     skip_uv_opts(rest)
@@ -329,6 +362,22 @@ mod tests {
             strip_uv_run(&argv(&["uv", "run", "python", "-m", "pytest"])),
             &argv(&["python", "-m", "pytest"])[..]
         );
+    }
+
+    #[test]
+    fn strip_uv_run_unwraps_other_python_project_runners() {
+        for tool in ["poetry", "pdm", "hatch", "pipenv", "rye"] {
+            let a = argv(&[tool, "run", "pytest", "-q"]);
+            assert_eq!(strip_uv_run(&a), &a[2..], "{tool}");
+            assert!(
+                find_adapter(&a).is_some_and(|ad| ad.name() == "pytest"),
+                "{tool}"
+            );
+            // Runner-level options are not modelled: leave the argv alone.
+            let opt = argv(&[tool, "run", "--env", "x", "pytest"]);
+            assert_eq!(strip_uv_run(&opt), &opt[..], "{tool}");
+        }
+        assert_eq!(strip_uv_run(&argv(&["poetry", "install"])).len(), 2);
     }
 
     #[test]
@@ -466,6 +515,11 @@ mod tests {
                 "phpunit",
                 "rspec",
                 "swiftlint",
+                "gradle",
+                "maven",
+                "dotnet-test",
+                "golangci-lint",
+                "pkg-script",
             ]
         );
     }

@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/fx/dep","Action":"build-output","Output":"# example.com/fx/dep\n"}
+{"ImportPath":"example.com/fx/dep","Action":"build-output","Output":"dep/d.go:3:23: undefined: y\n"}
+{"ImportPath":"example.com/fx/dep","Action":"build-fail"}
+{"Time":"2026-10-02T03:07:36.299697106Z","Action":"start","Package":"example.com/fx/usesdep"}
+{"Time":"2026-10-02T03:07:36.299764903Z","Action":"output","Package":"example.com/fx/usesdep","Output":"FAIL\texample.com/fx/usesdep [build failed]\n"}
+{"Time":"2026-10-02T03:07:36.299771579Z","Action":"fail","Package":"example.com/fx/usesdep","Elapsed":0,"FailedBuild":"example.com/fx/dep"}

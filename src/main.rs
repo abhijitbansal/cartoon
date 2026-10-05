@@ -1,5 +1,21 @@
 use clap::Parser;
 
+/// `CARTOON_MAX_TOKENS`, warning (not silently ignoring) a value that is not
+/// a number.
+fn env_max_tokens() -> Option<usize> {
+    let v = std::env::var("CARTOON_MAX_TOKENS").ok()?;
+    if v.trim().is_empty() {
+        return None;
+    }
+    match v.trim().parse() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            eprintln!("cartoon: ignoring CARTOON_MAX_TOKENS={v:?} (not a whole number of tokens)");
+            None
+        }
+    }
+}
+
 fn main() {
     let cli = cartoon::cli::Cli::parse();
     let code = match cartoon::cli::parse_mode(cli) {
@@ -13,16 +29,11 @@ fn main() {
             junit,
             max_tokens,
             dropped_filter,
+            merge_streams,
         }) => {
             let mut cfg = cartoon::config::load_for_cwd();
             // Ceiling precedence: flag > CARTOON_MAX_TOKENS > config.
-            cfg.max_tokens = max_tokens
-                .or_else(|| {
-                    std::env::var("CARTOON_MAX_TOKENS")
-                        .ok()
-                        .and_then(|v| v.trim().parse().ok())
-                })
-                .or(cfg.max_tokens);
+            cfg.max_tokens = max_tokens.or_else(env_max_tokens).or(cfg.max_tokens);
             let junit = junit.or_else(|| cfg.command.get(&argv[0]).and_then(|c| c.junit.clone()));
             match cartoon::config::resolve_level(compress.as_deref(), heuristic, &argv[0], &cfg) {
                 Ok(level) => {
@@ -33,9 +44,14 @@ fn main() {
                         fast,
                         junit: junit.map(std::path::PathBuf::from),
                         dropped_filter,
+                        merge_streams: cartoon::config::resolve_merge_streams(
+                            merge_streams,
+                            &argv[0],
+                            &cfg,
+                        ),
                     };
                     cartoon::app::run_wrap(&argv, &opts, &cfg).unwrap_or_else(|e| {
-                        eprintln!("cartoon: {e}");
+                        eprintln!("cartoon: {e:#}");
                         2
                     })
                 }
@@ -94,16 +110,18 @@ fn main() {
                 eprintln!("cartoon: {e}");
                 2
             }),
+        Ok(cartoon::cli::Mode::Mcp { args }) => cartoon::mcp::run(&args).unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Ok(cartoon::cli::Mode::Ingest {
             source,
             compress,
             tags,
+            max_tokens,
         }) => {
             let mut cfg = cartoon::config::load_for_cwd();
-            cfg.max_tokens = std::env::var("CARTOON_MAX_TOKENS")
-                .ok()
-                .and_then(|v| v.trim().parse().ok())
-                .or(cfg.max_tokens);
+            cfg.max_tokens = max_tokens.or_else(env_max_tokens).or(cfg.max_tokens);
             match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
                 Ok(level) => {
                     cartoon::app::run_ingest(&source, level, &tags, &cfg).unwrap_or_else(|e| {
@@ -116,6 +134,20 @@ fn main() {
                     2
                 }
             }
+        }
+        Ok(cartoon::cli::Mode::Last { cmd }) => cartoon::last::run_last(cmd.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
+        Ok(cartoon::cli::Mode::Diff { ids, cmd }) => cartoon::last::run_diff(ids, cmd.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("cartoon: {e}");
+                2
+            }),
+        Ok(cartoon::cli::Mode::Help(text)) => {
+            println!("{text}");
+            0
         }
         Err(e) => {
             eprintln!("cartoon: {e}");

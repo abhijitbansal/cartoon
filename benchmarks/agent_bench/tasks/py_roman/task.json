@@ -1,0 +1,7 @@
+{
+  "description": "Python: to_roman() emits non-canonical numerals for 900s (missing CM); 218 pytest cases, 16 failing",
+  "prompt": "The pytest suite in this directory fails. Run `python3 -m pytest` to see the failures, then fix the bug in the library code. Do not modify anything under tests/ or pyproject.toml. You are done when `python3 -m pytest` passes.",
+  "check": "python3 -m pytest -q -p no:cacheprovider",
+  "protected": ["tests", "pyproject.toml"],
+  "requires": ["python3"]
+}

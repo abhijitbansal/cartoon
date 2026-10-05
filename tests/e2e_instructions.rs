@@ -321,3 +321,24 @@ fn hook_install_instructions_refreshes_a_stale_body() {
         "current directive body not written"
     );
 }
+
+#[test]
+fn install_refuses_a_non_utf8_claude_md_and_leaves_it_intact() {
+    // Regression: a read error (here invalid UTF-8) used to count as "absent",
+    // so install replaced the user's whole CLAUDE.md with just our block.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("CLAUDE.md");
+    let original = b"# Projet\n\nR\xe8gles: caf\xe9\n".to_vec();
+    fs::write(&path, &original).unwrap();
+
+    let out = cartoon()
+        .current_dir(tmp.path())
+        .args(["instructions", "install"])
+        .assert()
+        .failure()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
+    assert!(stderr.contains("CLAUDE.md"), "{stderr}");
+    assert_eq!(fs::read(&path).unwrap(), original, "file must be untouched");
+    assert!(!tmp.path().join("AGENTS.md").exists());
+}

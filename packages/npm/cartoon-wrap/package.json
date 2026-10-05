@@ -10,11 +10,14 @@
   "homepage": "https://github.com/abhijitbansal/cartoon",
   "keywords": ["llm", "agents", "tokens", "toon", "cli", "pytest", "jest", "test-output"],
   "bin": { "cartoon": "bin/cartoon.js" },
+  "files": ["bin/"],
+  "engines": { "node": ">=16" },
+  "scripts": { "test": "node --test test/wrapper.test.mjs" },
   "optionalDependencies": {
     "cartoon-wrap-darwin-arm64": "0.0.0",
     "cartoon-wrap-darwin-x64": "0.0.0",
     "cartoon-wrap-linux-arm64": "0.0.0",
     "cartoon-wrap-linux-x64": "0.0.0",
-    "cartoon-wrap-win32-x64": "0.0.0"
+    "cartoon-wrap-windows-x64": "0.0.0"
   }
 }

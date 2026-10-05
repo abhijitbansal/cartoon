@@ -21,7 +21,7 @@
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="2400">
 <meta property="og:image:height" content="1260">
-<meta property="og:image:alt" content="cartoon — Stop paying your AI agent to read PASSED PASSED PASSED. ~70% smaller test runs, raw log always archived, exit codes mirrored.">
+<meta property="og:image:alt" content="cartoon — Stop paying your AI agent to read PASSED PASSED PASSED. ~70% smaller verbose test runs, raw log always archived, exit codes mirrored.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="cartoon — token-optimized output for any CLI">
 <meta name="twitter:description" content="Your AI agent reads 12 lines instead of 800 — raw log always archived, exit codes mirrored, zero-risk by construction.">
@@ -346,6 +346,7 @@
       <div class="install-pill"><b>pipx</b> install cartoon</div>
       <div class="install-pill"><b>npm</b> i -g cartoon-wrap</div>
       <div class="install-pill"><b>cargo</b> install cartoon</div>
+      <div class="install-pill"><b>cargo</b> binstall cartoon</div>
     </div>
 
     <figure class="blueprint anim" style="--i:1">
@@ -491,9 +492,9 @@ cartoon hook status    # check · uninstall to remove</pre>
   </div>
 
   <div class="statband">
-    <div class="stat gold anim" style="--i:2"><div class="n">~70%</div><div class="l">smaller test runs, typical</div></div>
-    <div class="stat anim" style="--i:3"><div class="n">92.5%</div><div class="l">token cut · chatty service log</div><div class="m">CI-measured</div></div>
-    <div class="stat anim" style="--i:4"><div class="n">61.5%</div><div class="l">token cut · cargo build failure</div><div class="m">CI-measured</div></div>
+    <div class="stat gold anim" style="--i:2"><div class="n">~70%</div><div class="l">smaller verbose test runs (estimate; see benchmarks)</div></div>
+    <div class="stat anim" style="--i:3"><div class="n">92.5%</div><div class="l">token cut · chatty service log</div><div class="m">measured by cargo test</div></div>
+    <div class="stat anim" style="--i:4"><div class="n">61.5%</div><div class="l">token cut · cargo build failure</div><div class="m">measured by cargo test</div></div>
     <div class="stat anim" style="--i:5"><div class="n">0</div><div class="l">risk — output never gets bigger</div></div>
   </div>
 
@@ -610,8 +611,8 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     <div class="gcard anim" style="--i:10">
       <span class="idx">01</span>
       <span class="chip chip--navy">Adapters</span>
-      <h3>Twenty runners, native formats</h3>
-      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo test/nextest, cargo build/check/clippy, go test, phpunit, rspec, swiftlint — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>/<code>archive</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--message-format=json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> and <b>xcrun</b> are first-class too — <code>uv run pytest</code>, <code>uvx ruff check</code>, <code>xcrun xcodebuild test</code> are detected and auto-wrapped just like the bare tools. Anything that writes JUnit XML (gradle, maven, dotnet) gets the same report via <code>--junit</code>.</p>
+      <h3>Twenty-four runners, native formats</h3>
+      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo test/nextest, cargo build/check/clippy, go test, golangci-lint, phpunit, rspec, swiftlint, gradle, maven, <code>dotnet test</code>, and <code>npm</code>/<code>pnpm</code>/<code>yarn</code>/<code>bun</code> test scripts that run jest or vitest — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>/<code>archive</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--message-format=json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> and <b>xcrun</b> are first-class too — <code>uv run pytest</code>, <code>uvx ruff check</code>, <code>xcrun xcodebuild test</code> are detected and auto-wrapped just like the bare tools. gradle and maven need no flag at all: the JUnit XML they already write is read back after the run. Anything else that writes JUnit XML gets the same report via <code>--junit</code>.</p>
     </div>
     <div class="gcard anim" style="--i:11">
       <span class="idx">02</span>
@@ -702,7 +703,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       <rect width="84" height="3.5" rx="2" fill="var(--navy)"/>
       <text x="42" y="22" font-size="8" fill="var(--navy)" text-anchor="middle" letter-spacing="1">1 · MATCH</text>
       <text x="42" y="38" font-size="7.5" fill="var(--text-dim)" text-anchor="middle">adapter?</text>
-      <text x="42" y="50" font-size="7" fill="var(--text-dim)" text-anchor="middle">11 runners</text>
+      <text x="42" y="50" font-size="7" fill="var(--text-dim)" text-anchor="middle">24 runners</text>
     </g>
     <g transform="translate(196 86)">
       <rect width="84" height="64" rx="8" fill="var(--surface)" stroke="var(--gold)" stroke-width="1.2"/>
@@ -769,7 +770,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   </g>
 </svg>
     </div>
-    <figcaption><b>FIG.3</b> — quality enforced by a golden corpus in CI: real captured logs, must-survive signal assertions, measured token-reduction floors</figcaption>
+    <figcaption><b>FIG.3</b> — quality enforced by a golden corpus in the test suite (cargo test): real captured logs, must-survive signal assertions, measured token-reduction floors</figcaption>
   </figure>
 
   <!-- ============ GUARANTEES ============ -->
@@ -790,7 +791,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   <div class="shead anim" style="--i:22">
     <div class="rule"><span class="tag">Coverage</span></div>
     <h2>Adapters &amp; measured results</h2>
-    <p>Twenty runners get native, machine-readable handling. Everything else still rides the compression ladder, and output that arrives without a matching command — a <code>./build.sh</code> that runs xcodebuild inside, JUnit XML on stdout — is recognized by shape. <code>cartoon doctor</code> lists any hook-allowlisted tool that still has no adapter.</p>
+    <p>Twenty-four runners get native, machine-readable handling. Everything else still rides the compression ladder, and output that arrives without a matching command — a <code>./build.sh</code> that runs xcodebuild inside, JUnit XML on stdout — is recognized by shape. <code>cartoon doctor</code> lists any hook-allowlisted tool that still has no adapter.</p>
   </div>
 
   <div class="tablewrap anim" style="--i:23">
@@ -816,6 +817,11 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
         <tr><td><code>phpunit</code><span class="newchip">New · 0.6</span></td><td>phpunit, vendor/bin/phpunit</td><td>injected --log-junit</td></tr>
         <tr><td><code>rspec</code><span class="newchip">New · 0.6</span></td><td>rspec, bundle exec rspec</td><td>injected --format json --out &lt;file&gt;</td></tr>
         <tr class="apple"><td><code>swiftlint</code><span class="newchip">New · Apple</span></td><td>swiftlint, swiftlint lint (never --fix / autocorrect)</td><td>injected --reporter json</td></tr>
+        <tr><td><code>gradle</code><span class="newchip">New</span></td><td>gradle, ./gradlew test / check / build / *Test</td><td>nothing injected; reads the build/test-results JUnit XML this run wrote, plus javac/kotlinc and failed-task errors</td></tr>
+        <tr><td><code>maven</code><span class="newchip">New</span></td><td>mvn, ./mvnw test / verify / package / install</td><td>nothing injected; reads the surefire/failsafe reports this run wrote, plus compiler and goal errors</td></tr>
+        <tr><td><code>dotnet-test</code><span class="newchip">New</span></td><td>dotnet test (VSTest)</td><td>injected --logger trx --results-directory &lt;temp&gt;; MSBuild errors lifted in</td></tr>
+        <tr><td><code>golangci-lint</code><span class="newchip">New</span></td><td>golangci-lint run</td><td>injected --output.json.path=stdout (v2) / --out-format json (v1)</td></tr>
+        <tr><td><code>pkg-script</code><span class="newchip">New</span></td><td>npm test, npm run test, pnpm test, yarn test, bun run test — test script is plain jest / vitest</td><td>the jest / vitest flags, forwarded to the script</td></tr>
       </tbody>
     </table>
   </div>
@@ -824,7 +830,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     <div class="frame">
 <svg viewBox="0 0 720 340" role="img" aria-labelledby="dvTitle dvDesc" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;font-family:'JetBrains Mono','SF Mono',Consolas,monospace">
   <title id="dvTitle">Measured token reduction across the golden corpus</title>
-  <desc id="dvDesc">Horizontal blueprint bar chart, measured in CI. Chatty service log reduced 92.5 percent. Cargo build failure reduced 61.5 percent. npm ERESOLVE conflict net zero percent because the net-savings guard emits the original byte-for-byte. Typical test runs are about 70 percent smaller.</desc>
+  <desc id="dvDesc">Horizontal blueprint bar chart, measured by the test suite (cargo test). Chatty service log reduced 92.5 percent. Cargo build failure reduced 61.5 percent. npm ERESOLVE conflict net zero percent because the net-savings guard emits the original byte-for-byte. Verbose test runs are about 70 percent smaller (an estimate; see the benchmark).</desc>
   <defs>
     <style>
       .dv-grow{transform:scaleX(1);transform-box:fill-box;transform-origin:left}
@@ -835,7 +841,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     </style>
   </defs>
 
-  <text x="8" y="20" font-size="9" letter-spacing="1.5" fill="var(--gold)">FIG.2 — TOKEN REDUCTION · GOLDEN CORPUS · CI-MEASURED</text>
+  <text x="8" y="20" font-size="9" letter-spacing="1.5" fill="var(--gold)">FIG.2 — TOKEN REDUCTION · GOLDEN CORPUS · MEASURED BY CARGO TEST</text>
 
   <g transform="translate(8 40)">
     <line x1="500" y1="-4" x2="500" y2="236" stroke="var(--rust)" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>
@@ -881,8 +887,8 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     </g>
 
     <g transform="translate(0 200)">
-      <text x="132" y="16" font-size="9.5" fill="var(--text)" text-anchor="end">test runs (typical)</text>
-      <text x="132" y="28" font-size="7.5" fill="var(--text-dim)" text-anchor="end">across the corpus</text>
+      <text x="132" y="16" font-size="9.5" fill="var(--text)" text-anchor="end">verbose test runs</text>
+      <text x="132" y="28" font-size="7.5" fill="var(--text-dim)" text-anchor="end">benchmark estimate</text>
       <rect x="140" y="4" width="360" height="22" rx="11" fill="var(--surface2)" stroke="var(--border)"/>
       <rect x="140" y="4" width="108" height="22" rx="11" fill="var(--gold)" opacity="0.85" class="dv-grow" style="animation-delay:.24s"/>
       <text x="252" y="20" font-size="9" fill="var(--text-dim)">~&#8722;70% (estimate)</text>
@@ -896,13 +902,13 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   </g>
 </svg>
     </div>
-    <figcaption><b>FIG.2</b> — token reduction, golden corpus · three CI-measured bars + the ~70% typical estimate · the adapter table above is the copy-paste twin</figcaption>
+    <figcaption><b>FIG.2</b> — token reduction, golden corpus · three bars measured by cargo test + the ~70% estimate for verbose test runs (benchmarks/README.md) · the adapter table above is the copy-paste twin</figcaption>
   </figure>
 
   <p class="pull anim" style="--i:25">"Your agent reads 12 lines instead of 800 — and the <span>receipt is always on disk</span>."</p>
 
   <div class="signoff anim" style="--i:28">
-    <div class="drule"><span>REV <span id="version" data-cartoon-version>0.6.0</span> · MIT</span></div>
+    <div class="drule"><span>REV <span id="version" data-cartoon-version>0.7.0</span> · MIT</span></div>
     a cartoon is a compressed rendering of reality — so is this
   </div>
 

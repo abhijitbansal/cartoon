@@ -10,7 +10,7 @@ license: MIT
 re-rendered as [TOON](https://github.com/toon-format/toon), a compact
 format built for LLM consumption: test passes collapse to counts, failures
 keep full actionable detail (location, message, user-code traceback).
-Typical test runs shrink ~70%+. Exit codes and behavior are unchanged.
+Verbose test runs shrink ~70% (an estimate; far less against already-quiet flags like `pytest -q`). Exit codes and behavior are unchanged.
 
 ## Check it is installed (once per session)
 
@@ -52,18 +52,20 @@ piped command at all, so you lose cartoon entirely.
 
 ```bash
 xcodebuild build … | tail -15     # WRONG: dumb cut, and wrapping is skipped
-cartoon xcodebuild build …        # RIGHT: signal kept, ~70% fewer tokens
+cartoon xcodebuild build …        # RIGHT: signal kept, far fewer tokens
 ```
 
 Wrap first; if you still need a slice of the raw log afterward, use
 `cartoon logs grep … --last`. Anything with a dedicated adapter (pytest,
 unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo
-test/nextest, cargo build/check/clippy, go test, phpunit, rspec, swiftlint,
-swift test/build, `xcodebuild test`/`build`/`archive`) should be run bare so
+test/nextest, cargo build/check/clippy, go test, golangci-lint, phpunit,
+rspec, swiftlint, gradle, maven, dotnet test, `npm`/`pnpm`/`yarn test` and
+`bun run test` when the script is plain jest/vitest, swift test/build,
+`xcodebuild test`/`build`/`archive`) should be run bare so
 the auto-wrap hook catches it — never behind a pipe. If you must pipe, use
 `cartoon -c '<cmd> | tail -5'`: the adapter still fires and the dropped
-filter is disclosed. Any runner that writes JUnit XML (gradle, maven, dotnet)
-gets the same report via `cartoon --junit <file-or-dir> <cmd>`, and
+filter is disclosed. Any other runner that writes JUnit XML gets the same
+report via `cartoon --junit <file-or-dir> <cmd>`, and
 `cartoon --max-tokens 1500 <cmd>` guarantees a hard ceiling on what you read.
 
 Commands without a dedicated adapter still compress: the safe tier (ANSI,
@@ -102,7 +104,8 @@ cartoon logs grep "ERROR" --last -C 2   # matching lines + context, capped
 ```
 
 Only read `<raw_log path>/stdout.log` in full when a targeted grep can't
-answer the question.
+answer the question. After fixing and re-running, `cartoon diff` lists what
+got fixed / still fails / newly fails; `cartoon last` re-shows a report.
 
 ## Why wrapping is safe
 

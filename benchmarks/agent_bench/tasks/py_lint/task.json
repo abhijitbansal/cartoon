@@ -1,0 +1,7 @@
+{
+  "description": "Python lint: ruff F401/E711/B006/F821/F841/B007, two of them real bugs (mutable default, typo'd name); ruff check + 8 pytest tests",
+  "prompt": "`ruff check .` reports problems in this project and some tests fail. Run `ruff check .` and `python3 -m pytest`, then fix the code in inventory/. Do not modify tests/ or pyproject.toml, and do not add `noqa` comments. You are done when both `ruff check .` and `python3 -m pytest` pass.",
+  "check": "ruff check --no-cache . && python3 -m pytest -q -p no:cacheprovider && ! grep -rn 'noqa' inventory",
+  "protected": ["tests", "pyproject.toml"],
+  "requires": ["ruff", "python3"]
+}

