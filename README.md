@@ -137,6 +137,22 @@ Activate for the non-interactive shells agents spawn with
 `CARTOON_NO_SHIM=1`. Shims wrap the same allowlist as the hook, but (unlike
 the hook) can't see surrounding pipes, so keep them to tools you run bare.
 
+### No hook? MCP server (Cursor, Codex, Windsurf, Claude Desktop)
+
+`cartoon mcp` serves cartoon over the Model Context Protocol (stdio): a
+`run` tool that behaves exactly like `cartoon -c '<command>'`, plus
+`logs_grep`, `logs_list` and `stats`.
+
+```bash
+claude mcp add cartoon -- cartoon mcp                          # Claude Code
+# Cursor / Claude Desktop / Windsurf: {"mcpServers": {"cartoon": {"command": "cartoon", "args": ["mcp"]}}}
+# Codex (~/.codex/config.toml): [mcp_servers.cartoon] command = "cartoon", args = ["mcp"]
+```
+
+`run` executes arbitrary shell commands; your client's tool-approval prompt
+is the only gate. Config locations, timeouts and the tool reference:
+[docs/agents.md](docs/agents.md#no-hook-mcp-server-cursor-codex-windsurf-claude-desktop).
+
 ### Copilot tips & limitations
 
 Tips:

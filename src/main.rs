@@ -104,6 +104,10 @@ fn main() {
                 eprintln!("cartoon: {e}");
                 2
             }),
+        Ok(cartoon::cli::Mode::Mcp { args }) => cartoon::mcp::run(&args).unwrap_or_else(|e| {
+            eprintln!("cartoon: {e}");
+            2
+        }),
         Ok(cartoon::cli::Mode::Ingest {
             source,
             compress,
