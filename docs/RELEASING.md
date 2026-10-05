@@ -18,7 +18,7 @@ gh run watch
 
 ```
 verify-version ─┐
-test ───────────┼─► build ─┬─► github-release
+test ───────────┼─► build ─┬─► github-release ─► homebrew-formula
                 │          ├─► npm-publish
                 │          └─► crates-publish
                 ├─► pypi-wheels ─┐
@@ -30,6 +30,7 @@ test ───────────┼─► build ─┬─► github-releas
 | `verify-version` | nothing: every manifest must match the tag | — |
 | `test` | nothing: fmt, clippy, `cargo test`, npm wrapper test | — |
 | `build` → `github-release` | 5 binary tarballs + `SHA256SUMS` + build provenance on the GitHub release | `GITHUB_TOKEN` |
+| `homebrew-formula` | a PR against `main` updating `Formula/cartoon.rb` (skipped for `-rc` tags) | `GITHUB_TOKEN` |
 | `pypi-wheels` + `pypi-sdist` → `pypi-publish` | 7 wheels + 1 sdist to PyPI | Trusted Publishing (OIDC) |
 | `npm-publish` | `cartoon-wrap` + 5 `cartoon-wrap-<platform>` packages | Trusted Publishing (OIDC) |
 | `crates-publish` | `cartoon` to crates.io | Trusted Publishing (OIDC) |
@@ -59,6 +60,36 @@ Debian 12, RHEL 9 and `python:*` images. The npm platform packages carry no
 The tarball names are a contract: `install.sh` and
 `[package.metadata.binstall]` in Cargo.toml download
 `cartoon-<target>.tar.gz` (a Linux gnu host fetches the musl tarball).
+
+## Homebrew
+
+This repo is its own tap: `brew tap abhijitbansal/cartoon
+https://github.com/abhijitbansal/cartoon && brew install cartoon` reads
+`Formula/cartoon.rb`, which downloads the macOS and Linux release tarballs
+(sha256-pinned per platform) and installs the binary.
+
+The formula is generated, never hand-edited:
+`node scripts/update-formula.mjs <version> <SHA256SUMS>` writes it, and
+`--self-test` checks the generator and that the committed formula is exactly
+what it would produce. After `github-release`, the `homebrew-formula` job
+downloads the new `SHA256SUMS`, regenerates the formula and opens a PR
+(branch `homebrew/vX.Y.Z`). Merging it is what ships the release to brew
+users; until then `brew upgrade` stays on the previous version.
+
+- One-time setting: Settings → Actions → General → "Allow GitHub Actions to
+  create and approve pull requests", or `gh pr create` fails (the branch is
+  still pushed; open the PR by hand).
+- PRs opened with `GITHUB_TOKEN` don't trigger `ci.yml`; the formula only
+  changes URLs and checksums, so review the diff instead. To check it on a
+  Mac: `brew install --formula ./Formula/cartoon.rb && brew test cartoon`.
+- Linux prefers the static musl tarball and falls back to the glibc one.
+  The committed 0.6.0 formula points at the glibc builds (0.6.0 published
+  no musl tarballs; they need glibc ≥ 2.39); the next release switches it
+  to musl automatically. 0.6.0 also published no `SHA256SUMS`, so its
+  checksums were computed from the downloaded tarballs.
+- Recovery: if the job failed, run the script locally with the release's
+  `SHA256SUMS` (`gh release download vX.Y.Z -p SHA256SUMS`) and open the PR
+  yourself.
 
 ## Versioning
 
@@ -160,8 +191,9 @@ Artifacts are retained ~90 days; after that, rebuild from the tag.
    `npm i -g cartoon-wrap`, `cargo install cartoon`,
    `curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh`
    → `cartoon adapters`.
-5. Check the registry pages render README + metadata.
-6. Quarterly: audit registry token pages — there should be **zero**
+5. Review and merge the `homebrew/vX.Y.Z` formula PR.
+6. Check the registry pages render README + metadata.
+7. Quarterly: audit registry token pages — there should be **zero**
    long-lived publish tokens; anything alive needs a reason.
 
 ## GitHub Actions settings
