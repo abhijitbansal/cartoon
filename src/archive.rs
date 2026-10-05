@@ -284,6 +284,67 @@ pub fn load_at(root: &Path, id: &str) -> Result<(RunMeta, String, String)> {
     Ok((meta, stdout, stderr))
 }
 
+/// The structured report an adapter produced for a run, stored next to its
+/// raw logs as `report.json` so `cartoon last` can re-show it and `cartoon
+/// diff` can compare it with another run of the same command, without
+/// re-parsing the raw streams. Paths are already cwd-relative.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredReport {
+    /// `tests` (a test runner's failures) or `diagnostics` (lint/typecheck/build).
+    pub kind: String,
+    pub runner: String,
+    /// Failed tests, or diagnostics reported.
+    pub failed: u64,
+    pub items: Vec<StoredItem>,
+    /// The TOON report exactly as the run printed it (before footers).
+    pub rendered: String,
+}
+
+/// One failing test (`id`) or one diagnostic (`rule`), with its location.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredItem {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(default)]
+    pub loc: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rule: String,
+    #[serde(default)]
+    pub msg: String,
+}
+
+pub const REPORT_FILE: &str = "report.json";
+
+/// Write `report.json` into an archived run's dir (private, like the logs).
+/// Best effort: a run without one simply has nothing to diff.
+pub fn write_report(dir: &Path, report: &StoredReport) -> bool {
+    serde_json::to_string(report)
+        .ok()
+        .is_some_and(|json| write_private(&dir.join(REPORT_FILE), json).is_ok())
+}
+
+/// The stored report of run `id` under `root`; None when the run had no
+/// adapter report (or the id is not a run id).
+pub fn load_report_at(root: &Path, id: &str) -> Option<StoredReport> {
+    if !looks_like_run_id(id) {
+        return None;
+    }
+    let text = std::fs::read_to_string(root.join(id).join(REPORT_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// `YYYYMMDD-HHMMSS-xxxx`: the shape `new_run_id` produces.
+pub fn looks_like_run_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 20
+        && b[8] == b'-'
+        && b[15] == b'-'
+        && b[..8].iter().chain(&b[9..15]).all(u8::is_ascii_digit)
+        && b[16..]
+            .iter()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+}
+
 /// The newest runs that the size budget never deletes: one oversized log
 /// must not wipe out every older `raw_log` an agent may still hold.
 const MIN_KEEP_RUNS: usize = 5;
@@ -365,7 +426,10 @@ fn prune_at(root: &Path, cfg: &Config, now: chrono::DateTime<chrono::Utc>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_run_dir_with, list_at, load_at, new_run_id, prune_at, record_at};
+    use super::{
+        create_run_dir_with, list_at, load_at, load_report_at, looks_like_run_id, new_run_id,
+        prune_at, record_at, write_report, StoredItem, StoredReport,
+    };
     use crate::runner::Captured;
     use std::path::Path;
 
@@ -644,5 +708,38 @@ mod tests {
         off.keep_runs = 0;
         assert!(record_at(tmp.path(), &["a".into()], "json", &cap, 0, &[], &off).is_none());
         assert!(list_at(tmp.path(), None).is_empty());
+    }
+
+    #[test]
+    fn report_round_trips_next_to_the_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cap = captured("x", "");
+        let argv = ["pytest".to_string()];
+        let run = record_at(tmp.path(), &argv, "pytest", &cap, 1, &[], &cfg()).unwrap();
+        assert_eq!(load_report_at(tmp.path(), &run.id), None, "no report yet");
+        let report = StoredReport {
+            kind: "tests".into(),
+            runner: "pytest".into(),
+            failed: 1,
+            items: vec![StoredItem {
+                id: "t.py::test_a".into(),
+                loc: "t.py:3".into(),
+                rule: String::new(),
+                msg: "assert 1 == 2".into(),
+            }],
+            rendered: "runner: pytest".into(),
+        };
+        assert!(write_report(&run.dir, &report));
+        assert_eq!(load_report_at(tmp.path(), &run.id), Some(report));
+        assert_eq!(load_report_at(tmp.path(), "../x"), None);
+    }
+
+    #[test]
+    fn run_id_shape() {
+        assert!(looks_like_run_id(&new_run_id()));
+        assert!(looks_like_run_id("20261005-120102-0a9f"));
+        assert!(!looks_like_run_id("a.txt"));
+        assert!(!looks_like_run_id("20261005-120102-0A9F"));
+        assert!(!looks_like_run_id("20261005-120102-0a9f/.."));
     }
 }
