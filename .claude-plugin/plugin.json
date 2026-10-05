@@ -1,7 +1,7 @@
 {
   "name": "cartoon",
   "description": "Token-optimized CLI output: wrap test runs and JSON CLIs in `cartoon` (~70% fewer input tokens on verbose test runs; an estimate). Includes a PreToolUse hook that rewrites noisy dev-loop commands (pytest, jest, cargo test, go test, make, npm test, pre-commit, ...) to run under cartoon and AUTO-APPROVES the rewritten command (permissionDecision: allow), so those commands skip your permission prompt. Prefer a prompt? Skip this plugin: add the skill with `npx skills add abhijitbansal/cartoon` and run `cartoon hook install --deny` (deny-and-suggest: nothing is auto-approved). Requires the cartoon binary; the hook is a no-op without it.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": {
     "name": "Abhijit Bansal",
     "email": "contact@abhijitbansal.com"

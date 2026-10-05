@@ -34,7 +34,7 @@ distro: old glibc, Alpine, `python:*` images. PyPI also ships an sdist, so
 `pip` builds from source (needs a Rust toolchain) where no wheel fits.
 
 `install.sh` puts the binary in `~/.local/bin` (override with
-`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.6.0`) after
+`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.7.0`) after
 checking it against the release's `SHA256SUMS`. Release tarballs also carry
 build provenance: `gh attestation verify cartoon-<target>.tar.gz -R
 abhijitbansal/cartoon`.
@@ -203,11 +203,11 @@ change shell state (`cd`, `export`, `source`) pass through untouched, and
 anything unrecognized is left alone (fail-open). The net-savings guard
 still applies — worst case the output is byte-identical.
 
-### What the hook will not auto-approve (0.6.0)
+### What the hook will not auto-approve (0.7.0)
 
 Because a rewrite is emitted with `permissionDecision: "allow"`, the
-allowlist tightened in 0.6.0 — some previously auto-approved commands now
-reach your normal permission prompt instead:
+allowlist is deliberately narrow; anything below reaches your normal
+permission prompt instead (0.7.0 tightened it further — marked *new*):
 
 - A leading `NAME=value` prefix rides along only for benign names (`CI`,
   `RUST_LOG`, `NO_COLOR`, …). `PATH=… pytest`, `LD_PRELOAD=… cargo test`,
@@ -215,8 +215,18 @@ reach your normal permission prompt instead:
 - `ruff` is gated to `ruff check`; `ruff format`, `--fix`, `eslint --fix`,
   `eslint -c <path>`, `swiftlint --fix` / `autocorrect` are never wrapped.
 - `npx`/`bunx`/`pnpx` launch only `jest`, `vitest`, `tsc`, `eslint`.
-- `make` and `pre-commit` stay allowlisted by explicit decision: they are
-  the canonical dev-loop entry points and the agent already has write
+- *new:* flags that load or run code from outside the project are refused
+  per tool: `go test -exec/-toolexec`, `cargo --config/-Z/+toolchain`,
+  `make -f/-C/NAME=value`, `jest|vitest --config/--setupFiles…`,
+  `pytest -p <plugin>/-c/--rootdir`, `mypy --config-file`,
+  `gradle -I/-D/-P`, `mvn -s/-f`, `dotnet -p:` and the like.
+- *new:* `..` paths or absolute paths outside the project, `;`/`|`/`||`
+  compounds, and anything with `$`, backticks, backslashes or globs are
+  never rewritten (only `&&` compounds of eligible commands are).
+- *new:* `PYTEST_ADDOPTS=…` no longer rides along; `pre-commit` is
+  wrapped for `run` only.
+- `make` and `pre-commit run` stay allowlisted by explicit decision: they
+  are the canonical dev-loop entry points and the agent already has write
   access to the repo. Install with `--deny` if you disagree.
 - `cartoon hook install --deny` on an existing install switches the mode
   in place (and back without the flag).

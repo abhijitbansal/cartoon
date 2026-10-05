@@ -277,15 +277,23 @@ jobs:
           pattern: cartoon-bin-*
           path: bins
       # Every platform package must publish before the parent that depends
-      # on them; any failure fails the job.
+      # on them; any failure fails the job. One exception: a package that has
+      # never been published (a new platform name) can't use Trusted
+      # Publishing until the maintainer bootstraps it once by hand
+      # (docs/RELEASING.md). It is skipped with a warning and left out of the
+      # parent's optionalDependencies for this release.
       - name: publish platform packages
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/npm-platform-packages.mjs "$VERSION" bins npm-out
+          : > "$RUNNER_TEMP/npm-unpublished"
           for d in npm-out/*/; do
             pkg=$(node -p "require('./$d/package.json').name")
             if npm view "$pkg@$VERSION" version >/dev/null 2>&1; then
               echo "skip $pkg@$VERSION: already published"
+            elif ! npm view "$pkg" name >/dev/null 2>&1; then
+              echo "::warning::$pkg has never been published; bootstrap it by hand (docs/RELEASING.md). Leaving it out of cartoon-wrap@$VERSION."
+              echo "$pkg" >> "$RUNNER_TEMP/npm-unpublished"
             else
               (cd "$d" && npm publish --access public)
             fi
@@ -297,7 +305,9 @@ jobs:
             echo "skip cartoon-wrap@$VERSION: already published"
             exit 0
           fi
-          node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap
+          omit=$(paste -sd, "$RUNNER_TEMP/npm-unpublished")
+          node scripts/npm-set-version.mjs "$VERSION" packages/npm/cartoon-wrap --omit "$omit"
+          node -p "JSON.stringify(require('./packages/npm/cartoon-wrap/package.json').optionalDependencies)"
           (cd packages/npm/cartoon-wrap && npm publish --access public)
 
   crates-publish:
