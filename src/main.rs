@@ -29,6 +29,7 @@ fn main() {
             junit,
             max_tokens,
             dropped_filter,
+            merge_streams,
         }) => {
             let mut cfg = cartoon::config::load_for_cwd();
             // Ceiling precedence: flag > CARTOON_MAX_TOKENS > config.
@@ -43,6 +44,11 @@ fn main() {
                         fast,
                         junit: junit.map(std::path::PathBuf::from),
                         dropped_filter,
+                        merge_streams: cartoon::config::resolve_merge_streams(
+                            merge_streams,
+                            &argv[0],
+                            &cfg,
+                        ),
                     };
                     cartoon::app::run_wrap(&argv, &opts, &cfg).unwrap_or_else(|e| {
                         eprintln!("cartoon: {e:#}");

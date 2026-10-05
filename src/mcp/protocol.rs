@@ -268,7 +268,10 @@ mod tests {
         let r = reply(r#"{"jsonrpc":"2.0","id":9,"method":"tools/list"}"#);
         let tools = r["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["run", "logs_grep", "logs_list", "stats"]);
+        assert_eq!(
+            names,
+            ["run", "logs_grep", "logs_list", "last", "diff", "stats"]
+        );
         for t in tools {
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
             assert!(t["description"].as_str().unwrap().len() > 20, "{t}");

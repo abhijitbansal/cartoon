@@ -77,6 +77,25 @@ fn ndjson_is_encoded_as_one_array() {
     assert!(out.contains("39,running,us-east-1a"), "{out}");
 }
 
+#[test]
+fn json_numbers_reach_toon_exactly() {
+    // serde_json's arbitrary_precision: no f64 rounding on the way through.
+    let state = tempfile::tempdir().unwrap();
+    // NDJSON large enough for the TOON table to beat the raw_log footer.
+    let script = r#"i=10; while [ $i -lt 50 ]; do echo "{\"id\": 1234567890123456789012345678$i, \"ratio\": 1.50, \"tiny\": 1e-400, \"zero\": -0}"; i=$((i+1)); done"#;
+    let a = cartoon(state.path())
+        .args(["sh", "-c", script])
+        .assert()
+        .success();
+    let (out, _) = out_of(&a);
+    assert!(out.contains("[40]{id,ratio,tiny,zero}:"), "{out}");
+    assert!(
+        out.contains("\n  123456789012345678901234567810,1.5,1e-400,0\n"),
+        "{out}"
+    );
+    assert!(out.contains("123456789012345678901234567849,1.5"), "{out}");
+}
+
 // §1.2 ---------------------------------------------------------------------
 
 fn pytest_project(dir: &Path, body: &str) {
@@ -453,4 +472,162 @@ fn failed_archive_means_no_raw_log_pointer_and_no_lossy_output() {
     let (out, _) = out_of(&a);
     assert!(!out.contains("raw_log"), "{out}");
     assert!(out.starts_with("[{\"name\": \"instance-0\""), "{out}");
+}
+
+// Merged-stream mode -------------------------------------------------------
+
+/// 40 identical stdout lines, a stderr error, 40 more stdout lines: the
+/// ladder collapses the repeats, so the transformed path is taken.
+const INTERLEAVED: &str =
+    "i=0; while [ $i -lt 40 ]; do echo 'Compiling widget v1.0'; i=$((i+1)); done; \
+     sleep 0.2; echo 'error: linker failed' >&2; sleep 0.2; \
+     i=0; while [ $i -lt 40 ]; do echo 'Finished widget v1.0'; i=$((i+1)); done";
+
+#[test]
+fn merge_streams_keeps_arrival_order_on_stdout() {
+    let state = tempfile::tempdir().unwrap();
+    let a = cartoon(state.path())
+        .args(["--merge-streams", "sh", "-c", INTERLEAVED])
+        .assert()
+        .success();
+    let (out, err) = out_of(&a);
+    assert_eq!(err, "", "stderr is merged into stdout");
+    let (c, e, f) = (
+        out.find("Compiling widget").expect("compiling"),
+        out.find("error: linker failed").expect("stderr line"),
+        out.find("Finished widget").expect("finished"),
+    );
+    assert!(c < e && e < f, "{out}");
+    assert!(
+        out.contains("raw_log"),
+        "transformed, not passthrough: {out}"
+    );
+}
+
+#[test]
+fn without_merge_streams_stderr_stays_on_its_own_fd() {
+    let state = tempfile::tempdir().unwrap();
+    let a = cartoon(state.path())
+        .args(["sh", "-c", INTERLEAVED])
+        .assert()
+        .success();
+    let (out, err) = out_of(&a);
+    assert!(!out.contains("error: linker failed"), "{out}");
+    assert!(err.contains("error: linker failed"), "{err}");
+}
+
+#[test]
+fn merge_streams_from_config_and_per_command_override() {
+    let state = tempfile::tempdir().unwrap();
+    let cfg_dir = state.path().join("config/cartoon");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        "[compress]\nmerge_streams = true\n[command.bash]\nmerge_streams = false\n",
+    )
+    .unwrap();
+    let a = cartoon(state.path())
+        .args(["sh", "-c", INTERLEAVED])
+        .assert()
+        .success();
+    let (out, err) = out_of(&a);
+    assert_eq!(err, "");
+    assert!(out.contains("error: linker failed"), "{out}");
+    if have("bash") {
+        let a = cartoon(state.path())
+            .args(["bash", "-c", INTERLEAVED])
+            .assert()
+            .success();
+        let (out, err) = out_of(&a);
+        assert!(!out.contains("error: linker failed"), "{out}");
+        assert!(err.contains("error: linker failed"), "{err}");
+    }
+}
+
+#[test]
+fn merge_streams_passthrough_replays_both_fds_byte_exact_in_order() {
+    // Too small to compress: the guard keeps the original, which goes back
+    // to the two fds in arrival order (observed here through `2>&1`).
+    let state = tempfile::tempdir().unwrap();
+    let inner = "echo out1; sleep 0.2; echo ERR1 >&2; sleep 0.2; echo out2";
+    let a = cartoon(state.path())
+        .args(["--merge-streams", "sh", "-c", inner])
+        .assert()
+        .success();
+    let (out, err) = out_of(&a);
+    assert_eq!((out.as_str(), err.as_str()), ("out1\nout2\n", "ERR1\n"));
+    let script = format!(
+        "'{}' --merge-streams sh -c '{inner}' 2>&1",
+        env!("CARGO_BIN_EXE_cartoon")
+    );
+    let o = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .env("XDG_STATE_HOME", state.path())
+        .env("XDG_CONFIG_HOME", state.path().join("config"))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "out1\nERR1\nout2\n");
+}
+
+#[test]
+fn merge_streams_keeps_json_first_and_stderr_after_it() {
+    let state = tempfile::tempdir().unwrap();
+    let script = r#"echo 'warning: using cached credentials' >&2; sleep 0.2; i=0; while [ $i -lt 30 ]; do echo "{\"name\": \"instance-$i\", \"state\": \"running\"}"; i=$((i+1)); done"#;
+    let a = cartoon(state.path())
+        .args(["--merge-streams", "sh", "-c", script])
+        .assert()
+        .success();
+    let (out, err) = out_of(&a);
+    assert_eq!(err, "");
+    assert!(out.starts_with("[30]{name,state}:"), "{out}");
+    let (table, warn) = (
+        out.find("instance-29,running").unwrap(),
+        out.find("warning: using cached credentials").unwrap(),
+    );
+    assert!(table < warn, "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn merge_streams_adapter_report_then_stderr_on_stdout() {
+    // A stand-in `ruff` (the adapter injects --output-format json): many
+    // findings on stdout, a config warning on stderr.
+    let state = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let finding = r#"{"code": "F821", "message": "Undefined name `x`", "filename": "src/a.py", "location": {"row": 10, "column": 5}, "end_location": {"row": 10, "column": 6}, "fix": null, "url": "https://docs.astral.sh/ruff/rules/undefined-name"}"#;
+    let body = vec![finding; 20].join(",");
+    let script = format!(
+        "#!/bin/sh\necho 'warning: The top-level linter settings are deprecated' >&2\necho '[{body}]'\nexit 1\n"
+    );
+    let ruff = bin.path().join("ruff");
+    std::fs::write(&ruff, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&ruff, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let warning = "The top-level linter settings are deprecated";
+    for merge in [true, false] {
+        let mut cmd = cartoon(state.path());
+        cmd.env("PATH", &path);
+        if merge {
+            cmd.arg("--merge-streams");
+        }
+        let a = cmd.args(["ruff", "check", "."]).assert().code(1);
+        let (out, err) = out_of(&a);
+        assert!(out.contains("runner: ruff"), "{out}");
+        if merge {
+            assert!(!err.contains(warning), "{err}");
+            let (r, w) = (
+                out.find("runner: ruff").unwrap(),
+                out.find(warning).unwrap(),
+            );
+            assert!(r < w, "report first: {out}");
+        } else {
+            assert!(!out.contains(warning), "{out}");
+            assert!(err.contains(warning), "{err}");
+        }
+    }
 }

@@ -66,3 +66,26 @@ fn toon_spec_conformance_fixtures() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(checked >= 150, "only {checked} spec fixtures ran");
 }
+
+/// Numbers outside f64 reach the encoder as their exact JSON text
+/// (serde_json `arbitrary_precision`) and come out canonical, not rounded.
+#[test]
+fn numbers_beyond_f64_are_lossless() {
+    let cases = [
+        (
+            r#"{"n": 123456789012345678901234567890}"#,
+            "n: 123456789012345678901234567890",
+        ),
+        (r#"{"n": 1e400}"#, "n: 1e+400"),
+        (r#"{"n": -0}"#, "n: 0"),
+        (r#"{"n": 1.50}"#, "n: 1.5"),
+        (
+            r#"{"xs": [9007199254740993, 0.10000000000000000001]}"#,
+            "xs[2]: 9007199254740993,0.10000000000000000001",
+        ),
+    ];
+    for (input, expected) in cases {
+        let v: Value = serde_json::from_str(input).unwrap();
+        assert_eq!(cartoon::toon::encode(&v), expected, "{input}");
+    }
+}
