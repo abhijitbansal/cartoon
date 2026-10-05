@@ -38,7 +38,11 @@ fn formula_is_valid_ruby() {
         .args(["-c", "Formula/cartoon.rb"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -47,7 +51,11 @@ fn formula_covers_every_unix_platform() {
     for block in ["on_macos do", "on_linux do", "on_arm do", "on_intel do"] {
         assert!(rb.contains(block), "missing `{block}`");
     }
-    assert_eq!(rb.matches("sha256 \"").count(), 4, "one checksum per platform");
+    assert_eq!(
+        rb.matches("sha256 \"").count(),
+        4,
+        "one checksum per platform"
+    );
     assert!(rb.contains("bin.install \"cartoon\""));
     assert!(rb.contains("cartoon --version"));
 }

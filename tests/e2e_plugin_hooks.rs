@@ -18,8 +18,8 @@ fn plugin_version() -> String {
     json["version"].as_str().unwrap().to_string()
 }
 
-/// A temp dir holding `bin/` (the only PATH entry: the shell utilities the
-/// script needs, plus an optional `cartoon`) and isolated XDG dirs.
+/// A temp dir holding `bin/` (the only PATH entry: `mkdir`, the one external
+/// tool the script uses, plus an optional `cartoon`) and isolated XDG dirs.
 struct Sandbox {
     dir: tempfile::TempDir,
 }
@@ -29,13 +29,11 @@ impl Sandbox {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        for tool in ["mkdir"] {
-            let found = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-                .map(|d| d.join(tool))
-                .find(|p| p.is_file())
-                .unwrap_or_else(|| panic!("{tool} not found on PATH"));
-            symlink(found, bin.join(tool)).unwrap();
-        }
+        let mkdir = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join("mkdir"))
+            .find(|p| p.is_file())
+            .expect("mkdir on PATH");
+        symlink(mkdir, bin.join("mkdir")).unwrap();
         Sandbox { dir }
     }
 
@@ -45,7 +43,11 @@ impl Sandbox {
 
     /// Put the real cartoon binary on the sandbox PATH.
     fn with_real_cartoon(self) -> Self {
-        symlink(env!("CARGO_BIN_EXE_cartoon"), self.dir.path().join("bin/cartoon")).unwrap();
+        symlink(
+            env!("CARGO_BIN_EXE_cartoon"),
+            self.dir.path().join("bin/cartoon"),
+        )
+        .unwrap();
         self
     }
 
@@ -130,7 +132,10 @@ fn older_binary_gets_one_upgrade_hint() {
     assert_eq!(code, 0);
     let ctx = context_of(&out);
     assert!(ctx.contains("binary is 0.0.9"), "{ctx}");
-    assert!(ctx.contains(&format!("plugin {}", plugin_version())), "{ctx}");
+    assert!(
+        ctx.contains(&format!("plugin {}", plugin_version())),
+        "{ctx}"
+    );
     assert!(ctx.contains("upgrade"), "{ctx}");
     assert_eq!(sb.run(), (0, String::new()), "second session stays quiet");
 }
@@ -171,5 +176,8 @@ fn hooks_json_registers_the_session_start_script() {
         "{cmd}"
     );
     // The PreToolUse rewrite hook is still there.
-    assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "Bash|run_in_terminal");
+    assert_eq!(
+        hooks["hooks"]["PreToolUse"][0]["matcher"],
+        "Bash|run_in_terminal"
+    );
 }
