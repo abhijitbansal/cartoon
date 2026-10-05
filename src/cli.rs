@@ -85,6 +85,12 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub max_tokens: Option<usize>,
 
+    /// Compress stdout and stderr together in arrival order (as `2>&1`
+    /// shows them) and write the result to stdout only. Also: `[compress]`
+    /// or `[command.X]` `merge_streams = true` in config.
+    #[arg(long)]
+    pub merge_streams: bool,
+
     /// Command to wrap plus its args (or a reserved subcommand: stats |
     /// adapters | doctor | init | logs | learn | hook | shim | instructions |
     /// ingest). Unknown `--flags` before the command are an error, not a
@@ -107,6 +113,7 @@ pub enum Mode {
         /// A pure output filter (`tail -5`) dropped from a `-c` pipeline
         /// because the adapter report already shrinks the output.
         dropped_filter: Option<String>,
+        merge_streams: bool,
     },
     Doctor,
     Stats {
@@ -332,6 +339,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             junit: cli.junit,
             max_tokens: cli.max_tokens,
             dropped_filter,
+            merge_streams: cli.merge_streams,
         });
     }
     if cli.command.is_empty() {
@@ -386,6 +394,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             junit: cli.junit,
             max_tokens: cli.max_tokens,
             dropped_filter: None,
+            merge_streams: cli.merge_streams,
         }),
     }
 }
@@ -693,6 +702,34 @@ mod tests {
     }
 
     #[test]
+    fn merge_streams_flag_parses_for_argv_and_shell_strings() {
+        let m = mode(&["cartoon", "--merge-streams", "make"]);
+        assert!(matches!(
+            m,
+            Mode::Wrap {
+                merge_streams: true,
+                ..
+            }
+        ));
+        let m = mode(&["cartoon", "--merge-streams", "-c", "make && make test"]);
+        assert!(matches!(
+            m,
+            Mode::Wrap {
+                merge_streams: true,
+                ..
+            }
+        ));
+        let m = mode(&["cartoon", "-c", "make"]);
+        assert!(matches!(
+            m,
+            Mode::Wrap {
+                merge_streams: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn wrap_mode_passes_args_verbatim() {
         let m = mode(&["cartoon", "pytest", "-q", "--maxfail=1"]);
         assert_eq!(
@@ -706,7 +743,8 @@ mod tests {
                 fast: false,
                 junit: None,
                 max_tokens: None,
-                dropped_filter: None
+                dropped_filter: None,
+                merge_streams: false
             }
         );
     }
@@ -774,7 +812,8 @@ mod tests {
                 fast: false,
                 junit: None,
                 max_tokens: None,
-                dropped_filter: None
+                dropped_filter: None,
+                merge_streams: false
             }
         );
     }

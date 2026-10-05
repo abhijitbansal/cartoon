@@ -98,29 +98,50 @@ impl RunOutput {
     /// child produced them. Returns the first write error (e.g. BrokenPipe);
     /// the caller decides what that means.
     pub fn replay(&self, out: &mut dyn Write, err: &mut dyn Write) -> std::io::Result<()> {
-        let (o, e) = (self.stdout_bytes(), self.stderr_bytes());
-        let (mut oi, mut ei) = (0usize, 0usize);
-        for &(s, n) in &self.order {
-            match s {
-                Stream::Stdout => {
-                    let end = (oi + n).min(o.len());
-                    out.write_all(&o[oi..end])?;
-                    out.flush()?;
-                    oi = end;
-                }
-                Stream::Stderr => {
-                    let end = (ei + n).min(e.len());
-                    err.write_all(&e[ei..end])?;
-                    err.flush()?;
-                    ei = end;
-                }
-            }
+        for (s, bytes) in self.segments() {
+            let w: &mut dyn Write = match s {
+                Stream::Stdout => out,
+                Stream::Stderr => err,
+            };
+            w.write_all(bytes)?;
+            w.flush()?;
         }
-        // Anything the order log does not cover (synthetic captures).
-        out.write_all(&o[oi..])?;
-        err.write_all(&e[ei..])?;
         out.flush()?;
         err.flush()
+    }
+
+    /// Both streams as one text in arrival order — what a terminal (or
+    /// `2>&1`) shows. Lossy only where the bytes are not UTF-8.
+    pub fn merged_text(&self) -> String {
+        if self.captured.stderr.is_empty() {
+            return self.captured.stdout.clone();
+        }
+        let mut bytes = Vec::with_capacity(self.stdout_bytes().len() + self.stderr_bytes().len());
+        for (_, b) in self.segments() {
+            bytes.extend_from_slice(b);
+        }
+        split_utf8(bytes).0
+    }
+
+    /// The original bytes as (stream, slice) runs in arrival order, then
+    /// anything the order log does not cover (synthetic captures).
+    fn segments(&self) -> Vec<(Stream, &[u8])> {
+        let (o, e) = (self.stdout_bytes(), self.stderr_bytes());
+        let (mut oi, mut ei) = (0usize, 0usize);
+        let mut out = Vec::with_capacity(self.order.len() + 2);
+        for &(s, n) in &self.order {
+            let (buf, i) = match s {
+                Stream::Stdout => (o, &mut oi),
+                Stream::Stderr => (e, &mut ei),
+            };
+            let end = (*i + n).min(buf.len());
+            out.push((s, &buf[*i..end]));
+            *i = end;
+        }
+        out.push((Stream::Stdout, &o[oi..]));
+        out.push((Stream::Stderr, &e[ei..]));
+        out.retain(|(_, b)| !b.is_empty());
+        out
     }
 }
 
@@ -545,6 +566,17 @@ mod tests {
             String::from_utf8(merged).unwrap(),
             "O:out1\nE:ERR1\nO:out2\n"
         );
+    }
+
+    #[test]
+    fn merged_text_follows_arrival_order() {
+        let o = sh_out("echo out1; sleep 0.1; echo ERR1 >&2; sleep 0.1; echo out2");
+        assert_eq!(o.merged_text(), "out1\nERR1\nout2\n");
+        // Synthetic captures (no order log) are stdout then stderr.
+        let s = RunOutput::from_bytes(b"only\n".to_vec());
+        assert_eq!(s.merged_text(), "only\n");
+        let lossy = sh_out(r"printf 'a\377\n'; sleep 0.1; printf 'b\n' >&2");
+        assert_eq!(lossy.merged_text(), "a\u{fffd}\nb\n");
     }
 
     #[test]

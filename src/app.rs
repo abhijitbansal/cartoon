@@ -19,6 +19,9 @@ pub struct WrapOpts {
     pub junit: Option<PathBuf>,
     /// A pure output filter dropped from a `-c` pipeline (disclosed).
     pub dropped_filter: Option<String>,
+    /// `--merge-streams`: transformed output is stdout and stderr combined
+    /// in arrival order, on stdout (see `emit_merged`).
+    pub merge_streams: bool,
 }
 
 pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
@@ -53,12 +56,26 @@ pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
         if let Some(rendered) = harvest_junit(path, &argv[0], started, cfg) {
             let candidate = Some((rendered, "junit"));
             return Ok(emit_generic(
-                argv, &run, code, candidate, opts.level, &opts.tags, cfg, None,
+                argv,
+                &run,
+                code,
+                candidate,
+                opts.level,
+                &opts.tags,
+                cfg,
+                None,
+                opts.merge_streams,
             ));
         }
     }
     Ok(transform_emit_record(
-        argv, &run, code, opts.level, &opts.tags, cfg,
+        argv,
+        &run,
+        code,
+        opts.level,
+        &opts.tags,
+        cfg,
+        opts.merge_streams,
     ))
 }
 
@@ -137,12 +154,13 @@ fn transform_emit_record(
     level: CompressLevel,
     tags: &[String],
     cfg: &Config,
+    merge: bool,
 ) -> i32 {
     // Output that arrived without a matching argv0 (a wrapper script running
     // xcodebuild, JUnit XML on stdout) still gets a structured rendering.
     let c = &run.captured;
     let candidate = sniff::sniff(&c.stdout, &c.stderr, code);
-    emit_generic(argv, run, code, candidate, level, tags, cfg, None)
+    emit_generic(argv, run, code, candidate, level, tags, cfg, None, merge)
 }
 
 /// Archive a run under `mode`. archive.rs stores the text view; when the
@@ -207,7 +225,11 @@ fn emit_generic(
     tags: &[String],
     cfg: &Config,
     archived: Option<Option<archive::RunRef>>,
+    merge: bool,
 ) -> i32 {
+    if merge && !run.captured.stderr.is_empty() {
+        return emit_merged(argv, run, code, candidate, level, tags, cfg, archived);
+    }
     let c = &run.captured;
     let counter = Counter::new(
         &cfg.tokenizer,
@@ -221,16 +243,8 @@ fn emit_generic(
     let mut in_out = counter.count(&c.stdout);
     let mut in_err = counter.count(&c.stderr);
 
-    // The pointer the footer will carry: the existing run, or a reserved slot.
-    let (done, reserved) = match archived {
-        Some(done) => (Some(done), None),
-        None => (None, archive::reserve(cfg)),
-    };
-    let log_dir = match (&done, &reserved) {
-        (Some(d), _) => d.as_ref().map(|r| r.dir.clone()),
-        (None, r) => r.as_ref().map(|r| r.dir.clone()),
-    };
-    let log_footer = log_dir.as_deref().map(raw_log_footer).unwrap_or_default();
+    let slot = ArchiveSlot::new(archived, cfg);
+    let log_footer = slot.footer();
     let int_footer = interrupted_footer(run);
 
     let mut out_part = Part::Raw;
@@ -263,17 +277,7 @@ fn emit_generic(
         }
     }
 
-    let run_ref = match (done, reserved) {
-        (Some(done), _) => done,
-        (None, Some(r)) => {
-            let written = archive::write_reserved(r, argv, mode, &run.captured, code, tags, cfg);
-            if let Some(w) = &written {
-                restore_raw_bytes(w, run);
-            }
-            written
-        }
-        (None, None) => None,
-    };
+    let run_ref = slot.finish(argv, mode, run, code, tags, cfg);
     if mode != "passthrough" && !lossy_allowed(run_ref.as_ref(), cfg) {
         // The raw log the footer points at does not exist: emit the original.
         out_part = Part::Raw;
@@ -289,6 +293,146 @@ fn emit_generic(
             err: err_part,
             in_out,
             in_err,
+            mode,
+            normalize_newline: mode != "passthrough",
+        },
+        cfg,
+        run_ref.as_ref().map(|r| r.id.as_str()),
+    )
+}
+
+/// Where a run's raw log lives: the archive a caller already wrote, or a
+/// slot reserved now (so the footer can point at it) and written once the
+/// emitted mode is known.
+struct ArchiveSlot {
+    done: Option<Option<archive::RunRef>>,
+    reserved: Option<archive::RunRef>,
+}
+
+impl ArchiveSlot {
+    fn new(archived: Option<Option<archive::RunRef>>, cfg: &Config) -> Self {
+        match archived {
+            Some(done) => ArchiveSlot {
+                done: Some(done),
+                reserved: None,
+            },
+            None => ArchiveSlot {
+                done: None,
+                reserved: archive::reserve(cfg),
+            },
+        }
+    }
+
+    /// The `raw_log:` footer, or "" when there is no archive to point at.
+    fn footer(&self) -> String {
+        let dir = match (&self.done, &self.reserved) {
+            (Some(d), _) => d.as_ref().map(|r| &r.dir),
+            (None, r) => r.as_ref().map(|r| &r.dir),
+        };
+        dir.map(|d| raw_log_footer(d)).unwrap_or_default()
+    }
+
+    fn finish(
+        self,
+        argv: &[String],
+        mode: &str,
+        run: &RunOutput,
+        code: i32,
+        tags: &[String],
+        cfg: &Config,
+    ) -> Option<archive::RunRef> {
+        match (self.done, self.reserved) {
+            (Some(done), _) => done,
+            (None, Some(r)) => {
+                let written =
+                    archive::write_reserved(r, argv, mode, &run.captured, code, tags, cfg);
+                if let Some(w) = &written {
+                    restore_raw_bytes(w, run);
+                }
+                written
+            }
+            (None, None) => None,
+        }
+    }
+}
+
+/// Merged-stream mode (`--merge-streams`), generic path. The ladder runs over
+/// stdout and stderr combined in arrival order (what a terminal or `2>&1`
+/// shows) and the result goes to stdout alone; stderr stays empty. A
+/// structured stdout rendering (JSON as TOON, a sniffed or JUnit report)
+/// keeps its place first, followed by the (laddered) stderr. The guard
+/// measures against the combined original; when nothing pays, both streams
+/// are replayed byte-exact to their own fds in arrival order, as without
+/// merging.
+#[allow(clippy::too_many_arguments)]
+fn emit_merged(
+    argv: &[String],
+    run: &RunOutput,
+    code: i32,
+    candidate: Option<(String, &'static str)>,
+    level: CompressLevel,
+    tags: &[String],
+    cfg: &Config,
+    archived: Option<Option<archive::RunRef>>,
+) -> i32 {
+    let c = &run.captured;
+    let combined = run.merged_text();
+    let counter = Counter::new(&cfg.tokenizer, combined.len(), cfg.max_tokens.is_some());
+    let structured = candidate
+        .or_else(|| fallback::detect_document(&c.stdout).map(|json| (toon::encode(&json), "json")));
+    let cand = match structured {
+        Some((report, mode)) => {
+            let err = transform_text(&c.stderr, level);
+            let err = err.as_deref().unwrap_or(&c.stderr);
+            Some((
+                format!(
+                    "{}\n{}",
+                    report.trim_end_matches('\n'),
+                    err.trim_end_matches('\n')
+                ),
+                mode,
+            ))
+        }
+        None => transform_text(&combined, level).map(|t| (t, level.as_str())),
+    };
+    let mut in_n = counter.count(&combined);
+    let slot = ArchiveSlot::new(archived, cfg);
+    let mut out_part = Part::Raw;
+    let mut mode = "passthrough";
+    if let Some((body, tmode)) = cand {
+        let text = format!("{body}{}{}", slot.footer(), interrupted_footer(run));
+        let n = counter.count(&text);
+        let (ok, n, o) = guard(&counter, &text, n, &combined, in_n);
+        in_n = o;
+        if ok {
+            out_part = Part::Text(Cow::Owned(text), n);
+            mode = tmode;
+        }
+    }
+    let run_ref = slot.finish(argv, mode, run, code, tags, cfg);
+    if mode != "passthrough" && !lossy_allowed(run_ref.as_ref(), cfg) {
+        out_part = Part::Raw;
+        mode = "passthrough";
+    }
+    let mut err_part = match out_part {
+        Part::Raw => Part::Raw,
+        Part::Text(..) => Part::Text(Cow::Borrowed(""), 0),
+    };
+    if matches!(out_part, Part::Raw) && cfg.max_tokens.is_some_and(|m| in_n > m) {
+        // The ceiling cuts the merged text, so the kept head and tail stay
+        // in arrival order.
+        out_part = Part::Text(Cow::Owned(combined), in_n);
+        err_part = Part::Text(Cow::Borrowed(""), 0);
+    }
+    deliver(
+        argv,
+        run,
+        code,
+        Emission {
+            out: out_part,
+            err: err_part,
+            in_out: in_n,
+            in_err: 0,
             mode,
             normalize_newline: mode != "passthrough",
         },
@@ -463,7 +607,9 @@ pub fn run_ingest(
     };
     let argv = vec!["ingest".to_string(), source.to_string()];
     let run = RunOutput::from_bytes(content);
-    Ok(transform_emit_record(&argv, &run, 0, level, tags, cfg))
+    Ok(transform_emit_record(
+        &argv, &run, 0, level, tags, cfg, false,
+    ))
 }
 
 /// True when the report itself explains a failed run: at least one failing
@@ -570,6 +716,18 @@ fn run_with_adapter(
                 out.push_str(x);
             }
             drop(extra_out);
+            // Merged-stream mode: the report stays first on stdout and any
+            // stderr it keeps follows it there, so stdout carries everything.
+            let extra_err = match extra_err {
+                Some(e) if opts.merge_streams => {
+                    if !out.is_empty() && !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push_str(&e);
+                    None
+                }
+                e => e,
+            };
             // stderr that IS the captured stderr goes out as the original bytes.
             let mut err_part = match extra_err {
                 Some(e) if *e == captured.stderr => Part::Raw,
@@ -665,6 +823,7 @@ fn run_with_adapter(
                 tags,
                 cfg,
                 Some(archived),
+                opts.merge_streams,
             ))
         }
     }

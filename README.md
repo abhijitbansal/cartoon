@@ -241,6 +241,7 @@ cartoon logs grep ERROR --last # search a raw log instead of re-reading it
 cartoon --fast pytest          # opt-in: parallel via pytest-xdist (-n auto)
 cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
 cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
+cartoon --merge-streams make         # stdout+stderr compressed in arrival order, on stdout
 cartoon -c 'pytest -v | tail -5'     # pure output filters are dropped; the report replaces them
 cartoon doctor                 # health report: hook, config, allowlist gaps, ledger damage
 ```
@@ -273,6 +274,40 @@ in whole lines and the middle is replaced by one marker that is itself a
 ready-to-run `cartoon logs grep` command. Opt-in, because with a ceiling set
 even passthrough output may be cut — that is the point. The raw log is
 archived as always.
+
+### `--merge-streams`: keep stdout/stderr interleaving
+
+By default a transformed run writes its compressed stdout first, then its
+compressed stderr, so a reader of `2>&1` loses where a warning landed among
+the progress lines. `cartoon --merge-streams <cmd>` (or `merge_streams =
+true` under `[compress]` or a `[command.<name>]`; the flag wins, then the
+command entry, then `[compress]`) compresses the two streams **as one text
+in arrival order** and writes the result to **stdout only**:
+
+- **Generic output:** the ladder runs over the combined text and the guard
+  compares against the combined original. A structured rendering of stdout
+  (JSON as TOON, a sniffed or `--junit` report) comes first, followed by
+  stderr.
+- **Adapter reports:** the report stays first on stdout. Any stderr the
+  adapter keeps (an unexplained failure, a tool warning) follows it on
+  stdout instead of going to stderr.
+- **Passthrough** (nothing paid for itself) is unchanged: both streams are
+  replayed byte-exact to their own fds, in arrival order.
+
+It is off by default because it changes fd semantics: with it on,
+`cartoon --merge-streams cmd 2>/dev/null` no longer hides the command's
+stderr, and a `| grep` sees stderr lines too. cartoon's own notices
+(`cartoon: …`) stay on stderr.
+
+The hook's `cartoon -c` rewrite does not turn it on yet. One Claude Code
+release was checked (2.1.42). Its Bash tool reads a command's stdout and
+stderr on separate pipes and shows the model stdout, then stderr, so it
+never shows the real interleaving, wrapped or not. Merged mode would give
+agents that order back. It stays opt-in for three reasons: newer builds
+and the other hook targets (Copilot CLI, VS Code) were not checked, `-c`
+is also a human-facing flag, and folding stderr into stdout changes what
+the output looks like to an agent. Agents can opt in with `[compress]
+merge_streams = true`.
 
 ### Content sniffing
 
@@ -400,6 +435,7 @@ max_archive_mb = 50  # max total archive size
 
 [compress]
 level = "safe"       # default for non-adapter output: safe | aggressive
+# merge_streams = true  # stdout+stderr in arrival order, on stdout (see --merge-streams)
 
 [command.docker]
 level = "aggressive" # per-command pin; CLI --compress wins over config

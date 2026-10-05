@@ -5,6 +5,8 @@ use std::collections::HashMap;
 #[serde(default)]
 pub struct CompressCfg {
     pub level: Option<String>,
+    /// Merged-stream mode (`--merge-streams`); see `resolve_merge_streams`.
+    pub merge_streams: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -14,6 +16,8 @@ pub struct CommandCfg {
     /// JUnit XML file (or directory of them) the command writes; rendered as
     /// a test report after the run (`--junit` on the CLI does the same).
     pub junit: Option<String>,
+    /// Per-command override of `[compress] merge_streams`.
+    pub merge_streams: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +134,19 @@ pub fn resolve_level(
     Ok(CompressLevel::Safe)
 }
 
+/// Merged-stream mode: CLI `--merge-streams` > `[command.<argv0>]
+/// merge_streams` > `[compress] merge_streams` > off. When on, transformed
+/// output is the arrival-ordered combination of stdout and stderr, written to
+/// stdout alone (so `2>/dev/null` no longer hides the command's stderr).
+pub fn resolve_merge_streams(flag: bool, argv0: &str, cfg: &Config) -> bool {
+    flag || cfg
+        .command
+        .get(argv0)
+        .and_then(|c| c.merge_streams)
+        .or(cfg.compress.merge_streams)
+        .unwrap_or(false)
+}
+
 pub fn load() -> Config {
     let Some(path) = crate::paths::config_file() else {
         return Config::default();
@@ -153,8 +170,8 @@ const TOP_KEYS: &[&str] = &[
     "max_tokens",
     "wrap_scripts",
 ];
-const COMPRESS_KEYS: &[&str] = &["level"];
-const COMMAND_KEYS: &[&str] = &["level", "junit"];
+const COMPRESS_KEYS: &[&str] = &["level", "merge_streams"];
+const COMMAND_KEYS: &[&str] = &["level", "junit", "merge_streams"];
 
 /// Parse without falling back — for `cartoon doctor`, which wants every
 /// problem: TOML/type errors, invalid `level`/`tokenizer` values, and
@@ -564,5 +581,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn merge_streams_precedence() {
+        let c = |src: &str| -> Config { toml::from_str(src).unwrap() };
+        let off = Config::default();
+        assert!(!resolve_merge_streams(false, "make", &off));
+        assert!(resolve_merge_streams(true, "make", &off));
+        let global = c("[compress]\nmerge_streams = true");
+        assert!(resolve_merge_streams(false, "make", &global));
+        let per_cmd = c("[compress]\nmerge_streams = true\n[command.make]\nmerge_streams = false");
+        assert!(!resolve_merge_streams(false, "make", &per_cmd));
+        assert!(resolve_merge_streams(false, "pytest", &per_cmd));
+        assert!(
+            resolve_merge_streams(true, "make", &per_cmd),
+            "the flag wins"
+        );
+        let only_cmd = c("[command.make]\nmerge_streams = true");
+        assert!(resolve_merge_streams(false, "make", &only_cmd));
+        assert!(!resolve_merge_streams(false, "cargo", &only_cmd));
+    }
+
+    #[test]
+    fn merge_streams_keys_pass_check() {
+        let src = "[compress]\nmerge_streams = true\n[command.make]\nmerge_streams = false";
+        assert_eq!(check(src), Ok(()));
     }
 }
