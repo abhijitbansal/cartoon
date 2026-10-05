@@ -193,7 +193,7 @@ Limitations:
 What it wraps: dev-loop commands only — test runners, linters,
 typecheckers, builds (`pytest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
 `mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
-`npm test|ci`, …), including those run through uv (`uv run pytest`,
+`npm test|t|ci`, `npm|pnpm|yarn run test`, `mvnw test`, …), including those run through uv (`uv run pytest`,
 `uvx ruff check`, `uv run -m pytest`). Because a rewrite auto-approves the
 call, the allowlist is deliberately conservative: infra CLIs (docker,
 kubectl, terraform, gh, aws) and mutating subcommands (`cargo publish`,

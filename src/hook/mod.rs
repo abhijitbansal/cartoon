@@ -102,7 +102,7 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
         &["build", "test", "check", "clippy", "doc", "nextest"],
     ),
     ("go", &["test", "build", "vet"]),
-    ("npm", &["test", "ci"]),
+    ("npm", &["test", "t", "ci"]),
     ("pnpm", &["test"]),
     ("yarn", &["test"]),
     ("bun", &["test"]),
@@ -110,6 +110,7 @@ pub const SUBCOMMAND: &[(&str, &[&str])] = &[
     ("gradle", &["test", "build", "check"]),
     ("gradlew", &["test", "build", "check"]),
     ("mvn", &["test", "verify", "package"]),
+    ("mvnw", &["test", "verify", "package"]),
     ("swift", &["test", "build"]),
     ("ruff", &["check"]),
 ];
@@ -436,7 +437,7 @@ const ARG_POLICIES: &[ArgPolicy] = &[
         ..ArgPolicy::NONE
     },
     ArgPolicy {
-        tools: &["mvn"],
+        tools: &["mvn", "mvnw"],
         long: &[
             "settings",
             "globalsettings",
@@ -964,7 +965,7 @@ fn judge_segment(seg: &[Word], wrap_scripts: &[String], root: Option<&Path>) -> 
         if has_mutating_token(tool, tool_rest) {
             return None;
         }
-        if !is_noisy(base, rest.first().copied()) {
+        if !is_noisy(base, rest) {
             return matches_wrap_script(first, rest.first().copied(), wrap_scripts)
                 .then_some(Match::Script);
         }
@@ -1048,7 +1049,7 @@ fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
         "npm" if args.first() == Some(&"ci") => args[1..].iter().all(|a| NPM_CI_FLAGS.contains(a)),
         // A goal with `:` (`org.x:plugin:1.0:goal`) downloads and runs an
         // arbitrary plugin; lifecycle phases have none.
-        "mvn" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
+        "mvn" | "mvnw" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
         "dotnet" => dotnet_args_ok(args),
         "xcodebuild" => args.iter().all(|a| xcode_setting_ok(a)),
         _ => true,
@@ -1212,7 +1213,8 @@ fn matches_wrap_script(first: &str, next: Option<&str>, wrap_scripts: &[String])
     wrap_scripts.iter().any(|s| basename(s) == basename(target))
 }
 
-fn is_noisy(base: &str, next: Option<&str>) -> bool {
+fn is_noisy(base: &str, rest: &[&str]) -> bool {
+    let next = rest.first().copied();
     if ALWAYS.contains(&base) {
         return true;
     }
@@ -1220,6 +1222,11 @@ fn is_noisy(base: &str, next: Option<&str>) -> bool {
         return next
             .map(|n| n.rsplit('/').next().unwrap_or(n))
             .is_some_and(|n| RUNNER_TOOLS.contains(&n));
+    }
+    // `npm run test` / `pnpm run test` / `yarn run test`: the test script
+    // only, never `run <any script>`.
+    if matches!(base, "npm" | "pnpm" | "yarn") && next == Some("run") {
+        return rest.get(1) == Some(&"test");
     }
     if let Some((_, subs)) = SUBCOMMAND.iter().find(|(c, _)| *c == base) {
         return next.is_some_and(|n| subs.contains(&n));
@@ -1276,12 +1283,35 @@ fn uv_wraps_noisy(argv: &[String]) -> bool {
     if has_mutating_token(base, args) {
         return false;
     }
-    is_noisy(base, args.first().copied()) && args_ok(base, args)
+    is_noisy(base, args) && args_ok(base, args)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_test_script_forms_and_mvnw_wrap_but_other_scripts_do_not() {
+        for c in [
+            "npm run test",
+            "npm t",
+            "pnpm run test",
+            "yarn run test -t x",
+            "./mvnw test",
+        ] {
+            assert!(wrap_command(c).is_some(), "{c}");
+        }
+        for c in [
+            "npm run deploy",
+            "npm run",
+            "pnpm run build",
+            "npm run test -- --config /tmp/x.js",
+            "./mvnw org.evil:plugin:1:run",
+            "golangci-lint run",
+        ] {
+            assert!(wrap_command(c).is_none(), "{c}");
+        }
+    }
 
     #[test]
     fn env_prefix_only_benign_names_are_auto_wrapped() {
