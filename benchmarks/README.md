@@ -45,6 +45,15 @@ How to read it:
   frames) and passing suites (where cartoon prints only counts) favour
   cartoon more; tiny suites favour it less.
 
+## Agent fix rate: `agent_bench/`
+
+Token counts per command don't show whether an agent still fixes the bug.
+[`agent_bench/`](agent_bench/README.md) runs Claude Code headless on five
+small broken repos (pytest, cargo test, go test, tsc, ruff), with and without
+cartoon's hook. For each session it records: solved, turns, tokens, cost and
+wall time. `--verify-tasks` and `--dry-run` are free; `--run` makes paid API
+calls.
+
 ## Generate a dummy suite
 
 `gen_dummy_suite.py` writes a deterministic, stdlib-only pytest suite (runs

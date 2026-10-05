@@ -1,0 +1,7 @@
+{
+  "description": "TypeScript: strict-mode type errors (possibly-undefined env vars, Array.find, indexed access); tsc --noEmit, 5 errors",
+  "prompt": "`tsc --noEmit -p .` reports type errors in this project. Run it, then fix the errors in src/ with real narrowing or defaults. Do not modify tsconfig.json and do not use @ts-ignore, @ts-expect-error, @ts-nocheck, `as any` or non-null assertions (`!`). You are done when `tsc --noEmit -p .` passes.",
+  "check": "tsc --noEmit -p . && ! grep -rnE '@ts-(ignore|nocheck|expect-error)|as any|[A-Za-z0-9_)\\]]!(\\.|\\[|;|,|\\))' src",
+  "protected": ["tsconfig.json"],
+  "requires": ["tsc"]
+}
