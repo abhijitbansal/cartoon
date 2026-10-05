@@ -19,6 +19,7 @@ uv tool install cartoon        # preferred when uv exists
 pipx install cartoon           # Python fallback
 npm install -g cartoon-wrap    # Node (installs the `cartoon` binary)
 cargo install cartoon          # Rust
+brew tap abhijitbansal/cartoon https://github.com/abhijitbansal/cartoon && brew install cartoon   # Homebrew
 # No toolchain: prebuilt binary to ~/.local/bin, checksum-verified
 curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh
 cartoon adapters               # verify: lists the test-runner adapters

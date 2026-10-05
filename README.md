@@ -23,6 +23,8 @@ uv tool install cartoon        # or: pipx install cartoon
 npm install -g cartoon-wrap    # installs the `cartoon` binary
 cargo install cartoon          # build from source
 cargo binstall cartoon         # prebuilt binary via cargo-binstall
+brew tap abhijitbansal/cartoon https://github.com/abhijitbansal/cartoon
+brew install cartoon           # macOS / Linux Homebrew (this repo is the tap)
 curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh
 ```
 
@@ -36,6 +38,14 @@ distro: old glibc, Alpine, `python:*` images. PyPI also ships an sdist, so
 checking it against the release's `SHA256SUMS`. Release tarballs also carry
 build provenance: `gh attestation verify cartoon-<target>.tar.gz -R
 abhijitbansal/cartoon`.
+
+The Homebrew formula lives in this repo (`Formula/cartoon.rb`) and installs
+the release tarballs; the tap needs its URL because the repo isn't named
+`homebrew-cartoon`. Upgrade with `brew upgrade cartoon`.
+
+The Claude Code plugin's hooks need the binary. Without it, the plugin tells
+the agent once per version (SessionStart) how to install it, and it hints
+when the binary is older than the plugin.
 
 ## For agents (Claude Code, Codex, Copilot, Cursor, …)
 
