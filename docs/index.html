@@ -611,8 +611,8 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     <div class="gcard anim" style="--i:10">
       <span class="idx">01</span>
       <span class="chip chip--navy">Adapters</span>
-      <h3>Nineteen runners, native formats</h3>
-      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo test/nextest, cargo build/check/clippy, go test, phpunit, rspec, swiftlint — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>/<code>archive</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--message-format=json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> and <b>xcrun</b> are first-class too — <code>uv run pytest</code>, <code>uvx ruff check</code>, <code>xcrun xcodebuild test</code> are detected and auto-wrapped just like the bare tools. Anything that writes JUnit XML (gradle, maven, dotnet) gets the same report via <code>--junit</code>.</p>
+      <h3>Twenty-four runners, native formats</h3>
+      <p>pytest, unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo test/nextest, cargo build/check/clippy, go test, golangci-lint, phpunit, rspec, swiftlint, gradle, maven, <code>dotnet test</code>, and <code>npm</code>/<code>pnpm</code>/<code>yarn</code>/<code>bun</code> test scripts that run jest or vitest — plus first-class Apple support: <code>swift test</code>, <code>swift build</code>, <code>xcodebuild test</code>, <code>xcodebuild build</code>/<code>archive</code>. cartoon injects each tool's machine-readable flag (junit-xml, <code>--json</code>, <code>--message-format=json</code>, <code>--xunit-output</code>, <code>-resultBundlePath</code>) and renders a compact report. Clean lint/typecheck/build runs collapse to a summary line. Runs through <b>uv</b> and <b>xcrun</b> are first-class too — <code>uv run pytest</code>, <code>uvx ruff check</code>, <code>xcrun xcodebuild test</code> are detected and auto-wrapped just like the bare tools. gradle and maven need no flag at all: the JUnit XML they already write is read back after the run. Anything else that writes JUnit XML gets the same report via <code>--junit</code>.</p>
     </div>
     <div class="gcard anim" style="--i:11">
       <span class="idx">02</span>
@@ -703,7 +703,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       <rect width="84" height="3.5" rx="2" fill="var(--navy)"/>
       <text x="42" y="22" font-size="8" fill="var(--navy)" text-anchor="middle" letter-spacing="1">1 · MATCH</text>
       <text x="42" y="38" font-size="7.5" fill="var(--text-dim)" text-anchor="middle">adapter?</text>
-      <text x="42" y="50" font-size="7" fill="var(--text-dim)" text-anchor="middle">19 runners</text>
+      <text x="42" y="50" font-size="7" fill="var(--text-dim)" text-anchor="middle">24 runners</text>
     </g>
     <g transform="translate(196 86)">
       <rect width="84" height="64" rx="8" fill="var(--surface)" stroke="var(--gold)" stroke-width="1.2"/>
@@ -791,7 +791,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
   <div class="shead anim" style="--i:22">
     <div class="rule"><span class="tag">Coverage</span></div>
     <h2>Adapters &amp; measured results</h2>
-    <p>Nineteen runners get native, machine-readable handling. Everything else still rides the compression ladder, and output that arrives without a matching command — a <code>./build.sh</code> that runs xcodebuild inside, JUnit XML on stdout — is recognized by shape. <code>cartoon doctor</code> lists any hook-allowlisted tool that still has no adapter.</p>
+    <p>Twenty-four runners get native, machine-readable handling. Everything else still rides the compression ladder, and output that arrives without a matching command — a <code>./build.sh</code> that runs xcodebuild inside, JUnit XML on stdout — is recognized by shape. <code>cartoon doctor</code> lists any hook-allowlisted tool that still has no adapter.</p>
   </div>
 
   <div class="tablewrap anim" style="--i:23">
@@ -817,6 +817,11 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
         <tr><td><code>phpunit</code><span class="newchip">New · 0.6</span></td><td>phpunit, vendor/bin/phpunit</td><td>injected --log-junit</td></tr>
         <tr><td><code>rspec</code><span class="newchip">New · 0.6</span></td><td>rspec, bundle exec rspec</td><td>injected --format json --out &lt;file&gt;</td></tr>
         <tr class="apple"><td><code>swiftlint</code><span class="newchip">New · Apple</span></td><td>swiftlint, swiftlint lint (never --fix / autocorrect)</td><td>injected --reporter json</td></tr>
+        <tr><td><code>gradle</code><span class="newchip">New</span></td><td>gradle, ./gradlew test / check / build / *Test</td><td>nothing injected; reads the build/test-results JUnit XML this run wrote, plus javac/kotlinc and failed-task errors</td></tr>
+        <tr><td><code>maven</code><span class="newchip">New</span></td><td>mvn, ./mvnw test / verify / package / install</td><td>nothing injected; reads the surefire/failsafe reports this run wrote, plus compiler and goal errors</td></tr>
+        <tr><td><code>dotnet-test</code><span class="newchip">New</span></td><td>dotnet test (VSTest)</td><td>injected --logger trx --results-directory &lt;temp&gt;; MSBuild errors lifted in</td></tr>
+        <tr><td><code>golangci-lint</code><span class="newchip">New</span></td><td>golangci-lint run</td><td>injected --output.json.path=stdout (v2) / --out-format json (v1)</td></tr>
+        <tr><td><code>pkg-script</code><span class="newchip">New</span></td><td>npm test, npm run test, pnpm test, yarn test, bun run test — test script is plain jest / vitest</td><td>the jest / vitest flags, forwarded to the script</td></tr>
       </tbody>
     </table>
   </div>
