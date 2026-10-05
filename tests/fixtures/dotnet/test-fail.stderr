@@ -1,0 +1,4 @@
+[xUnit.net 00:00:01.77]     UnitA.CalculatorTests.Throws [FAIL]
+[xUnit.net 00:00:01.82]     UnitA.CalculatorTests.SubtractsNumbers [FAIL]
+[xUnit.net 00:00:01.82]     UnitA.CalculatorTests.IsOdd(n: 2) [FAIL]
+[xUnit.net 00:00:01.74]     UnitB.StringTests.Lower [FAIL]

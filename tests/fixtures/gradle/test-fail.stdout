@@ -1,0 +1,29 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+> Task :app:compileJava NO-SOURCE
+> Task :app:processResources NO-SOURCE
+> Task :app:classes UP-TO-DATE
+> Task :app:compileTestJava
+> Task :app:processTestResources NO-SOURCE
+> Task :app:testClasses
+
+> Task :app:test
+
+AppTest > printsThenFails() FAILED
+    org.opentest4j.AssertionFailedError at AppTest.java:32
+
+AppTest > throwsUnexpectedly() FAILED
+    java.lang.IllegalStateException at AppTest.java:21
+
+AppTest > subtracts() FAILED
+    org.opentest4j.AssertionFailedError at AppTest.java:16
+
+> Task :app:test FAILED
+> Task :lib:compileJava NO-SOURCE
+> Task :lib:processResources NO-SOURCE
+> Task :lib:classes UP-TO-DATE
+> Task :lib:compileTestJava
+> Task :lib:processTestResources NO-SOURCE
+> Task :lib:testClasses
+
+> Task :lib:test
+4 actionable tasks: 4 executed
