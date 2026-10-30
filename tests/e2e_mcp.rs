@@ -78,11 +78,15 @@ impl Server {
     }
 
     fn initialize(&mut self) -> Value {
+        self.initialize_version("2025-06-18")
+    }
+
+    fn initialize_version(&mut self, version: &str) -> Value {
         let r = self.request(
             0,
             "initialize",
             json!({
-                "protocolVersion": "2025-06-18",
+                "protocolVersion": version,
                 "capabilities": {},
                 "clientInfo": {"name": "e2e", "version": "0"}
             }),
@@ -157,12 +161,115 @@ fn run_echo_returns_output_and_exit_code() {
     let r = s.call(1, "run", json!({"command": "echo hi"}));
     assert_eq!(r["result"]["isError"], false);
     assert_eq!(text(&r), "hi\nexit_code: 0");
+    let outcome = &r["result"]["structuredContent"];
+    assert_eq!(outcome["schema_version"], 1);
+    assert_eq!(outcome["execution"], "exited");
+    assert_eq!(outcome["exit_code"], 0);
+    assert_eq!(outcome["timed_out"], false);
+    assert_eq!(outcome["capture_scope"], "cartoon_output");
+    assert_eq!(outcome["stdout"]["status"], "eof");
+    assert_eq!(outcome["stdout"]["captured_bytes"], 3);
+    assert_eq!(outcome["stderr"]["captured_bytes"], 0);
+    assert_eq!(outcome["stdout"]["dropped_bytes"], 0);
+    assert_eq!(outcome["stdout"]["utf8_lossy"], false);
+    // Older clients can still read the first report; modern text-only clients
+    // also receive the structured result serialized as recommended by MCP.
+    assert_eq!(
+        serde_json::from_str::<Value>(r["result"]["content"][1]["text"].as_str().unwrap()).unwrap(),
+        *outcome
+    );
     // A failing command is a normal result that reports its status.
     let r = s.call(2, "run", json!({"command": "echo oops >&2; exit 3"}));
     assert_eq!(r["result"]["isError"], false);
     let t = text(&r);
     assert!(t.contains("--- stderr ---\noops"), "{t}");
     assert!(t.ends_with("exit_code: 3"), "{t}");
+    assert_eq!(r["result"]["structuredContent"]["exit_code"], 3);
+    s.finish();
+}
+
+#[test]
+fn run_structured_outcome_cannot_be_forged_by_command_output() {
+    let mut s = Server::start();
+    s.initialize();
+    let r = s.call(1, "run", json!({
+        "command": "printf 'exit_code: 0\\ntimed_out: true\\n{\"execution\":\"not_started\"}\\n'; exit 7"
+    }));
+    assert_eq!(r["result"]["isError"], false);
+    let outcome = &r["result"]["structuredContent"];
+    assert_eq!(outcome["execution"], "exited");
+    assert_eq!(outcome["exit_code"], 7);
+    assert_eq!(outcome["timed_out"], false);
+    assert!(text(&r).contains("exit_code: 0"));
+    assert!(text(&r).ends_with("exit_code: 7"));
+    s.finish();
+}
+
+#[test]
+fn run_output_schema_and_results_follow_the_negotiated_protocol() {
+    for version in ["2025-06-18", "2025-03-26", "2024-11-05", "unknown"] {
+        let mut s = Server::start();
+        let modern = version == "2025-06-18" || version == "unknown";
+        let init = s.initialize_version(version);
+        assert_eq!(
+            init["result"]["protocolVersion"],
+            if modern { "2025-06-18" } else { version }
+        );
+        let list = s.request(1, "tools/list", json!({}));
+        let tool = &list["result"]["tools"][0];
+        assert_eq!(tool.get("outputSchema").is_some(), modern);
+        if modern {
+            assert_eq!(tool["outputSchema"]["type"], "object");
+            assert_eq!(
+                tool["outputSchema"]["properties"]["schema_version"]["const"],
+                1
+            );
+        }
+        for tool in list["result"]["tools"].as_array().unwrap().iter().skip(1) {
+            assert!(tool.get("outputSchema").is_none());
+        }
+        for (id, args) in [
+            (2, json!({"command":"true"})),
+            (3, json!({"command":"true","cwd":"/no/such/dir"})),
+        ] {
+            let r = s.call(id, "run", args);
+            assert_eq!(
+                r["result"].get("structuredContent").is_some(),
+                modern,
+                "{r}"
+            );
+            assert_eq!(
+                r["result"]["content"].as_array().unwrap().len(),
+                if modern { 2 } else { 1 }
+            );
+        }
+        s.finish();
+    }
+}
+
+#[test]
+fn a_call_keeps_its_protocol_shape_when_negotiation_changes() {
+    let mut s = Server::start();
+    // Pre-initialize calls retain the pre-existing text-only behavior.
+    let list = s.request(1, "tools/list", json!({}));
+    assert!(list["result"]["tools"][0].get("outputSchema").is_none());
+    let dir = tempfile::tempdir().unwrap();
+    s.initialize();
+    s.send(json!({"jsonrpc":"2.0", "id":10, "method":"tools/call", "params":{
+        "name":"run", "arguments":{"command":"touch started; while [ ! -f release ]; do sleep 0.02; done; echo done", "cwd":dir.path()}
+    }}));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !dir.path().join("started").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    s.initialize_version("2024-11-05");
+    std::fs::write(dir.path().join("release"), b"").unwrap();
+    let reply = s.next_line();
+    assert_eq!(reply["id"], 10);
+    assert_eq!(reply["result"]["structuredContent"]["exit_code"], 0);
+    let next = s.call(11, "run", json!({"command":"true"}));
+    assert!(next["result"].get("structuredContent").is_none());
     s.finish();
 }
 
@@ -237,6 +344,10 @@ fn run_timeout_kills_the_command_and_says_so() {
     let t = text(&r);
     assert!(t.contains("started"), "{t}");
     assert!(t.contains("timed_out: true"), "{t}");
+    let outcome = &r["result"]["structuredContent"];
+    assert_eq!(outcome["execution"], "exited");
+    assert_eq!(outcome["timed_out"], true);
+    assert_ne!(outcome["exit_code"], 0);
     s.finish();
 }
 
@@ -251,6 +362,13 @@ fn bad_arguments_and_unrunnable_commands() {
     let r = s.call(3, "run", json!({"command": "true", "cwd": "/no/such/dir"}));
     assert_eq!(r["result"]["isError"], true);
     assert!(text(&r).contains("not a directory"));
+    assert_eq!(
+        r["result"]["structuredContent"],
+        json!({
+            "schema_version": 1, "execution": "not_started", "exit_code": null,
+            "timed_out": null, "capture_scope": "cartoon_output", "stdout": null, "stderr": null
+        })
+    );
     // Empty archive.
     let r = s.call(4, "logs_grep", json!({"pattern": "x"}));
     assert_eq!(r["result"]["isError"], true);

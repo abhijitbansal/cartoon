@@ -31,6 +31,8 @@ impl RpcError {
 /// What the server does with one input line.
 #[derive(Debug, PartialEq)]
 pub enum Route {
+    /// Record the negotiated revision before answering initialize.
+    Initialized { version: &'static str, reply: Value },
     /// Write this message now.
     Reply(Value),
     /// Notification, or a response to us: nothing to write.
@@ -72,7 +74,7 @@ returns a compact report (failures, counts, diagnostics) instead of the raw outp
 Never pipe its output through head/tail/grep — the full raw output is archived; search \
 it with `logs_grep` instead of re-running.";
 
-pub fn route(line: &str) -> Route {
+pub fn route(line: &str, structured: bool) -> Route {
     let msg: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
@@ -122,24 +124,28 @@ pub fn route(line: &str) -> Route {
     match method {
         "initialize" => {
             let requested = params.get("protocolVersion").and_then(Value::as_str);
-            Route::Reply(respond(
-                &id,
-                Ok(json!({
-                    "protocolVersion": negotiate_version(requested),
-                    "capabilities": { "tools": { "listChanged": false } },
-                    "serverInfo": {
-                        "name": "cartoon",
-                        "title": "cartoon",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    "instructions": INSTRUCTIONS,
-                })),
-            ))
+            let version = negotiate_version(requested);
+            Route::Initialized {
+                version,
+                reply: respond(
+                    &id,
+                    Ok(json!({
+                        "protocolVersion": version,
+                        "capabilities": { "tools": { "listChanged": false } },
+                        "serverInfo": {
+                            "name": "cartoon",
+                            "title": "cartoon",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                        "instructions": INSTRUCTIONS,
+                    })),
+                ),
+            }
         }
         "ping" => Route::Reply(respond(&id, Ok(json!({})))),
         "tools/list" => Route::Reply(respond(
             &id,
-            Ok(json!({ "tools": super::tools::definitions() })),
+            Ok(json!({ "tools": super::tools::definitions(structured) })),
         )),
         "tools/call" => {
             let Some(name) = params.get("name").and_then(Value::as_str) else {
@@ -174,9 +180,13 @@ pub fn route(line: &str) -> Route {
 mod tests {
     use super::*;
 
+    fn route(line: &str) -> Route {
+        super::route(line, false)
+    }
+
     fn reply(line: &str) -> Value {
         match route(line) {
-            Route::Reply(v) => v,
+            Route::Reply(v) | Route::Initialized { reply: v, .. } => v,
             other => panic!("expected a reply, got {other:?}"),
         }
     }

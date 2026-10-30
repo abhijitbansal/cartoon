@@ -24,6 +24,40 @@ pub struct RunResult {
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
+    pub stdout_capture: CaptureMetadata,
+    pub stderr_capture: CaptureMetadata,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureStatus {
+    Eof,
+    ReadError,
+    Deadline,
+}
+
+/// Observation of cartoon's transformed output, not the command's raw log.
+/// EOF alone does not imply lossless capture: inspect dropped bytes and UTF-8.
+#[derive(Debug, serde::Serialize)]
+pub struct CaptureMetadata {
+    pub status: CaptureStatus,
+    pub captured_bytes: usize,
+    pub dropped_bytes: usize,
+    pub utf8_lossy: bool,
+}
+
+#[derive(Debug)]
+pub enum RunError {
+    NotStarted(std::io::Error),
+    Observation(std::io::Error),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotStarted(e) | Self::Observation(e) => e.fmt(f),
+        }
+    }
 }
 
 /// Per-stream capture ceiling. cartoon's own output is already compact; this
@@ -50,53 +84,75 @@ pub fn cartoon_args(a: &RunArgs) -> Vec<String> {
 
 /// One stream, read on its own thread into a shared, capped buffer.
 struct Capture {
-    buf: Arc<Mutex<(Vec<u8>, usize)>>, // (kept bytes, bytes dropped)
-    done: Arc<AtomicBool>,
+    state: Arc<Mutex<CaptureState>>,
+}
+
+#[derive(Default)]
+struct CaptureState {
+    bytes: Vec<u8>,
+    dropped: usize,
+    terminal: Option<CaptureStatus>,
 }
 
 impl Capture {
     fn start(mut r: impl Read + Send + 'static) -> Self {
-        let buf = Arc::new(Mutex::new((Vec::new(), 0usize)));
-        let done = Arc::new(AtomicBool::new(false));
-        let (b, d) = (buf.clone(), done.clone());
+        let state = Arc::new(Mutex::new(CaptureState::default()));
+        let shared = state.clone();
         std::thread::spawn(move || {
             let mut chunk = [0u8; 64 * 1024];
-            while let Ok(n) = r.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                let mut g = b.lock().unwrap();
-                let room = CAPTURE_LIMIT.saturating_sub(g.0.len());
+            loop {
+                let n = match r.read(&mut chunk) {
+                    Ok(0) => {
+                        shared.lock().unwrap().terminal = Some(CaptureStatus::Eof);
+                        break;
+                    }
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        shared.lock().unwrap().terminal = Some(CaptureStatus::ReadError);
+                        break;
+                    }
+                };
+                let mut g = shared.lock().unwrap();
+                let room = CAPTURE_LIMIT.saturating_sub(g.bytes.len());
                 let keep = n.min(room);
-                g.0.extend_from_slice(&chunk[..keep]);
-                g.1 += n - keep;
+                g.bytes.extend_from_slice(&chunk[..keep]);
+                g.dropped = g.dropped.saturating_add(n - keep);
             }
-            d.store(true, Ordering::SeqCst);
         });
-        Capture { buf, done }
+        Capture { state }
     }
 
     /// The text read so far. Waits briefly for EOF; a grandchild that
     /// escaped the kill could hold the pipe open forever, so never block.
-    fn finish(self) -> String {
+    fn finish(self) -> (String, CaptureMetadata) {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !self.done.load(Ordering::SeqCst) && Instant::now() < deadline {
+        while self.state.lock().unwrap().terminal.is_none() && Instant::now() < deadline {
             std::thread::sleep(POLL);
         }
-        let g = self.buf.lock().unwrap();
-        let mut s = String::from_utf8_lossy(&g.0).into_owned();
-        if g.1 > 0 {
+        // Text and metadata must describe the same snapshot even if the reader
+        // is still draining a pipe held open by a descendant.
+        let g = self.state.lock().unwrap();
+        let meta = CaptureMetadata {
+            status: g.terminal.unwrap_or(CaptureStatus::Deadline),
+            captured_bytes: g.bytes.len(),
+            dropped_bytes: g.dropped,
+            utf8_lossy: std::str::from_utf8(&g.bytes).is_err(),
+        };
+        let mut s = String::from_utf8_lossy(&g.bytes).into_owned();
+        if g.dropped > 0 {
             s.push_str(&format!(
                 "\n[cartoon mcp: {} more bytes not captured; the raw log has everything]",
-                g.1
+                g.dropped
             ));
         }
-        s
+        (s, meta)
     }
 }
 
-/// Run `a.command` through cartoon. `Err` only when it could not start.
-pub fn execute(exe: &Path, a: &RunArgs, cancel: &AtomicBool) -> std::io::Result<RunResult> {
+/// Run `a.command` through cartoon. Observation errors can occur after spawn;
+/// they must not be presented as proof that no command executed.
+pub fn execute(exe: &Path, a: &RunArgs, cancel: &AtomicBool) -> Result<RunResult, RunError> {
     let mut cmd = Command::new(exe);
     cmd.args(cartoon_args(a))
         // The server's stdin is the protocol channel: never hand it down.
@@ -105,10 +161,10 @@ pub fn execute(exe: &Path, a: &RunArgs, cancel: &AtomicBool) -> std::io::Result<
         .stderr(Stdio::piped());
     if let Some(dir) = &a.cwd {
         if !dir.is_dir() {
-            return Err(std::io::Error::new(
+            return Err(RunError::NotStarted(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("cwd {} is not a directory", dir.display()),
-            ));
+            )));
         }
         cmd.current_dir(dir);
     }
@@ -118,16 +174,18 @@ pub fn execute(exe: &Path, a: &RunArgs, cancel: &AtomicBool) -> std::io::Result<
         // Own group: the timeout signals cartoon without touching the server.
         cmd.process_group(0);
     }
-    let mut child = cmd.spawn()?;
+    let mut child = cmd.spawn().map_err(RunError::NotStarted)?;
     let out = Capture::start(child.stdout.take().expect("piped"));
     let err = Capture::start(child.stderr.take().expect("piped"));
     let deadline = Instant::now() + a.timeout;
     let mut timed_out = false;
     let mut term_sent: Option<Instant> = None;
     let status = loop {
-        if let Some(st) = child.try_wait()? {
-            break st;
-        }
+        match child.try_wait() {
+            Ok(Some(st)) => break Ok(st),
+            Ok(None) => {}
+            Err(e) => break Err(e),
+        };
         let now = Instant::now();
         match term_sent {
             None if now >= deadline || cancel.load(Ordering::SeqCst) => {
@@ -137,17 +195,27 @@ pub fn execute(exe: &Path, a: &RunArgs, cancel: &AtomicBool) -> std::io::Result<
             }
             Some(t) if now.duration_since(t) >= KILL_GRACE => {
                 terminate(&mut child, true);
-                break child.wait()?;
+                break child.wait();
             }
             _ => {}
         }
         std::thread::sleep(POLL);
     };
+    let status = status.map_err(|e| {
+        // Best effort only; an observation failure is never a cleanup receipt.
+        terminate(&mut child, true);
+        let _ = child.wait();
+        RunError::Observation(e)
+    })?;
+    let (stdout, stdout_capture) = out.finish();
+    let (stderr, stderr_capture) = err.finish();
     Ok(RunResult {
-        stdout: out.finish(),
-        stderr: err.finish(),
+        stdout,
+        stderr,
         exit_code: crate::runner::exit_code(&status),
         timed_out,
+        stdout_capture,
+        stderr_capture,
     })
 }
 
@@ -213,6 +281,23 @@ mod tests {
         }
     }
 
+    fn empty_result() -> RunResult {
+        let meta = || CaptureMetadata {
+            status: CaptureStatus::Eof,
+            captured_bytes: 0,
+            dropped_bytes: 0,
+            utf8_lossy: false,
+        };
+        RunResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            timed_out: false,
+            stdout_capture: meta(),
+            stderr_capture: meta(),
+        }
+    }
+
     #[test]
     fn argv_passes_flags_and_keeps_a_hyphenated_command_as_the_value() {
         let mut a = args("-weird --flag");
@@ -235,6 +320,7 @@ mod tests {
             stderr: "warn\n".into(),
             exit_code: 1,
             timed_out: false,
+            ..empty_result()
         };
         assert_eq!(
             r.render(&args("x")),
@@ -245,6 +331,7 @@ mod tests {
             stderr: String::new(),
             exit_code: 0,
             timed_out: false,
+            ..empty_result()
         };
         assert_eq!(r.render(&args("x")), "exit_code: 0");
     }
@@ -256,6 +343,7 @@ mod tests {
             stderr: String::new(),
             exit_code: 1,
             timed_out: false,
+            ..empty_result()
         };
         assert_eq!(r.render(&args("x")), "failed: 1\nexit_code: 1\nraw_log: /x");
     }
@@ -267,6 +355,7 @@ mod tests {
             stderr: String::new(),
             exit_code: 143,
             timed_out: true,
+            ..empty_result()
         };
         let text = r.render(&args("x"));
         assert!(text.contains("timed_out: true (killed after 10s"), "{text}");
@@ -279,5 +368,57 @@ mod tests {
         a.cwd = Some("/definitely/not/here".into());
         let e = execute(Path::new("/bin/sh"), &a, &AtomicBool::new(false)).unwrap_err();
         assert!(e.to_string().contains("not a directory"), "{e}");
+        assert!(matches!(e, RunError::NotStarted(_)));
+    }
+
+    #[test]
+    fn a_missing_executable_is_not_started() {
+        let e = execute(
+            Path::new("/no/such/executable"),
+            &args("true"),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(matches!(e, RunError::NotStarted(_)));
+    }
+
+    #[test]
+    fn capture_distinguishes_read_error_from_eof_and_retries_interrupted_reads() {
+        struct InterruptedThenError(usize);
+        impl Read for InterruptedThenError {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                match self.0 {
+                    1 => Err(std::io::ErrorKind::Interrupted.into()),
+                    2 => {
+                        bytes[0] = b'x';
+                        Ok(1)
+                    }
+                    _ => Err(std::io::ErrorKind::Other.into()),
+                }
+            }
+        }
+        let (text, meta) = Capture::start(InterruptedThenError(0)).finish();
+        assert_eq!(text, "x");
+        assert_eq!(meta.status, CaptureStatus::ReadError);
+        assert_eq!(meta.captured_bytes, 1);
+        assert_eq!(meta.dropped_bytes, 0);
+        assert!(!meta.utf8_lossy);
+    }
+
+    #[test]
+    fn capture_exact_limit_is_not_truncated_but_a_split_utf8_character_is_lossy() {
+        let bytes = vec![b'x'; CAPTURE_LIMIT];
+        let (_, meta) = Capture::start(std::io::Cursor::new(bytes)).finish();
+        assert_eq!(meta.status, CaptureStatus::Eof);
+        assert_eq!(meta.captured_bytes, CAPTURE_LIMIT);
+        assert_eq!(meta.dropped_bytes, 0);
+        assert!(!meta.utf8_lossy);
+
+        let mut bytes = vec![b'x'; CAPTURE_LIMIT - 1];
+        bytes.extend_from_slice(&[0xc3, 0xa9]);
+        let (_, meta) = Capture::start(std::io::Cursor::new(bytes)).finish();
+        assert_eq!(meta.dropped_bytes, 1);
+        assert!(meta.utf8_lossy);
     }
 }
