@@ -129,9 +129,9 @@ pub fn cap_tokens(text: &str, max: usize, tokenizer: &str, run_id: Option<&str>)
         let lo = i.saturating_sub(ERROR_CONTEXT);
         let hi = (i + ERROR_CONTEXT).min(n - 1);
         let try_window = |lo: usize, hi: usize, keep: &[bool]| {
-            let new_island = !(lo..=hi).any(|j| keep[j])
-                && !(lo > 0 && keep[lo - 1])
-                && !(hi + 1 < n && keep[hi + 1]);
+            let new_island = !((lo..=hi).any(|j| keep[j])
+                || (lo > 0 && keep[lo - 1])
+                || (hi + 1 < n && keep[hi + 1]));
             let lines_cost: usize = (lo..=hi)
                 .filter(|&j| !keep[j])
                 .map(|j| cost(lines[j]))
