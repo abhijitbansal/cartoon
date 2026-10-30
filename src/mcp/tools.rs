@@ -31,8 +31,8 @@ a normal result, not a tool error). SECURITY: this executes arbitrary commands w
 your user's privileges in `cwd`; it is gated only by the MCP client's tool approval.";
 
 /// Tool definitions for `tools/list`, in a stable order.
-pub fn definitions() -> Value {
-    json!([
+pub fn definitions(structured: bool) -> Value {
+    let mut tools = json!([
         {
             "name": "run",
             "title": "Run a command (compact output)",
@@ -167,7 +167,86 @@ pub fn definitions() -> Value {
                 "openWorldHint": false
             }
         }
-    ])
+    ]);
+    if structured {
+        tools[0]["outputSchema"] = run_output_schema();
+    }
+    tools
+}
+
+fn run_output_schema() -> Value {
+    let capture = json!({
+        "type": ["object", "null"],
+        "description": "Snapshot of cartoon's transformed stream, not original command output. EOF may still have dropped bytes or lossy UTF-8. Counts exclude rendering markers; at deadline/read_error dropped_bytes is only the observed lower bound.",
+        "properties": {
+            "status": {"type": "string", "enum": ["eof", "read_error", "deadline"]},
+            "captured_bytes": {"type": "integer", "minimum": 0},
+            "dropped_bytes": {"type": "integer", "minimum": 0},
+            "utf8_lossy": {"type": "boolean"}
+        },
+        "required": ["status", "captured_bytes", "dropped_bytes", "utf8_lossy"],
+        "additionalProperties": false
+    });
+    json!({
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "integer", "const": 1},
+            "execution": {
+                "type": "string", "enum": ["exited", "not_started", "unknown"],
+                "description": "exited: observed cartoon subprocess status; not_started: could not spawn it; unknown: observation failed after spawn. None proves task correctness or descendant cleanup."
+            },
+            "exit_code": {"type": ["integer", "null"], "description": "Observed cartoon subprocess exit code (128 + signal on Unix), null when unavailable."},
+            "timed_out": {"type": ["boolean", "null"], "description": "Whether the server's execution timeout fired; null when unavailable. Separate from stream capture deadlines."},
+            "capture_scope": {"type": "string", "const": "cartoon_output"},
+            "stdout": capture,
+            "stderr": capture
+        },
+        "required": ["schema_version", "execution", "exit_code", "timed_out", "capture_scope", "stdout", "stderr"],
+        "additionalProperties": false
+    })
+}
+
+fn run_result(
+    result: Result<run::RunResult, run::RunError>,
+    a: &RunArgs,
+    structured: bool,
+) -> Value {
+    let (mut response, outcome) = match result {
+        Ok(r) => (
+            text_result(r.render(a), false),
+            json!({
+                "schema_version": 1,
+                "execution": "exited",
+                "exit_code": r.exit_code,
+                "timed_out": r.timed_out,
+                "capture_scope": "cartoon_output",
+                "stdout": r.stdout_capture,
+                "stderr": r.stderr_capture
+            }),
+        ),
+        Err(e) => (
+            text_result(format!("could not run command: {e}"), true),
+            json!({
+                "schema_version": 1,
+                "execution": match e { run::RunError::NotStarted(_) => "not_started", run::RunError::Observation(_) => "unknown" },
+                "exit_code": null,
+                "timed_out": null,
+                "capture_scope": "cartoon_output",
+                "stdout": null,
+                "stderr": null
+            }),
+        ),
+    };
+    if structured {
+        // Preserve the first human-readable block. MCP recommends a JSON text
+        // fallback as well for clients that do not consume structuredContent.
+        response["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"text", "text":outcome.to_string()}));
+        response["structuredContent"] = outcome;
+    }
+    response
 }
 
 pub fn exists(name: &str) -> bool {
@@ -184,17 +263,20 @@ fn text_result(text: String, is_error: bool) -> Value {
 
 /// Execute tool `name`. Called on a worker thread; `cancel` is raised by
 /// `notifications/cancelled` or by the client closing stdin.
-pub fn call(name: &str, args: &Value, exe: &Path, cancel: &AtomicBool) -> Result<Value, RpcError> {
+pub fn call(
+    name: &str,
+    args: &Value,
+    exe: &Path,
+    cancel: &AtomicBool,
+    structured: bool,
+) -> Result<Value, RpcError> {
     let args = args
         .as_object()
         .ok_or_else(|| RpcError::invalid_params("`arguments` must be an object"))?;
     match name {
         "run" => {
             let a = parse_run(args)?;
-            Ok(match run::execute(exe, &a, cancel) {
-                Ok(r) => text_result(r.render(&a), false),
-                Err(e) => text_result(format!("could not run command: {e}"), true),
-            })
+            Ok(run_result(run::execute(exe, &a, cancel), &a, structured))
         }
         "logs_grep" => {
             let pattern = req_str(args, "pattern")?;
@@ -356,6 +438,78 @@ mod tests {
         v.as_object().unwrap().clone()
     }
 
+    // Validate the schema keywords this tool emits, without adding a runtime
+    // validator dependency. This is not a general JSON Schema implementation.
+    fn assert_schema(value: &Value, schema: &Value) {
+        let types = match &schema["type"] {
+            Value::String(t) => vec![t.as_str()],
+            Value::Array(ts) => ts.iter().map(|t| t.as_str().unwrap()).collect(),
+            other => panic!("unexpected schema type: {other}"),
+        };
+        assert!(
+            types.iter().any(|t| match *t {
+                "null" => value.is_null(),
+                "object" => value.is_object(),
+                "boolean" => value.is_boolean(),
+                "string" => value.is_string(),
+                "integer" => value.is_i64() || value.is_u64(),
+                _ => false,
+            }),
+            "{value} does not match {schema}"
+        );
+        if let Some(expected) = schema.get("const") {
+            assert_eq!(value, expected);
+        }
+        if let Some(variants) = schema.get("enum") {
+            assert!(variants.as_array().unwrap().contains(value));
+        }
+        if let Some(minimum) = schema.get("minimum") {
+            assert!(value.as_u64().unwrap() >= minimum.as_u64().unwrap());
+        }
+        if let Some(fields) = value.as_object() {
+            for key in schema["required"].as_array().unwrap() {
+                assert!(fields.contains_key(key.as_str().unwrap()));
+            }
+            assert_eq!(schema["additionalProperties"], false);
+            for (key, field) in fields {
+                assert_schema(field, &schema["properties"][key]);
+            }
+        }
+    }
+
+    #[test]
+    fn observation_errors_are_unknown_not_a_claim_that_no_process_started() {
+        let a = parse_run(&obj(json!({"command":"true"}))).unwrap();
+        let r = run_result(
+            Err(run::RunError::Observation(std::io::ErrorKind::Other.into())),
+            &a,
+            true,
+        );
+        assert_eq!(r["isError"], true);
+        assert_eq!(
+            r["structuredContent"],
+            json!({
+                "schema_version":1, "execution":"unknown", "exit_code":null,
+                "timed_out":null, "capture_scope":"cartoon_output", "stdout":null, "stderr":null
+            })
+        );
+        assert_schema(&r["structuredContent"], &run_output_schema());
+    }
+
+    #[test]
+    fn startup_errors_conform_to_the_schema_including_null_observations() {
+        let r = call(
+            "run",
+            &json!({"command":"true"}),
+            Path::new("/no/such/executable"),
+            &AtomicBool::new(false),
+            true,
+        )
+        .unwrap();
+        assert_eq!(r["structuredContent"]["execution"], "not_started");
+        assert_schema(&r["structuredContent"], &run_output_schema());
+    }
+
     #[test]
     fn run_args_parse_with_defaults() {
         let a = parse_run(&obj(json!({"command": "pytest -q"}))).unwrap();
@@ -396,7 +550,7 @@ mod tests {
 
     #[test]
     fn schemas_list_exactly_the_parsed_run_arguments() {
-        let defs = definitions();
+        let defs = definitions(false);
         let props = defs[0]["inputSchema"]["properties"].as_object().unwrap();
         let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
         keys.sort_unstable();
@@ -410,5 +564,65 @@ mod tests {
             assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
         }
         assert!(RUN_DESCRIPTION.contains("SECURITY"));
+    }
+
+    #[cfg(unix)]
+    fn synthetic_run(script: &str) -> Value {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("synthetic-cartoon");
+        std::fs::write(&exe, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = call(
+            "run",
+            &json!({"command":"synthetic"}),
+            &exe,
+            &AtomicBool::new(false),
+            true,
+        )
+        .unwrap();
+        assert_schema(&result["structuredContent"], &run_output_schema());
+        result
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn structured_capture_discloses_dropped_bytes_without_changing_exit() {
+        let r = synthetic_run("head -c 4194305 /dev/zero; printf warn >&2; exit 7");
+        let o = &r["structuredContent"];
+        assert_eq!(o["exit_code"], 7);
+        assert_eq!(o["stdout"]["status"], "eof");
+        assert_eq!(o["stdout"]["captured_bytes"], 4194304);
+        assert_eq!(o["stdout"]["dropped_bytes"], 1);
+        assert_eq!(o["stderr"]["captured_bytes"], 4);
+        assert_eq!(o["stderr"]["dropped_bytes"], 0);
+        let r = synthetic_run("head -c 4194305 /dev/zero >&2; exit 0");
+        assert_eq!(r["structuredContent"]["stderr"]["dropped_bytes"], 1);
+        assert_eq!(r["structuredContent"]["stderr"]["captured_bytes"], 4194304);
+        assert_eq!(r["structuredContent"]["stdout"]["captured_bytes"], 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn structured_capture_discloses_lossy_utf8() {
+        let r = synthetic_run("printf '\\377'; printf '\\376' >&2");
+        for stream in ["stdout", "stderr"] {
+            let capture = &r["structuredContent"][stream];
+            assert_eq!(capture["status"], "eof");
+            assert_eq!(capture["captured_bytes"], 1);
+            assert_eq!(capture["utf8_lossy"], true);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn structured_capture_does_not_claim_eof_for_an_inherited_open_pipe() {
+        let r = synthetic_run("sleep 3 &\nprintf partial\nexit 0");
+        let o = &r["structuredContent"];
+        assert_eq!(o["execution"], "exited");
+        assert_eq!(o["exit_code"], 0);
+        assert_eq!(o["timed_out"], false);
+        assert_eq!(o["stdout"]["status"], "deadline");
+        assert_eq!(o["stdout"]["captured_bytes"], 7);
     }
 }

@@ -61,12 +61,19 @@ pub fn serve<R: BufRead>(input: R, out: Box<dyn Write + Send>, exe: PathBuf) -> 
     let out: Out = Arc::new(Mutex::new(out));
     let inflight: InFlight = Arc::default();
     let mut workers = Vec::new();
+    // Until negotiation, retain the legacy response shape. Each call captures
+    // its negotiated mode so a later initialize cannot mutate an active reply.
+    let mut structured = false;
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        match protocol::route(&line) {
+        match protocol::route(&line, structured) {
+            protocol::Route::Initialized { version, reply } => {
+                structured = version == "2025-06-18";
+                send(&out, &reply);
+            }
             protocol::Route::Reply(msg) => send(&out, &msg),
             protocol::Route::Silent => {}
             protocol::Route::Cancel(id) => {
@@ -80,7 +87,7 @@ pub fn serve<R: BufRead>(input: R, out: Box<dyn Write + Send>, exe: PathBuf) -> 
                 inflight.lock().unwrap().insert(key.clone(), cancel.clone());
                 let (out, inflight, exe) = (out.clone(), inflight.clone(), exe.clone());
                 workers.push(std::thread::spawn(move || {
-                    let reply = tools::call(&name, &args, &exe, &cancel);
+                    let reply = tools::call(&name, &args, &exe, &cancel, structured);
                     inflight.lock().unwrap().remove(&key);
                     // A cancelled request gets no response (MCP cancellation).
                     if !cancel.load(Ordering::SeqCst) {
