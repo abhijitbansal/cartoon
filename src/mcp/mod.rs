@@ -71,7 +71,7 @@ pub fn serve<R: BufRead>(input: R, out: Box<dyn Write + Send>, exe: PathBuf) -> 
         }
         match protocol::route(&line, structured) {
             protocol::Route::Initialized { version, reply } => {
-                structured = version == "2025-06-18";
+                structured = protocol::supports_structured_output(version);
                 send(&out, &reply);
             }
             protocol::Route::Reply(msg) => send(&out, &msg),

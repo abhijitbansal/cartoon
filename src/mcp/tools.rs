@@ -27,7 +27,8 @@ shell string, exactly like `cartoon -c '<command>'`: pipes and operators work, a
 `<test cmd> | tail -n 20` style filters are unnecessary (dropped and disclosed). The \
 complete raw output is archived — search it with logs_grep rather than re-running. \
 The result ends with `exit_code: N` (the command's exit status; a failing test run is \
-a normal result, not a tool error). SECURITY: this executes arbitrary commands with \
+a normal result, not a tool error). Newer clients also receive the same status as \
+structuredContent. SECURITY: this executes arbitrary commands with \
 your user's privileges in `cwd`; it is gated only by the MCP client's tool approval.";
 
 /// Tool definitions for `tools/list`, in a stable order.
@@ -169,7 +170,12 @@ pub fn definitions(structured: bool) -> Value {
         }
     ]);
     if structured {
-        tools[0]["outputSchema"] = run_output_schema();
+        if let Some(run) = tools
+            .as_array_mut()
+            .and_then(|all| all.iter_mut().find(|t| t["name"] == "run"))
+        {
+            run["outputSchema"] = run_output_schema();
+        }
     }
     tools
 }
@@ -225,7 +231,15 @@ fn run_result(
             }),
         ),
         Err(e) => (
-            text_result(format!("could not run command: {e}"), true),
+            text_result(
+                match &e {
+                    run::RunError::NotStarted(_) => format!("could not run command: {e}"),
+                    run::RunError::Observation(_) => {
+                        format!("command started but its exit status could not be observed: {e}")
+                    }
+                },
+                true,
+            ),
             json!({
                 "schema_version": 1,
                 "execution": match e { run::RunError::NotStarted(_) => "not_started", run::RunError::Observation(_) => "unknown" },
@@ -238,12 +252,9 @@ fn run_result(
         ),
     };
     if structured {
-        // Preserve the first human-readable block. MCP recommends a JSON text
-        // fallback as well for clients that do not consume structuredContent.
-        response["content"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"type":"text", "text":outcome.to_string()}));
+        // Only the compact report goes in `content`: a duplicate JSON text
+        // block would cost every `run` call ~70-90 extra tokens, and clients
+        // negotiating this revision already read `structuredContent`.
         response["structuredContent"] = outcome;
     }
     response
@@ -564,6 +575,31 @@ mod tests {
             assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
         }
         assert!(RUN_DESCRIPTION.contains("SECURITY"));
+    }
+
+    #[test]
+    fn structured_definitions_attach_output_schema_to_run_only() {
+        let (plain, structured) = (definitions(false), definitions(true));
+        for (a, b) in plain
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(structured.as_array().unwrap())
+        {
+            assert_eq!(a["inputSchema"], b["inputSchema"], "{a}");
+            assert_eq!(b.get("outputSchema").is_some(), b["name"] == "run", "{b}");
+        }
+    }
+
+    #[test]
+    fn unobserved_status_text_does_not_claim_the_command_never_ran() {
+        let observation = run::RunError::Observation(std::io::Error::other("wait failed"));
+        let a = parse_run(&obj(json!({"command": "true"}))).unwrap();
+        let r = run_result(Err(observation), &a, true);
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("started"), "{text}");
+        assert_eq!(r["structuredContent"]["execution"], "unknown");
+        assert_eq!(r["content"].as_array().unwrap().len(), 1);
     }
 
     #[cfg(unix)]

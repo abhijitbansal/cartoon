@@ -172,12 +172,8 @@ fn run_echo_returns_output_and_exit_code() {
     assert_eq!(outcome["stderr"]["captured_bytes"], 0);
     assert_eq!(outcome["stdout"]["dropped_bytes"], 0);
     assert_eq!(outcome["stdout"]["utf8_lossy"], false);
-    // Older clients can still read the first report; modern text-only clients
-    // also receive the structured result serialized as recommended by MCP.
-    assert_eq!(
-        serde_json::from_str::<Value>(r["result"]["content"][1]["text"].as_str().unwrap()).unwrap(),
-        *outcome
-    );
+    // The compact report is the only text block; no duplicate JSON copy.
+    assert_eq!(r["result"]["content"].as_array().unwrap().len(), 1);
     // A failing command is a normal result that reports its status.
     let r = s.call(2, "run", json!({"command": "echo oops >&2; exit 3"}));
     assert_eq!(r["result"]["isError"], false);
@@ -217,6 +213,7 @@ fn run_output_schema_and_results_follow_the_negotiated_protocol() {
         );
         let list = s.request(1, "tools/list", json!({}));
         let tool = &list["result"]["tools"][0];
+        assert_eq!(tool["name"], "run");
         assert_eq!(tool.get("outputSchema").is_some(), modern);
         if modern {
             assert_eq!(tool["outputSchema"]["type"], "object");
@@ -238,10 +235,8 @@ fn run_output_schema_and_results_follow_the_negotiated_protocol() {
                 modern,
                 "{r}"
             );
-            assert_eq!(
-                r["result"]["content"].as_array().unwrap().len(),
-                if modern { 2 } else { 1 }
-            );
+            // The readable report stays the only text block in every mode.
+            assert_eq!(r["result"]["content"].as_array().unwrap().len(), 1);
         }
         s.finish();
     }

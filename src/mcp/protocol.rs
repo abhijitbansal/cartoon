@@ -7,6 +7,13 @@ use serde_json::{json, Value};
 /// the client's version when it is one of these, else offers the newest.
 pub const SUPPORTED_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
+/// Revisions from 2025-06-18 on carry `outputSchema` / `structuredContent`.
+/// ISO dates order correctly as strings, so a newer revision added to
+/// `SUPPORTED_VERSIONS` keeps structured output without touching `serve`.
+pub fn supports_structured_output(version: &str) -> bool {
+    version >= "2025-06-18"
+}
+
 pub const PARSE_ERROR: i64 = -32700;
 pub const INVALID_REQUEST: i64 = -32600;
 pub const METHOD_NOT_FOUND: i64 = -32601;
