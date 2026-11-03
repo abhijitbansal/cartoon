@@ -140,12 +140,69 @@ binary).
 | `diff` | `{cmd?, id_a?, id_b?}` → fixed / still failing / new since the previous run | `cartoon diff` |
 | `stats` | `{since?}` → tokens saved per adapter | `cartoon stats` |
 
-A failing test run is a normal result (`isError: false`) whose text ends in
-`exit_code: 1`; `isError: true` means the command could not run at all (a
-bad `cwd`, say). `timeout_s` defaults to 600 (max 3600): on expiry cartoon
+A failing test run is a normal result (`isError: false`) reporting
+`exit_code: 1`. `isError: true` means a tool error, which can happen before
+startup (a bad `cwd`, say) or while observing a running process; it does not
+prove that nothing executed. `timeout_s` defaults to 600 (max 3600): on expiry cartoon
 is sent SIGTERM, forwards it to the command, and still returns (and
 archives) what was printed, marked `timed_out: true`; anything still alive
-5 s later is SIGKILLed. Cancelling the call from the client does the same.
+5 s later triggers SIGKILL for cartoon's process group. Cancelling the call
+from the client requests the same termination sequence and suppresses the
+tool response; there is no cancellation result or proof of descendant cleanup.
+
+#### Structured execution observations
+
+With protocol **2025-06-18**, `run` advertises an `outputSchema` and returns
+versioned `structuredContent`. The first text block remains the readable
+report; a second text block contains the same structured JSON for text-only
+consumers. Negotiated 2025-03-26 and 2024-11-05 clients retain their original
+single-block response without `outputSchema` or `structuredContent`.
+
+For `echo hi`, the structured result is:
+
+```json
+{
+  "schema_version": 1,
+  "execution": "exited",
+  "exit_code": 0,
+  "timed_out": false,
+  "capture_scope": "cartoon_output",
+  "stdout": {"status": "eof", "captured_bytes": 3, "dropped_bytes": 0, "utf8_lossy": false},
+  "stderr": {"status": "eof", "captured_bytes": 0, "dropped_bytes": 0, "utf8_lossy": false}
+}
+```
+
+- `execution: "exited"` means the server observed its cartoon subprocess's
+  exit. `exit_code` is that process's status (128 + signal on Unix), not a
+  value parsed from command output. A forged `exit_code: 0` line cannot
+  replace it. Cartoon normally propagates the wrapped command's exit status,
+  but wrapper failures can have their own status.
+- `execution: "not_started"` means the cartoon subprocess could not be
+  spawned. `"unknown"` means an observation error after startup. Both carry
+  null exit, timeout and stream observations, with `isError: true`. Invalid
+  arguments still receive JSON-RPC errors rather than tool results.
+- `timed_out` records the server's execution timeout. A nonzero exit or a
+  timeout remains a normal delivered result (`isError: false`). Neither a
+  successful delivery nor a zero exit proves task correctness.
+- Each stream's `status` is `eof`, `read_error`, or `deadline`. Capture keeps
+  at most 4 MiB per stream and waits at most 2 seconds per stream for its
+  reader to finish after process exit. Counts are bytes before lossy UTF-8
+  conversion and exclude rendering markers. Dropped bytes are only the
+  observed lower bound when the stream has not reached EOF.
+- A lossless **MCP stream capture** requires `status: "eof"`,
+  `dropped_bytes: 0`, and `utf8_lossy: false` on both streams. These streams
+  are cartoon's already transformed/compressed output. This does **not**
+  establish completeness of original command output, raw-log durability,
+  authorization, artifact provenance, or process-tree containment.
+
+Consumers should validate schema version and all relevant observations,
+and treat null/unknown or incomplete capture conservatively. This is additive
+execution telemetry, not a security boundary. Descendants that retain pipes
+can outlive the capture deadline; the existing reader threads may continue
+draining those pipes after the response.
+
+The contract follows MCP's [structured content and output schema rules](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#structured-content)
+and [cancellation behavior](https://modelcontextprotocol.io/specification/2025-06-18/basic/utilities/cancellation).
 
 > **Security:** `run` executes arbitrary shell commands with your user's
 > privileges — that is its purpose. The only gate is your MCP client's tool
