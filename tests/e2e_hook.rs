@@ -86,6 +86,23 @@ fn deny_rule_in_project_settings_emits_nothing() {
 }
 
 #[test]
+fn quoted_command_under_deny_rule_emits_nothing() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+    );
+    for cmd in [r#"make "deploy""#, "make 'deploy'", "make dep'loy'"] {
+        let event = bash_event(&proj, cmd);
+        assert_eq!(
+            rewrite_event(cartoon_with_home(&home), &proj, &event),
+            "",
+            "{cmd}"
+        );
+    }
+}
+
+#[test]
 fn ask_rule_in_home_settings_emits_nothing() {
     let (_tmp, home, proj) = home_and_project();
     write_settings(

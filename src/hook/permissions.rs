@@ -124,7 +124,9 @@ fn is_bash_rule(rule: &str) -> bool {
 
 /// True when any loaded rule could match `cmd` (or rules are unreadable).
 /// Candidates: the whole command, each segment between `&&`, `||`, `;` or
-/// `|`, and each segment with leading `NAME=value` words removed.
+/// `|`, and each segment with leading `NAME=value` words removed, each both
+/// as written and with shell quoting removed (`make "deploy"` is matched as
+/// `make deploy`). Quoting that can't be removed guards the command.
 pub fn is_guarded(cmd: &str, rules: &UserRules) -> bool {
     if rules.unreadable {
         return true;
@@ -132,7 +134,10 @@ pub fn is_guarded(cmd: &str, rules: &UserRules) -> bool {
     if rules.guards.is_empty() {
         return false;
     }
-    let candidates = candidates(cmd);
+    // Quoting the shell would remove can't be matched safely: guard.
+    let Some(candidates) = candidates(cmd) else {
+        return true;
+    };
     rules.guards.iter().any(|rule| match parse_rule(rule) {
         Pattern::All => true,
         Pattern::Exact(p) => candidates.contains(&p),
@@ -201,14 +206,22 @@ fn wildcard(p: &[u8], t: &[u8]) -> bool {
     p[pi..].iter().all(|&b| b == b'*')
 }
 
-fn candidates(cmd: &str) -> Vec<String> {
-    let mut out = vec![normalise(cmd)];
-    let segments = cmd
+/// Every form of `cmd` a rule is compared with: raw text split naively (so
+/// a rule written with quotes still matches as written) plus the unquoted
+/// words of the whole command and of each segment split outside quotes.
+/// None when the quoting can't be removed (unbalanced quote).
+fn candidates(cmd: &str) -> Option<Vec<String>> {
+    let mut out = vec![normalise(cmd), unquote(cmd)?];
+    let raw_segments = cmd
         .split("&&")
         .flat_map(|s| s.split("||"))
-        .flat_map(|s| s.split([';', '|']));
-    for segment in segments {
-        let segment = normalise(segment);
+        .flat_map(|s| s.split([';', '|']))
+        .map(normalise);
+    let unquoted_segments = split_outside_quotes(cmd)
+        .into_iter()
+        .map(|s| unquote(&s))
+        .collect::<Option<Vec<_>>>()?;
+    for segment in raw_segments.chain(unquoted_segments) {
         if segment.is_empty() {
             continue;
         }
@@ -218,7 +231,45 @@ fn candidates(cmd: &str) -> Vec<String> {
         }
         out.push(segment);
     }
-    out
+    Some(out)
+}
+
+/// The words the shell would see, quotes removed, joined by one space.
+fn unquote(s: &str) -> Option<String> {
+    shell_words::split(s).ok().map(|words| words.join(" "))
+}
+
+/// Split on `&&`, `||`, `;` and `|` only where they sit outside quotes. A
+/// backslash outside single quotes escapes the next character, as in sh.
+fn split_outside_quotes(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = cmd.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some('"') | None if c == '\\' => {
+                current.push(c);
+                current.extend(chars.next());
+                continue;
+            }
+            Some(_) => {}
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c == ';' || c == '|' || (c == '&' && chars.peek() == Some(&'&')) => {
+                // Consume the second character of `&&` / `||`.
+                if chars.peek() == Some(&c) {
+                    chars.next();
+                }
+                segments.push(std::mem::take(&mut current));
+                continue;
+            }
+            None => {}
+        }
+        current.push(c);
+    }
+    segments.push(current);
+    segments
 }
 
 fn strip_env_prefix(segment: &str) -> String {
@@ -291,6 +342,43 @@ mod tests {
         let r = rules(&["Bash(make deploy:*)"]);
         assert!(is_guarded("pytest tests && make deploy", &r));
         assert!(is_guarded("CI=1 make deploy", &r));
+    }
+
+    #[test]
+    fn quoted_forms_are_guarded() {
+        let deploy = rules(&["Bash(make deploy:*)"]);
+        for cmd in [
+            r#"make "deploy""#,
+            "make 'deploy'",
+            "make dep'loy'",
+            r#"make de""ploy --dry-run"#,
+            "pytest && make 'deploy'",
+            "CI=1 make 'deploy'",
+        ] {
+            assert!(is_guarded(cmd, &deploy), "{cmd}");
+        }
+        assert!(is_guarded("npm 'ci'", &rules(&["Bash(npm ci)"])));
+        assert!(is_guarded("pytest '-q'", &rules(&["Bash(pytest -q)"])));
+    }
+
+    #[test]
+    fn quoted_separator_does_not_hide_a_segment() {
+        let r = rules(&["Bash(make deploy:*)"]);
+        assert!(is_guarded(r#"pytest -k "a|b" && make 'deploy'"#, &r));
+        assert!(is_guarded("pytest -k 'x && y' ; make deploy", &r));
+    }
+
+    #[test]
+    fn unparseable_quoting_is_guarded_when_rules_exist() {
+        assert!(is_guarded(r#"make "deploy"#, &rules(&["Bash(npm ci)"])));
+        assert!(!is_guarded(r#"make "deploy"#, &UserRules::default()));
+    }
+
+    #[test]
+    fn quoted_unrelated_command_is_not_guarded() {
+        let r = rules(&["Bash(make deploy:*)"]);
+        assert!(!is_guarded("pytest -k 'deploy and fast'", &r));
+        assert!(!is_guarded(r#"make "test""#, &r));
     }
 
     #[test]
