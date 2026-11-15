@@ -84,13 +84,24 @@ pub fn on_archived(
         .into_iter()
         .filter(|m| m.id != run.id && m.cwd == cwd && command_key(&m.argv) == key)
         .find_map(|m| archive::load_report_at(root, &m.id))?;
+    vs_previous(&prev, &cur)
+}
+
+/// The `vs_previous` footer line, or None when there is nothing to say.
+/// Runs of different kinds (a test run, then a compile failure that
+/// reported diagnostics instead of tests) are not comparable: the tests
+/// were not fixed, they never ran.
+fn vs_previous(prev: &StoredReport, cur: &StoredReport) -> Option<String> {
+    if prev.kind != cur.kind {
+        return None;
+    }
     if prev.items.is_empty() && cur.items.is_empty() {
         return None;
     }
-    let d = compare(&prev, &cur);
+    let d = compare(prev, cur);
     Some(format!(
         "{} {}; still {}; new {} (cartoon diff)",
-        if fewer_tests(&prev, &cur) {
+        if fewer_tests(prev, cur) {
             "fixed or not run"
         } else {
             "fixed"
@@ -332,6 +343,12 @@ pub fn render_diff(
             (previous, current)
         }
     };
+    if prev.kind != cur.kind {
+        return Err(format!(
+            "run {} reported {} but run {} reported {} (a build break after a test run, or the reverse): nothing comparable",
+            pm.id, prev.kind, cm.id, cur.kind
+        ));
+    }
     let d = compare(&prev, &cur);
     let tests = cur.kind == "tests";
     let entry = |it: &StoredItem, with_msg: bool| -> Value {
@@ -558,6 +575,33 @@ mod tests {
     }
 
     #[test]
+    fn vs_previous_compares_runs_of_the_same_kind() {
+        let mut prev = rep("tests", vec![test_item("t::a", "t.py:3")]);
+        prev.total = Some(10);
+        let mut cur = rep("tests", vec![]);
+        cur.total = Some(10);
+        assert_eq!(
+            vs_previous(&prev, &cur).as_deref(),
+            Some("fixed 1; still 0; new 0 (cartoon diff)")
+        );
+    }
+
+    #[test]
+    fn vs_previous_skips_a_run_of_a_different_kind() {
+        // Tests failed, then the next run broke the build and reported
+        // diagnostics: the tests did not get fixed, they never ran.
+        let mut prev = rep(
+            "tests",
+            vec![test_item("t::a", "t.py:3"), test_item("t::b", "t.py:9")],
+        );
+        prev.total = Some(10);
+        let cur = rep("diagnostics", vec![diag("App/View.swift:3:1", "", "boom")]);
+        assert_eq!(vs_previous(&prev, &cur), None);
+        // And the other way round: build fixed, tests now report.
+        assert_eq!(vs_previous(&cur, &prev), None);
+    }
+
+    #[test]
     fn diff_defaults_to_the_previous_run_of_the_same_command_and_cwd() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -636,6 +680,19 @@ mod tests {
         assert!(render_diff(root, ids, None)
             .unwrap_err()
             .contains("no adapter report"));
+    }
+
+    #[test]
+    fn diff_refuses_runs_of_different_kinds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let argv = ["xcodebuild", "test"];
+        let tests = rep("tests", vec![test_item("t::a", "t.py:3")]);
+        let diags = rep("diagnostics", vec![diag("A.swift:1:1", "", "boom")]);
+        put(root, "20261005-100000-0001", &argv, "/p", 65, Some(&tests));
+        put(root, "20261005-100001-0001", &argv, "/p", 65, Some(&diags));
+        let e = render_diff(root, None, None).unwrap_err();
+        assert!(e.contains("nothing comparable"), "{e}");
     }
 
     #[test]
