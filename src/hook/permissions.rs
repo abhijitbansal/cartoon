@@ -245,11 +245,64 @@ fn candidates(cmd: &str) -> Option<Vec<String>> {
         }
         let stripped = strip_env_prefix(&segment);
         if stripped != segment && !stripped.is_empty() {
+            out.extend(tool_forms(&stripped));
             out.push(stripped);
         }
+        out.extend(tool_forms(&segment));
         out.push(segment);
     }
     Some(out)
+}
+
+/// The segment as the tool the hook itself resolves would see it: each
+/// launcher peeled off in turn (`xcrun`, `npx`/`bunx`/`pnpx`, `pnpm dlx`,
+/// `yarn dlx`, `uv run`, `uv tool run`, `uvx`, `python[3] -m`, uv's `-m`,
+/// `poetry run`, `pipenv run`, with their flags), and the command word cut
+/// to its basename (`./gradlew` → `gradlew`). So `Bash(pytest:*)` guards
+/// `uv run python -m pytest`. Only ever adds candidates.
+fn tool_forms(segment: &str) -> Vec<String> {
+    let mut forms = Vec::new();
+    let mut words: Vec<&str> = segment.split(' ').collect();
+    loop {
+        let based = words.first().map(|w| basename(w));
+        if let Some(b) = based.filter(|b| Some(*b) != words.first().copied()) {
+            words[0] = b;
+            forms.push(words.join(" "));
+        }
+        match peel_launcher(&words) {
+            Some(inner) if !inner.is_empty() => {
+                words = inner.to_vec();
+                forms.push(words.join(" "));
+            }
+            _ => return forms,
+        }
+    }
+}
+
+/// The words after one launcher and its flags, or None when `words` does
+/// not start with a launcher.
+fn peel_launcher<'a, 'b>(words: &'a [&'b str]) -> Option<&'a [&'b str]> {
+    let (first, rest) = words.split_first()?;
+    let after = match (basename(first), rest) {
+        ("xcrun" | "npx" | "bunx" | "pnpx" | "uvx", r) => r,
+        ("pnpm" | "yarn", ["dlx", r @ ..]) => r,
+        ("uv" | "poetry" | "pipenv", ["run", r @ ..]) => r,
+        ("uv", ["tool", "run", r @ ..]) => r,
+        ("-m" | "--module", r) => return Some(r),
+        (b, [m, r @ ..]) if b.starts_with("python") && matches!(*m, "-m" | "--module") => {
+            return Some(r)
+        }
+        _ => return None,
+    };
+    let at = after
+        .iter()
+        .position(|w| !w.starts_with('-') || matches!(*w, "-m" | "--module"))
+        .unwrap_or(after.len());
+    Some(&after[at..])
+}
+
+fn basename(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
 }
 
 /// The words the shell would see, quotes removed, normalised like raw text
@@ -397,6 +450,53 @@ mod tests {
             r#"git commit -m "x""#,
             &rules(&[r#"Bash(git commit -m "x")"#])
         ));
+    }
+
+    #[test]
+    fn launcher_or_path_in_front_of_the_tool_is_still_guarded() {
+        // Final review I5: the hook resolves these to the tool, so a rule on
+        // the tool must guard them too.
+        let r = rules(&[
+            "Bash(pytest:*)",
+            "Bash(jest:*)",
+            "Bash(swift build:*)",
+            "Bash(xcodebuild:*)",
+            "Bash(gradlew:*)",
+            "Bash(ruff:*)",
+            "Bash(vitest:*)",
+        ]);
+        for cmd in [
+            "pytest -q",
+            "python -m pytest -q",
+            "python3 -m pytest -q",
+            "uv run pytest",
+            "uvx pytest",
+            "uv run -m pytest",
+            "uv run --frozen python -m pytest",
+            "uv tool run pytest",
+            "poetry run pytest",
+            "pipenv run pytest",
+            "npx jest",
+            "npx -y jest",
+            "bunx jest",
+            "pnpx jest",
+            "pnpm dlx jest",
+            "yarn dlx jest",
+            "./node_modules/.bin/jest",
+            "npx ./node_modules/.bin/vitest run",
+            "xcrun swift build",
+            "xcrun xcodebuild test -scheme A",
+            "xcrun ./bin/xcodebuild test",
+            "./gradlew test",
+            "uvx ruff check",
+            "CI=1 uv run pytest",
+            "make lint && uv run pytest",
+        ] {
+            assert!(is_guarded(cmd, &r), "{cmd}");
+        }
+        for cmd in ["make test", "cargo test", "npx tsc", "python -m unittest"] {
+            assert!(!is_guarded(cmd, &r), "{cmd}");
+        }
     }
 
     #[test]

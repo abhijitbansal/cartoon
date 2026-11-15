@@ -130,6 +130,28 @@ fn ask_rule_found_through_home_when_config_dir_unset() {
 }
 
 #[test]
+fn rule_on_the_tool_guards_launcher_and_path_forms() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"ask":["Bash(pytest:*)","Bash(xcodebuild:*)","Bash(gradlew:*)"]}}"#,
+    );
+    for cmd in [
+        "python -m pytest -q",
+        "uv run pytest",
+        "xcrun xcodebuild test -scheme A",
+        "./gradlew test",
+    ] {
+        let event = bash_event(&proj, cmd);
+        assert_eq!(
+            rewrite_event(cartoon_with_home(&home), &proj, &event),
+            "",
+            "{cmd}"
+        );
+    }
+}
+
+#[test]
 fn project_dir_rules_apply_when_shell_cwd_is_elsewhere() {
     let (tmp, home, proj) = home_and_project();
     let other = tmp.path().join("other");
