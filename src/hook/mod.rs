@@ -239,6 +239,8 @@ pub const MUTATING_TOKENS: &[(&str, &[&str])] = &[
     ("pnpm", JS_MUTATING),
     ("yarn", JS_MUTATING),
     ("bun", JS_MUTATING),
+    // syrupy rewrites its snapshot files.
+    ("pytest", &["--snapshot-update"]),
 ];
 
 /// jest/vitest/bun snapshot updates and config scaffolding. Long names are
@@ -799,6 +801,19 @@ fn env_assignment_name(word: &str) -> Option<&str> {
 /// rest.
 fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
     let rest: Vec<&str> = rest.iter().map(AsRef::as_ref).collect();
+    // `python -m pytest ...` / uv's `-m pytest ...`: judge the module.
+    let module_args = if tool.starts_with("python") {
+        rest.iter()
+            .position(|w| matches!(*w, "-m" | "--module"))
+            .map(|at| &rest[at + 1..])
+    } else if matches!(tool, "-m" | "--module") {
+        Some(&rest[..])
+    } else {
+        None
+    };
+    if let Some((module, args)) = module_args.and_then(|m| m.split_first()) {
+        return has_mutating_token(module, args);
+    }
     if policy::mutating_mode(tool, &rest) {
         return true;
     }
@@ -811,8 +826,19 @@ fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
                 || w.strip_prefix(t).is_some_and(|r| r.starts_with('='))
                 || long_name_eq(w, t)
                 || (tool == "tsc" && long_name_eq(&format!("-{w}"), t))
+                || short_as_long(w, t)
         })
     })
+}
+
+/// `--u` / `--u=true` for a one-letter short flag `-u`: yargs-parser and cac
+/// both resolve a one-letter long option to the short one.
+fn short_as_long(word: &str, token: &str) -> bool {
+    let is_short = token.len() == 2 && token.starts_with('-') && !token.starts_with("--");
+    is_short
+        && word.strip_prefix('-').is_some_and(|w| {
+            w == token || w.strip_prefix(token).is_some_and(|r| r.starts_with('='))
+        })
 }
 
 /// Both are `--name[=v]` options with the same `norm`ed name.
@@ -1055,6 +1081,16 @@ mod tests {
             "tsc --build --clean",
             "vitest init browser",
             "npm test -- --init",
+            // Residuals round: yargs and cac resolve `--u` to `-u`.
+            "jest --u",
+            "jest --u=true",
+            "vitest --u",
+            "vitest run --u",
+            "npm test -- --u",
+            "pytest --snapshot-update",
+            "python -m pytest --snapshot-update",
+            "uv run pytest --snapshot-update",
+            "uv run python -m pytest --snapshot-update",
         ] {
             assert!(wrap_command(c).is_none(), "{c}");
         }
