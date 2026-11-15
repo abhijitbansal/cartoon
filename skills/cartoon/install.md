@@ -15,11 +15,10 @@ command -v cartoon
 If missing, install with the first toolchain available, then verify:
 
 ```bash
-uv tool install cartoon        # preferred when uv exists
-pipx install cartoon           # Python fallback
-npm install -g cartoon-wrap    # Node (installs the `cartoon` binary)
-cargo install cartoon          # Rust
 brew tap abhijitbansal/cartoon https://github.com/abhijitbansal/cartoon && brew install cartoon   # Homebrew
+cargo install cartoon          # Rust
+uv tool install cartoon        # Python (uv); or: pipx install cartoon
+npm install -g cartoon-wrap    # Node (installs the `cartoon` binary)
 # No toolchain: prebuilt binary to ~/.local/bin, checksum-verified
 curl -fsSL https://raw.githubusercontent.com/abhijitbansal/cartoon/main/install.sh | sh
 cartoon adapters               # verify: lists the test-runner adapters
@@ -28,93 +27,64 @@ cartoon adapters               # verify: lists the test-runner adapters
 If no toolchain is available or installs need permission you don't have,
 skip wrapping — never block the user's actual task on cartoon.
 
-## 2. Auto-wrap so noisy commands wrap without being prefixed
+## 2. Set up auto-wrap (Claude Code)
 
-A `PreToolUse` hook intercepts the command and rewrites it to run under
-cartoon — wrapping stops depending on the model remembering. One
-`cartoon hook rewrite` serves every agent; install it where each one looks.
-Default scope is **user**; add `--project` for repo scope.
-
-### Claude Code
+A `PreToolUse` hook intercepts the Bash call and rewrites it to run under
+cartoon — wrapping stops depending on the model remembering. One command
+does the whole setup:
 
 ```bash
-cartoon hook install              # ~/.claude/settings.json (user)
-cartoon hook install --project    # .claude/settings.json   (repo)
+cartoon setup                 # hook in ~/.claude/settings.json + instructions block + doctor
+cartoon setup --project       # hook in this repo's .claude/settings.json instead
+cartoon setup --no-instructions   # hook only
 ```
+
+`setup` is idempotent and never prompts. It writes the hook unless the
+cartoon plugin is enabled (the plugin already ships it), and writes the
+instructions block into `CLAUDE.md` if present, else `AGENTS.md`.
 
 Or the plugin (skill + hook in one): `/plugin marketplace add
 abhijitbansal/cartoon` then `/plugin install cartoon@cartoon`.
 
-### Copilot CLI (≥ v1.0.24)
-
-```bash
-cartoon hook install --copilot              # ~/.copilot/hooks/cartoon.json (user)
-cartoon hook install --copilot --project    # .github/hooks/cartoon.json (repo/team + coding agent)
-```
-
-If Copilot shows a confirmation dialog on every wrapped command (a known
-v1.0.24 bug), add `--deny` for the smoother deny-and-suggest flow.
-
-### VS Code Copilot Chat (Preview)
-
-```bash
-cartoon hook install --vscode     # shares ~/.claude/settings.json
-```
-
-Chat has no rewrite field, so the hook denies the raw command and suggests
-the wrapped form (one extra round-trip). `--copilot` and `--vscode` are
-different config files — don't combine them.
-
-### Any agent without hooks — shell shims
-
-```bash
-cartoon shim install
-export BASH_ENV=~/.config/cartoon/shims.sh   # for the non-interactive shells agents spawn
-```
-
-Functions shadow the bare tool names and beat PATH and venv-local binaries.
+The hook is Claude Code only. For other agents install the skill
+(`npx skills add abhijitbansal/cartoon`) and the instructions block
+(`cartoon instructions install`), or register the MCP server
+(`claude mcp add cartoon -- cartoon mcp`, or the JSON in
+[docs/agents.md](../../docs/agents.md)).
 
 ### Cover piped commands — the instructions directive
 
-Neither the hook nor the shims can rewrite a piped command (`pytest | tail`),
-and VS Code Copilot Chat can only deny. The one thing that closes that gap is
-an instruction telling the agent to wrap and not pipe. Write it as a managed,
-idempotent block:
+The hook rewrites a trailing `| head -n N` / `| tail -n N` on a command with
+an adapter, but not any other pipe (`pytest | grep FAIL`). The thing that
+closes that gap is an instruction telling the agent to wrap and not pipe.
+`cartoon setup` writes it; on its own:
 
 ```bash
 cartoon instructions install            # → ./CLAUDE.md if present, else ./AGENTS.md
-cartoon hook install --instructions     # install the hook AND the directive
 ```
 
-`cartoon hook install` alone also hints about this and, on a terminal, offers
-to write it for you.
-
-Check what's active anytime: `cartoon hook status` (every surface),
-`cartoon shim status`, and `cartoon instructions status`.
+Check what's active anytime: `cartoon doctor`, `cartoon hook status`,
+`cartoon instructions status`.
 
 ## 3. Disabling & uninstalling
 
-- **Session** (set in the agent's environment): `CARTOON_NO_WRAP=1` (hook) or
-  `CARTOON_NO_SHIM=1` (shims) — any non-empty value turns it off; unset to
-  re-enable. One command raw: `cartoon --raw <cmd>`.
-- **Permanent**: `cartoon hook uninstall [--copilot | --vscode] [--project]`
-  and/or `cartoon shim uninstall` (then drop the `BASH_ENV` / source line).
+- **Session** (set in the agent's environment): `CARTOON_NO_WRAP=1` — any
+  non-empty value turns the hook off; unset to re-enable. One command raw:
+  `cartoon --raw <cmd>`.
+- **Permanent**: `cartoon hook uninstall [--project]` and `cartoon
+  instructions uninstall`.
 
 ## Caveats
 
-- **Conservative allowlist**: only test/lint/typecheck/build commands wrap
-  (0.6.0: mutating modes such as `ruff format`/`--fix`, env-prefixed
-  commands like `PATH=… pytest`, and `npx <non-JS tool>` are left to the
-  normal permission prompt);
-  infra CLIs (docker, kubectl, gh, aws) and mutating subcommands
-  (`cargo publish`, `npm install`) pass through. The net-savings guard means
-  wrapped output is never bigger than raw.
+- **Conservative allowlist**: only test/lint/typecheck/build commands wrap.
+  Mutating modes such as `ruff format`/`--fix`, env-prefixed commands like
+  `PATH=… pytest`, `npx <non-JS tool>`, deploy/publish targets and watch
+  modes are left to the normal permission prompt; infra CLIs (docker,
+  kubectl, gh, aws) and mutating subcommands (`cargo publish`,
+  `npm install`) pass through. The net-savings guard means wrapped output is
+  never bigger than raw.
+- **Your permission rules win**: the hook reads your Bash `ask` / `deny`
+  rules and stays silent when one could match, and in plan mode. A command
+  that was not rewritten is going through the normal permission flow.
 - **Buffered, not streamed**: a wrapped command's report prints when it
   finishes, not live. Use `cartoon --raw` when you need live output.
-- **Install hooks to `~/.copilot/hooks` or `.github/hooks`**, not a plugin
-  directory — plugin-defined Copilot hooks currently don't fire.
-- **`.github/hooks/cartoon.json` is Copilot-CLI format** (camelCase
-  `preToolUse`); VS Code Chat does not read it — use `--vscode` for Chat.
-- **Shims don't cover** hyphenated tool names (`pre-commit`),
-  `python -m pytest`, or `xcodebuild` — the hook does. Re-running an install
-  won't overwrite a `cartoon.json` you didn't create.

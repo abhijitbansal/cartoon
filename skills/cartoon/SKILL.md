@@ -1,6 +1,6 @@
 ---
 name: cartoon
-description: Save input tokens by wrapping CLI commands in `cartoon`. Use whenever running test suites (pytest, jest, unittest), JSON-emitting CLIs (aws, gh, kubectl with --output json), or any command expected to produce long, noisy output. Also covers installing cartoon when it is not present.
+description: Keep the failing test and file:line, drop the wall of log, by wrapping noisy dev commands in `cartoon`. Use whenever running xcodebuild, swift test/build, pytest, cargo test, jest, unittest, other test runners, builds and linters, or a JSON-emitting CLI. Also covers installing and setting up cartoon when it is not present.
 license: MIT
 ---
 
@@ -18,9 +18,9 @@ Verbose test runs shrink a lot (see benchmarks/README.md; far less against alrea
 command -v cartoon
 ```
 
-If it's missing — or you want to set up automatic wrapping (a PreToolUse
-hook or shell shims) so you don't prefix `cartoon` by hand — read
-[install.md](install.md). If cartoon can't be installed, skip wrapping;
+If it's missing — or you want to set up automatic wrapping (the Claude Code
+PreToolUse hook, via `cartoon setup`) so you don't prefix `cartoon` by hand —
+read [install.md](install.md). If cartoon can't be installed, skip wrapping;
 never block the user's actual task on it.
 
 ## Use
@@ -28,10 +28,12 @@ never block the user's actual task on it.
 Prefix only — all flags and args of the wrapped command stay verbatim:
 
 ```bash
+cartoon xcodebuild test -scheme App -destination 'platform=iOS Simulator,name=iPhone 16'
+cartoon swift test                      # instead of: swift test
 cartoon pytest                          # instead of: pytest
 cartoon uv run pytest                   # uv picks the project .venv; cartoon still wraps
 cartoon uvx ruff check .                # uvx / uv tool run are wrapped too
-cartoon npx jest src/                   # any supported runner
+cartoon npx jest src/                   # any supported runner (see `cartoon adapters`)
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
 cartoon make                            # any noisy command: safe compression is automatic
 cartoon ingest build.log                # a log that already exists on disk
@@ -47,11 +49,13 @@ it through, so wrapping a uv test run is identical to wrapping a bare one.
 When a command is noisy (a test run, a build, a JSON CLI), do NOT pipe it to
 `head`/`tail`/`grep` to shrink the output. That is lossy in the wrong way: it
 keeps an arbitrary slice (often the wrong one — a build's real error sits
-mid-log while `tail` shows only `BUILD FAILED`) and the hook will not wrap a
-piped command at all, so you lose cartoon entirely.
+mid-log while `tail` shows only `BUILD FAILED`), and the pipe's exit status
+is the filter's, not the command's. The hook rewrites a trailing
+`| tail -n N` or `| head -n N` on a command with an adapter, but it will not
+wrap any other piped command, so you lose cartoon there.
 
 ```bash
-xcodebuild build … | tail -15     # WRONG: dumb cut, and wrapping is skipped
+xcodebuild build … | grep error   # WRONG: dumb cut, wrapping is skipped
 cartoon xcodebuild build …        # RIGHT: signal kept, far fewer tokens
 ```
 
@@ -122,17 +126,16 @@ got fixed / still fails / newly fails; `cartoon last` re-shows a report.
 - When the user explicitly asks to see the full raw output.
 - Short commands (`git status`, `ls`) — no savings to be had.
 - Need the raw output just once? `cartoon --raw <cmd>` or drop the prefix.
-- Acceleration flags like `--fast` change how tests execute — only use them
-  when the user explicitly asks for faster runs, and rerun without them
-  before debugging any failure.
 
 ## Auto-wrap may already be on
 
-A hook or shell shims may wrap noisy dev commands for you, so commands you
+The Claude Code hook may wrap noisy dev commands for you, so commands you
 run bare may come back as TOON. Non-noisy commands (`git`, `ls`, `docker`,
 …) pass through untouched, and wrapped output is buffered (the report prints
-when the command finishes, not live). To turn it off when asked:
-`export CARTOON_NO_WRAP=1` (hook) or `CARTOON_NO_SHIM=1` (shims), or
+when the command finishes, not live). The hook stays out of the way when a
+user permission rule (`ask` / `deny`) could match the command or the session
+is in plan mode, so a command that is not rewritten is normal, not an error.
+To turn it off when asked: `export CARTOON_NO_WRAP=1`, or
 `cartoon --raw <cmd>` for one command. Setup, scope, and uninstall:
 [install.md](install.md).
 
@@ -144,8 +147,7 @@ cost or token usage.
 
 ## Something not shrinking? Run `cartoon doctor`
 
-`cartoon doctor` prints one report: whether the hook is installed per agent
-surface, whether the global and project config parse, `wrap_scripts` entries
+`cartoon doctor` prints one report: whether the hook is installed, whether the global and project config parse, `wrap_scripts` entries
 that do not exist on disk, allowlisted tools that only get ladder
 compression (no adapter yet), and ledger health. Run it before filing an
 issue and paste the output.

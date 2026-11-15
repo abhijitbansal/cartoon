@@ -78,7 +78,7 @@ fn no_unbacked_savings_figures_or_banned_pitch_in_copy() {
 }
 
 /// `hook install --deny` was removed in 0.8; marketplace text must not tell
-/// users to run it. (The README still documents it until the docs rewrite.)
+/// users to run it.
 #[test]
 fn plugin_manifests_do_not_advertise_removed_flags() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -94,4 +94,100 @@ fn plugin_manifests_do_not_advertise_removed_flags() {
             "{rel} mentions removed --deny flag"
         );
     }
+}
+
+/// Features removed in 0.8. Only the "Upgrading from 0.7" section of
+/// `docs/usage.md` may name them (to tell users what replaced them).
+/// Matched case-insensitively.
+const REMOVED_FEATURE_TERMS: &[&str] = &[
+    "shim",
+    "--fast",
+    "--copilot",
+    "--vscode",
+    "--deny",
+    "--heuristic",
+    "cartoon --tag",
+];
+
+/// User-facing docs: the README, contributor guide, `docs/` (minus the
+/// engineering specs under `docs/superpowers/`), the skill and the npm README.
+fn user_facing_docs(root: &Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "superpowers") {
+                    continue;
+                }
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = vec![
+        root.join("README.md"),
+        root.join("CONTRIBUTING.md"),
+        root.join("benchmarks/README.md"),
+        root.join("packages/npm/cartoon-wrap/README.md"),
+    ];
+    walk(&root.join("docs"), &mut out);
+    walk(&root.join("skills"), &mut out);
+    out
+}
+
+/// Text outside `## Upgrading from 0.7` (that section runs to the next `## `).
+fn without_upgrade_section(text: &str) -> String {
+    let Some(start) = text.find("## Upgrading from 0.7") else {
+        return text.to_string();
+    };
+    let rest = &text[start + 3..];
+    let end = rest.find("\n## ").map_or(text.len(), |i| start + 3 + i);
+    format!("{}{}", &text[..start], &text[end..])
+}
+
+#[test]
+fn docs_do_not_document_removed_features() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut hits = Vec::new();
+    for path in user_facing_docs(root) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue; // binary asset
+        };
+        let lower = without_upgrade_section(&text).to_lowercase();
+        for term in REMOVED_FEATURE_TERMS {
+            if lower.contains(term) {
+                hits.push(format!("{} mentions removed {term:?}", path.display()));
+            }
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "removed features documented:\n{}",
+        hits.join("\n")
+    );
+}
+
+#[test]
+fn readme_is_short_and_points_at_the_reference_docs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
+    assert!(
+        readme.lines().count() < 150,
+        "README is {} lines",
+        readme.lines().count()
+    );
+    for link in ["docs/usage.md", "docs/agents.md", "benchmarks/"] {
+        assert!(readme.contains(link), "README does not link {link}");
+    }
+}
+
+#[test]
+fn usage_doc_explains_upgrading_from_0_7() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let usage = std::fs::read_to_string(root.join("docs/usage.md")).unwrap_or_default();
+    assert!(
+        usage.contains("## Upgrading from 0.7"),
+        "docs/usage.md lacks the upgrade section"
+    );
 }

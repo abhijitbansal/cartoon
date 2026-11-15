@@ -23,7 +23,7 @@ cartoon pytest                 # asymmetric test report in TOON
 cartoon npx jest src/          # same for jest
 cartoon python -m unittest     # same for unittest
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
-cartoon --fast pytest          # opt-in: parallel via pytest-xdist
+cartoon swift test             # failing tests, not the build log
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon logs --last --stdout   # full raw output of the newest run
 ```

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>cartoon — compact dev-tool output for coding agents</title>
-<meta name="description" content="Prefix cartoon onto any command and your AI agent reads a short summary instead of the full log — with the full raw log always archived. Exit codes mirrored, zero-risk by construction.">
+<meta name="description" content="Your coding agent gets the failing test and file:line from xcodebuild, swift test, pytest or cargo test, not a wall of log. Exit code and full log kept.">
 
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -15,7 +15,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="cartoon">
 <meta property="og:title" content="cartoon — compact dev-tool output for coding agents">
-<meta property="og:description" content="Your AI agent reads a short summary, not the full log — raw log always archived, exit codes mirrored, zero-risk by construction.">
+<meta property="og:description" content="The failing test and file:line from xcodebuild, swift test, pytest or cargo test, not a wall of log. Exit code and full log kept.">
 <meta property="og:url" content="https://abhijitbansal.github.io/cartoon/">
 <meta property="og:image" content="https://abhijitbansal.github.io/cartoon/assets/og.png">
 <meta property="og:image:type" content="image/png">
@@ -24,7 +24,7 @@
 <meta property="og:image:alt" content="cartoon — Stop paying your AI agent to read PASSED PASSED PASSED. far smaller verbose test runs, raw log always archived, exit codes mirrored.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="cartoon — compact dev-tool output for coding agents">
-<meta name="twitter:description" content="Your AI agent reads a short summary, not the full log — raw log always archived, exit codes mirrored, zero-risk by construction.">
+<meta name="twitter:description" content="The failing test and file:line from xcodebuild, swift test, pytest or cargo test, not a wall of log. Exit code and full log kept.">
 <meta name="twitter:image" content="https://abhijitbansal.github.io/cartoon/assets/og.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -339,14 +339,13 @@
   <!-- ============ HERO ============ -->
   <section class="hero anim" style="--i:0">
     <div class="brand">cartoon</div>
-    <h1>Stop paying your AI agent to read <em>PASSED PASSED PASSED</em>.</h1>
-    <p class="sub">Prefix <code>cartoon</code> onto any command and its output becomes compact, structured, agent-ready — same exit codes, same behavior, a fraction of the input tokens. The full raw log is always archived, so compression is reversible by construction.</p>
+    <h1>Your coding agent gets the <em>failing test</em> and file:line, not a wall of log.</h1>
+    <p class="sub">From <code>xcodebuild</code>, <code>swift test</code>, <code>pytest</code> or <code>cargo test</code>: the failing test and file:line, not a wall of log. Exit code and full log kept.</p>
     <div class="install-row">
-      <div class="install-pill"><b>uv</b> tool install cartoon</div>
-      <div class="install-pill"><b>pipx</b> install cartoon</div>
-      <div class="install-pill"><b>npm</b> i -g cartoon-wrap</div>
+      <div class="install-pill"><b>brew</b> install cartoon</div>
       <div class="install-pill"><b>cargo</b> install cartoon</div>
-      <div class="install-pill"><b>cargo</b> binstall cartoon</div>
+      <div class="install-pill"><b>uv</b> tool install cartoon</div>
+      <div class="install-pill"><b>then</b> cartoon setup</div>
     </div>
 
     <figure class="blueprint anim" style="--i:1">
@@ -465,7 +464,7 @@
   <div class="shead anim" style="--i:2">
     <div class="rule"><span class="tag">Install · for agents</span></div>
     <h2>Wire it into your agent once, forget it</h2>
-    <p>cartoon exists to save your agent input tokens — so install it first. Pick your harness; each option makes noisy commands wrap automatically.</p>
+    <p>Run <code>cartoon setup</code> once. In Claude Code the hook then wraps noisy commands itself; other agents get the skill and the instructions block.</p>
   </div>
 
   <div class="setup anim" style="--i:3">
@@ -484,74 +483,16 @@
     </div>
     <div class="s">
       <div class="step">Step 3 · no plugin</div>
-      <h3>Standalone hook / instructions</h3>
-      <p>No plugin? Install the Claude Code hook directly, or paste the snippet from docs/agents.md into your AGENTS.md.</p>
-      <pre>cartoon hook install   # auto-wrap in ~/.claude/settings.json
-cartoon hook status    # check · uninstall to remove</pre>
+      <h3>One command</h3>
+      <p>Installs the Claude Code hook and the instructions block, then runs a health check. The hook respects your ask/deny rules and plan mode.</p>
+      <pre>cartoon setup
+cartoon hook status    # check · hook uninstall to remove</pre>
     </div>
   </div>
 
   <div class="statband">
     <div class="stat gold anim" style="--i:2"><div class="n">81–93%</div><div class="l">smaller than verbose test runs (benchmarks/README.md; baselines named there)</div></div>
     <div class="stat anim" style="--i:5"><div class="n">0</div><div class="l">risk — output never gets bigger</div></div>
-  </div>
-
-  <!-- ============ COPILOT / VS CODE / SHIMS ============ -->
-  <div class="shead anim" style="--i:5">
-    <div class="rule"><span class="tag">Copilot · VS Code · any agent</span></div>
-    <h2>Guaranteed wrapping, not just instructions</h2>
-    <p>Pasting rules into <code>copilot-instructions.md</code> or <code>AGENTS.md</code> only <em>asks</em> the model to prefix <code>cartoon</code> — and it sometimes forgets. A <code>PreToolUse</code> hook intercepts the command and wraps it every time. One <code>cartoon hook rewrite</code> serves every agent; install it where each one looks.</p>
-  </div>
-
-  <div class="setup anim" style="--i:6">
-    <div class="s">
-      <div class="step">GitHub Copilot CLI · v1.0.24+</div>
-      <h3>Transparent rewrite</h3>
-      <p>Writes a Copilot hook that rewrites the command in place — same as Claude Code.</p>
-      <pre>cartoon hook install --copilot
-# repo-shared (also the coding agent):
-cartoon hook install --copilot --project</pre>
-    </div>
-    <div class="s">
-      <div class="step">VS Code Copilot Chat · Preview</div>
-      <h3>Deny &amp; suggest</h3>
-      <p>Chat exposes no rewrite field, so the hook blocks the raw command and tells the agent to re-run it wrapped. It reads the same Claude-format file, so one entry covers both.</p>
-      <pre>cartoon hook install --vscode
-# → ~/.claude/settings.json
-#   (also covers Claude Code)</pre>
-    </div>
-    <div class="s">
-      <div class="step">Any agent · no hook needed</div>
-      <h3>Shell shims</h3>
-      <p>Functions shadow the bare tool names and re-invoke through cartoon — they beat PATH and venv binaries.</p>
-      <pre>cartoon shim install
-export BASH_ENV=~/.config/cartoon/shims.sh</pre>
-    </div>
-  </div>
-
-  <div class="setup anim" style="--i:7; margin-top:16px">
-    <div class="s">
-      <div class="step">Tips</div>
-      <h3>Get the smoothest Copilot setup</h3>
-      <ul>
-        <li>Seeing a <b>confirmation dialog on every wrapped command</b> (a known Copilot CLI v1.0.24 bug)? Reinstall with <code>cartoon hook install --copilot --deny</code> — it blocks-and-suggests instead of rewriting, no modal.</li>
-        <li><code>cartoon hook rewrite --deny-mode</code> forces deny anywhere; handy on Copilot builds before <code>updatedInput</code> landed.</li>
-        <li><code>cartoon hook status</code> shows every surface at once; <code>cartoon shim status</code> shows the shim file.</li>
-        <li>Commit <code>.github/hooks/cartoon.json</code> so the whole team (and the Copilot coding agent) gets auto-wrap for free.</li>
-        <li><b>Disable without uninstalling:</b> set <code>CARTOON_NO_WRAP=1</code> (hook) or <code>CARTOON_NO_SHIM=1</code> (shims) in the agent's environment — any non-empty value turns it off for the session. <code>cartoon --raw &lt;cmd&gt;</code> runs one command untouched.</li>
-      </ul>
-    </div>
-    <div class="s">
-      <div class="step">Limitations</div>
-      <h3>Where each layer stops</h3>
-      <ul>
-        <li><b>VS Code Copilot Chat</b> can only deny, not rewrite — wrapping costs one extra round-trip while the agent re-issues the command. Its hooks are Preview, and it reads the Claude-format settings file (not the Copilot-CLI <code>.github/hooks</code> format), so install it with <code>--vscode</code>.</li>
-        <li><b>Shims see only their own argv</b>, not surrounding pipes — so unlike the hook they can't refuse <code>pytest | grep x</code>. Keep them to tools the agent runs bare; disable per-shell with <code>CARTOON_NO_SHIM=1</code>.</li>
-        <li><b>Path-invoked binaries</b> (<code>./gradlew</code>, <code>./node_modules/.bin/jest</code>) bypass shell functions entirely. Tools with non-identifier names (<code>pre-commit</code>) and <code>python -m</code>/<code>xcodebuild</code> aren't shimmed — the hook covers them.</li>
-        <li><b>Install to <code>~/.copilot/hooks</code> or <code>.github/hooks</code></b>, not a plugin dir — plugin-defined Copilot hooks currently don't fire.</li>
-        <li><b>Wrapped output is buffered</b> — the report prints when the command finishes, not live (cartoon adds parse/encode time proportional to output size, milliseconds in practice). Use <code>cartoon --raw</code> for live streaming.</li>
-      </ul>
-    </div>
   </div>
 
   <!-- ============ BEFORE / AFTER ============ -->
@@ -640,7 +581,7 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       <span class="idx">06</span>
       <span class="chip chip--rust">Hands-free</span>
       <h3>Claude Code auto-wrap hook</h3>
-      <p>The plugin ships a PreToolUse hook that rewrites noisy dev commands (test, lint, typecheck, build) to run under cartoon automatically. Conservative allowlist, fail-open on anything unrecognized — savings stop depending on the model remembering a skill.</p>
+      <p>The plugin ships a PreToolUse hook that rewrites noisy dev commands (test, lint, typecheck, build) to run under cartoon automatically. Conservative allowlist, fail-open on anything unrecognized, and it stays silent when one of your Bash ask/deny rules could match or the session is in plan mode — savings stop depending on the model remembering a skill.</p>
     </div>
     <div class="gcard anim" style="--i:16">
       <span class="idx">07</span>
@@ -650,15 +591,9 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
     </div>
     <div class="gcard anim" style="--i:17">
       <span class="idx">08</span>
-      <span class="chip chip--gold">Speed, disclosed</span>
-      <h3><code>--fast</code> mode</h3>
-      <p>Opt-in acceleration: pytest gains <code>-n auto</code> via pytest-xdist, disclosed right in the report. Strictly off by default — parallel execution is not "same behavior", so cartoon never enables it on its own.</p>
-    </div>
-    <div class="gcard anim" style="--i:18">
-      <span class="idx">09</span>
       <span class="chip chip--slate">0.6</span>
       <h3>Doctor, ceilings, pipes</h3>
-      <p><code>cartoon doctor</code> reports hook status per agent surface, config parse status, and every allowlisted tool that still has no adapter. <code>--max-tokens N</code> is a hard ceiling — head and tail kept, the middle replaced by one disclosed <code>logs grep</code> marker. <code>--junit &lt;path&gt;</code> renders any runner's JUnit XML as a test report. And <code>cartoon -c 'pytest | tail -5'</code> runs the adapter and drops the filter, disclosed as <code>pipe_filter_dropped</code>.</p>
+      <p><code>cartoon doctor</code> reports hook status, config parse status, and every allowlisted tool that still has no adapter. <code>--max-tokens N</code> is a hard ceiling — head and tail kept, the middle replaced by one disclosed <code>logs grep</code> marker. <code>--junit &lt;path&gt;</code> renders any runner's JUnit XML as a test report. And <code>cartoon -c 'pytest | tail -5'</code> runs the adapter and drops the filter, disclosed as <code>pipe_filter_dropped</code>.</p>
     </div>
   </div>
 
