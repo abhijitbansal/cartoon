@@ -292,7 +292,7 @@ pub fn shell_argv_with_filter(s: &str) -> (Vec<String>, Option<String>) {
 
 /// Split `s` at its one unquoted `|` (not `||`, not `|&`). None when there is
 /// no such pipe or more than one.
-fn split_single_pipe(s: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_single_pipe(s: &str) -> Option<(&str, &str)> {
     let (mut in_single, mut in_double, mut escaped) = (false, false, false);
     let mut found: Option<usize> = None;
     let bytes = s.as_bytes();

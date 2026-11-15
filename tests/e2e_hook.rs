@@ -218,16 +218,13 @@ fn rewrite_never_approves_side_effects_or_watch_modes() {
 fn rewrite_still_approves_the_dev_loop() {
     let tmp = tempfile::tempdir().unwrap();
     let inside = tmp.path().join("tests/test_a.py");
-    let mut cmds = vec![
+    // An absolute path under the event's cwd is in-project.
+    let cmds = [
         "pytest -q".to_string(),
         "pytest -k 'not slow'".to_string(),
         "cargo build --release && cargo test".to_string(),
+        format!("pytest {}", inside.display()),
     ];
-    // An absolute path under the event's cwd is in-project. (Skipped if the
-    // temp dir's own path trips the already-wrapped `cartoon` substring check.)
-    if !inside.display().to_string().contains("cartoon") {
-        cmds.push(format!("pytest {}", inside.display()));
-    }
     for cmd in cmds {
         let out = rewrite(tmp.path(), &cmd);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -426,4 +423,75 @@ fn status_and_doctor_flag_a_pre_0_8_entry_as_stale() {
     let status = run_in(&home, &proj, &["hook", "status"]);
     assert!(status.contains(": installed"), "{status}");
     assert!(!status.contains("stale"), "{status}");
+}
+
+/// The rewritten command the hook approved, or None when it emitted nothing
+/// or something other than `allow`.
+fn approved(out: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(out).ok()?;
+    let hso = &v["hookSpecificOutput"];
+    (hso["permissionDecision"] == "allow")
+        .then(|| hso["updatedInput"]["command"].as_str().map(String::from))?
+}
+
+#[test]
+fn rewrite_covers_the_agent_shapes_around_xcodebuild() {
+    let (_tmp, home, proj) = home_and_project();
+    fs::create_dir(proj.join("App")).unwrap();
+    for (cmd, want) in [
+        (
+            "swift build 2>&1",
+            "cartoon --merge-streams -c 'swift build'",
+        ),
+        (
+            "xcodebuild test -scheme App 2>&1 | tail -40",
+            "cartoon --merge-streams -c 'xcodebuild test -scheme App | tail -40'",
+        ),
+        (
+            "cd App && xcodebuild test -scheme App",
+            "cd App && cartoon --merge-streams -c 'xcodebuild test -scheme App'",
+        ),
+    ] {
+        let out = rewrite_event(cartoon_with_home(&home), &proj, &bash_event(&proj, cmd));
+        assert_eq!(approved(&out).as_deref(), Some(want), "{cmd}: {out}");
+    }
+}
+
+#[test]
+fn rewrite_refuses_unsafe_pipes_and_cds() {
+    let (_tmp, home, proj) = home_and_project();
+    fs::create_dir(proj.join("App")).unwrap();
+    for cmd in [
+        "pytest | sh",
+        "pytest | tail -f",
+        "make | tail -5",
+        "cd .. && pytest",
+        "cd nope && pytest",
+        "pytest > out.txt 2>&1",
+    ] {
+        let out = rewrite_event(cartoon_with_home(&home), &proj, &bash_event(&proj, cmd));
+        assert_eq!(out, "", "{cmd}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn rewrite_refuses_cd_into_a_symlink_leaving_the_project() {
+    let (tmp, home, proj) = home_and_project();
+    let outside = tmp.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, proj.join("App")).unwrap();
+    let event = bash_event(&proj, "cd App && pytest");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
+
+#[test]
+fn exact_deny_rule_still_stops_the_2to1_form() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(swift build)"]}}"#,
+    );
+    let event = bash_event(&proj, "swift build 2>&1");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
 }

