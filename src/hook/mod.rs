@@ -39,14 +39,29 @@
 //! gets a rewrite either. Rules passed with `--settings` or delivered as
 //! remote managed policy are not visible to the hook.
 //!
-//! Allowlist decisions (2026-09-05, tightened 2026-10-02):
+//! Allowlist decisions (2026-09-05, tightened 2026-10-02 and 2026-11-15):
 //!   - `make` and `pre-commit` execute project-defined recipes yet stay
 //!     allowlisted: they are the canonical dev-loop entry points and the
-//!     agent already has write access to the repo. Install with `--deny` to
-//!     turn every rewrite into a suggestion instead. `pre-commit` is limited
-//!     to `run` (not `install`, `autoupdate`, `try-repo <url>`, ...).
+//!     agent already has write access to the repo. Bare `make` (the default
+//!     goal) stays allowed; a named target must look like build/test/check
+//!     (`all`, `test`, `lint`, `test-unit`, ...) and name no side effect.
+//!     Install with `--deny` to turn every rewrite into a suggestion
+//!     instead. `pre-commit` is limited to `run` (not `install`,
+//!     `autoupdate`, `try-repo <url>`, ...).
 //!   - Principle: an auto-approved command may run *project* code, never code
-//!     from outside the project. Every rule below serves that.
+//!     from outside the project, and must have no outbound side effect
+//!     (publish, deploy, install, push, sign) and must return (no watch
+//!     mode). Every rule below serves that.
+//!   - Targets and modes (`policy::side_effect_free_target`, `watch_mode`):
+//!     every gradle task (judged by the last `:` segment, so `:app:publish`
+//!     is a publish) must be a build/test/check task with no side-effect
+//!     word (`publish`, `deploy`, `upload`, `install`, `release`, `push`,
+//!     `connected`, `docker`, `sign`, ...); every mvn goal must be a phase
+//!     from `clean` to `verify`; `npm ci` needs `--ignore-scripts` (else
+//!     every dependency's install script runs). Watch modes are refused:
+//!     `jest --watch[All]`, `vitest --watch|-w|watch|dev`, `tsc --watch|-w`,
+//!     `npm|pnpm|yarn|bun test -- --watch[All]`, `pytest -f|--looponfail`,
+//!     `gradle --continuous|-t`, `cargo doc --open`.
 //!   - Lexing fails closed (`lex`). Outside quotes only `[A-Za-z0-9]`, space,
 //!     `_-./=:@,+%` and the `&&` connector are accepted; `;`, `|`, `||`, a
 //!     lone `&`, `$`, backtick, backslash, `<`/`>`, globs, `~`, `#`, `!`,
@@ -66,8 +81,9 @@
 //!     end eligibility in every spelling (`--x=v`, `--x v`, `-xv`, bundled
 //!     `-qx v`, argparse/getopt abbreviations, camel/kebab case). Where a
 //!     full allowlist is practical it is one (`npm ci` flags, `uv` flags,
-//!     `pre-commit run`, `cargo nextest run|list`, mvn positional goals
-//!     without `:` so no ad-hoc plugin download); elsewhere (pytest has
+//!     `pre-commit run`, `cargo nextest run|list`, mvn lifecycle phases and
+//!     never a goal with `:`, so no ad-hoc plugin download, gradle tasks,
+//!     make targets); elsewhere (pytest has
 //!     hundreds of flags) it is a deny-list of the code-loading ones. A few
 //!     values are exempt because they are inert and common: `pytest -p no:X`,
 //!     JS built-in reporter/pool names, a short list of mvn `-D` properties
@@ -98,7 +114,7 @@ mod permissions;
 mod policy;
 
 use permissions::UserRules;
-use policy::{args_ok, tool_args_ok};
+use policy::{args_ok, side_effect_free_target, tool_args_ok};
 
 pub use install::status_rows;
 
@@ -737,6 +753,12 @@ fn is_noisy(base: &str, rest: &[&str]) -> bool {
     if matches!(base, "npm" | "pnpm" | "yarn") && next == Some("run") {
         return rest.get(1) == Some(&"test");
     }
+    // Every gradle task and mvn phase is judged in `policy`; the first word
+    // must already be one (a leading flag still means no wrap). `SUBCOMMAND`
+    // keeps representative names for `doctor`.
+    if matches!(base, "gradle" | "gradlew" | "mvn" | "mvnw") {
+        return next.is_some_and(|n| !n.starts_with('-') && side_effect_free_target(base, n));
+    }
     if let Some((_, subs)) = SUBCOMMAND.iter().find(|(c, _)| *c == base) {
         return next.is_some_and(|n| subs.contains(&n));
     }
@@ -1224,9 +1246,12 @@ mod tests {
     #[test]
     fn make_and_pre_commit_stay_allowlisted_by_decision() {
         // Deliberate: both are the canonical dev-loop entry points and the
-        // agent already holds write access to the repo. Users who disagree
-        // install with --deny. See the module doc.
+        // agent already holds write access to the repo. Bare `make` runs the
+        // default goal; named targets must look like build/test/check
+        // (`policy::side_effect_free_target`). Users who disagree install
+        // with --deny. See the module doc.
         assert!(wrap_command("make -j4").is_some());
+        assert!(wrap_command("make deploy").is_none());
         assert!(wrap_command("pre-commit run --all-files").is_some());
     }
 
@@ -1581,8 +1606,8 @@ mod tests {
             "npx vitest run -t foo",
             "npm test",
             "npm test -- -u",
-            "npm ci",
-            "npm ci --no-audit --no-fund",
+            "npm ci --ignore-scripts",
+            "npm ci --ignore-scripts --no-audit --no-fund",
             "pnpm test",
             "yarn test --watchAll=false",
             "bun test",

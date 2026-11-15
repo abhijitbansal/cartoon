@@ -395,6 +395,101 @@ const XCODE_SAFE_SETTINGS: &[&str] = &[
     "GCC_TREAT_WARNINGS_AS_ERRORS",
 ];
 
+/// Gradle tasks (the last `:`-separated segment) that only compile, test or
+/// check. Any task starting with `test` or `compile`, or ending with `Test`,
+/// qualifies too. Gradle also accepts camel-case abbreviations (`tDUT`);
+/// those match none of this and are not wrapped.
+const GRADLE_TASKS: &[&str] = &[
+    "test",
+    "build",
+    "check",
+    "assemble",
+    "clean",
+    "lint",
+    "compileJava",
+    "compileKotlin",
+    "compileTestJava",
+    "compileTestKotlin",
+    "classes",
+    "testClasses",
+];
+
+/// Words that name an outbound side effect (publishing, deploying,
+/// installing onto a device, pushing an image, signing). A gradle task or
+/// make target containing one, in any case, is never wrapped.
+const SIDE_EFFECT_WORDS: &[&str] = &[
+    "publish",
+    "deploy",
+    "upload",
+    "install",
+    "release",
+    "push",
+    "connected",
+    "docker",
+    "sign",
+    "bintray",
+    "sonatype",
+    "notarize",
+];
+
+/// gradle options whose next token is a value (a test filter, an excluded
+/// task, a console mode), not a task to run.
+const GRADLE_VALUE_FLAGS: &[&str] = &[
+    "--tests",
+    "-x",
+    "--exclude-task",
+    "--console",
+    "--warning-mode",
+    "--max-workers",
+];
+
+/// Maven lifecycle phases up to `verify`. `install` and `deploy` come after
+/// it and copy artifacts out of the project; `site` is not a test loop.
+const MVN_PHASES: &[&str] = &[
+    "clean",
+    "validate",
+    "compile",
+    "test-compile",
+    "test",
+    "package",
+    "verify",
+];
+
+/// mvn options whose next token is a value (a module list, a thread count),
+/// not a phase. `-P <profile>` is deliberately absent: a profile can bind
+/// extra plugins to a phase, so its value is judged like a phase and fails.
+const MVN_VALUE_FLAGS: &[&str] = &[
+    "-pl",
+    "--projects",
+    "-rf",
+    "--resume-from",
+    "-T",
+    "--threads",
+];
+
+/// make targets that build, test or check. `test-*`/`test_*` (and the same
+/// for `check`, `lint`, `build`) qualify too. Bare `make` runs the default
+/// goal and stays allowed (see the module doc).
+const MAKE_TARGETS: &[&str] = &[
+    "all",
+    "build",
+    "test",
+    "tests",
+    "check",
+    "lint",
+    "ci",
+    "unit",
+    "typecheck",
+    "verify",
+    "compile",
+    "debug",
+];
+const MAKE_TARGET_PREFIXES: &[&str] = &["test", "check", "lint", "build"];
+
+/// make options that may take a number as the next token (`-j 4`,
+/// `-l 2.5`). Any other bare word after a flag is a target.
+const MAKE_NUMERIC_FLAGS: &[&str] = &["-j", "--jobs", "-l", "--load-average", "--max-load"];
+
 /// Resolve the tool a noisy command actually runs (`npx jest` → jest,
 /// `python -m pytest` → pytest, uv's `-m pytest` → pytest) and check its
 /// arguments against `tool_args_ok`.
@@ -434,7 +529,12 @@ pub(super) fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
         // `install`, `autoupdate`, `try-repo <url>`, `gc`, ... are not a
         // dev-loop run (try-repo runs hooks from an arbitrary repo).
         "pre-commit" => first_positional().is_none_or(|p| p == "run"),
-        "npm" if args.first() == Some(&"ci") => args[1..].iter().all(|a| NPM_CI_FLAGS.contains(a)),
+        // Without `--ignore-scripts`, `npm ci` runs every dependency's
+        // install scripts: third-party code from the registry.
+        "npm" if args.first() == Some(&"ci") => {
+            args[1..].contains(&"--ignore-scripts")
+                && args[1..].iter().all(|a| NPM_CI_FLAGS.contains(a))
+        }
         // A goal with `:` (`org.x:plugin:1.0:goal`) downloads and runs an
         // arbitrary plugin; lifecycle phases have none.
         "mvn" | "mvnw" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
@@ -443,10 +543,120 @@ pub(super) fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
         _ => true,
     };
     special
+        && targets_ok(tool, args)
+        && !watch_mode(tool, args)
         && ARG_POLICIES
             .iter()
             .filter(|p| p.tools.contains(&tool))
             .all(|p| p.allows(args))
+}
+
+/// Every gradle task, mvn phase or make target in `args` passes
+/// `side_effect_free_target`. The value of a listed option (`--tests X`,
+/// `-pl core`, `make -j 4`) is not a target; any other non-flag token is.
+fn targets_ok(tool: &str, args: &[&str]) -> bool {
+    let (value_flags, value_ok): (&[&str], fn(&str) -> bool) = match tool {
+        "gradle" | "gradlew" => (GRADLE_VALUE_FLAGS, |_| true),
+        "mvn" | "mvnw" => (MVN_VALUE_FLAGS, |_| true),
+        "make" => (MAKE_NUMERIC_FLAGS, |v| {
+            v.chars().all(|c| c.is_ascii_digit() || c == '.')
+        }),
+        _ => return true,
+    };
+    let mut rest = args.iter();
+    while let Some(a) = rest.next() {
+        if !a.starts_with('-') {
+            if !side_effect_free_target(tool, a) {
+                return false;
+            }
+            continue;
+        }
+        let takes_value = value_flags.contains(a)
+            && rest
+                .as_slice()
+                .first()
+                .is_some_and(|v| !v.starts_with('-') && value_ok(v));
+        if takes_value {
+            rest.next();
+        }
+    }
+    true
+}
+
+/// True when `target` (a gradle task path, mvn phase or make target) only
+/// builds, tests or checks, with no outbound side effect such as publishing,
+/// deploying, installing or pushing. Other tools have no target concept.
+pub(super) fn side_effect_free_target(tool: &str, target: &str) -> bool {
+    let names_side_effect = |t: &str| {
+        let lower = t.to_ascii_lowercase();
+        SIDE_EFFECT_WORDS.iter().any(|w| lower.contains(w))
+    };
+    match tool {
+        "gradle" | "gradlew" => {
+            // `:app:testDebugUnitTest` is judged by its task, not its module.
+            let task = target.rsplit(':').next().unwrap_or(target);
+            // `ends_with("Test")` also covers `...UnitTest`.
+            let known = GRADLE_TASKS.contains(&task)
+                || task.starts_with("test")
+                || task.starts_with("compile")
+                || task.ends_with("Test");
+            known && !names_side_effect(task)
+        }
+        "mvn" | "mvnw" => MVN_PHASES.contains(&target),
+        "make" => {
+            let known = MAKE_TARGETS.contains(&target)
+                || MAKE_TARGET_PREFIXES.iter().any(|p| {
+                    target
+                        .strip_prefix(p)
+                        .is_some_and(|r| r.starts_with(['-', '_']))
+                });
+            known && !names_side_effect(target)
+        }
+        _ => true,
+    }
+}
+
+/// Watch and interactive modes never return (or open a browser), so they
+/// are not a one-shot dev-loop run.
+fn watch_mode(tool: &str, args: &[&str]) -> bool {
+    let has_long = |names: &[&str]| args.iter().any(|a| long_named(a, names));
+    match tool {
+        // `npm|pnpm|yarn|bun test -- --watch` hands the flag to the runner.
+        "jest" | "npm" | "pnpm" | "yarn" | "bun" => has_long(&["watch", "watchall"]),
+        "vitest" => {
+            has_long(&["watch"]) || args.iter().any(|a| matches!(*a, "-w" | "watch" | "dev"))
+        }
+        "tsc" => has_long(&["watch"]) || args.contains(&"-w"),
+        "pytest" => has_long(&["looponfail"]) || args.iter().any(|a| pytest_loop_on_fail(a)),
+        "gradle" | "gradlew" => has_long(&["continuous"]) || args.contains(&"-t"),
+        "cargo" => args.first() == Some(&"doc") && args.contains(&"--open"),
+        _ => false,
+    }
+}
+
+/// `a` is `--name` or `--name=v` with a `norm`ed name in `names`, unless the
+/// value is `false` (`--watchAll=false` turns watching off).
+fn long_named(a: &str, names: &[&str]) -> bool {
+    let Some(body) = a.strip_prefix("--") else {
+        return false;
+    };
+    let (name, value) = match body.split_once('=') {
+        Some((n, v)) => (n, Some(v)),
+        None => (body, None),
+    };
+    names.contains(&norm(name).as_str()) && value != Some("false")
+}
+
+/// pytest-xdist's `-f` (loop on failure), alone or bundled after boolean
+/// short flags (`-xf`, `-vvf`). `-rf...` is not it: `-r` takes the rest of
+/// the cluster as report characters.
+fn pytest_loop_on_fail(a: &str) -> bool {
+    a.strip_prefix('-')
+        .filter(|b| !b.starts_with('-'))
+        .is_some_and(|b| {
+            b.trim_start_matches(['x', 'q', 'v', 's', 'l'])
+                .starts_with('f')
+        })
 }
 
 impl ArgPolicy {
@@ -563,4 +773,212 @@ fn xcode_setting_ok(a: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
     !is_setting || XCODE_SAFE_SETTINGS.contains(&name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::wrap_command_in;
+    use std::path::Path;
+
+    fn wrap(cmd: &str) -> Option<String> {
+        let root = Path::new("/proj");
+        wrap_command_in(cmd, &[], Some(root)).map(|(w, _)| w)
+    }
+
+    #[test]
+    fn gradle_publish_not_wrapped() {
+        for c in [
+            "gradle build publish",
+            "gradle test publishToMavenCentral",
+            "./gradlew assembleRelease uploadArchives",
+            "gradle test --continuous",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_test_tasks_wrapped() {
+        for c in [
+            "gradle test",
+            "gradle clean build",
+            "./gradlew testDebugUnitTest",
+            "gradle :app:test check",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_module_paths_judged_by_last_segment() {
+        assert!(wrap("gradle :lib:testDebugUnitTest").is_some());
+        assert!(wrap("gradle :app:publish").is_none());
+        assert!(wrap("gradle connectedAndroidTest").is_none());
+    }
+
+    #[test]
+    fn gradle_continuous_and_side_effect_words_rejected() {
+        for c in [
+            "gradle test -t",
+            "gradle test --continuous",
+            "gradle installDebug",
+            "gradle testReleaseSigning",
+            "gradle dockerBuildImage",
+            "gradle assembleDebug",
+            "gradle compileJava jibDockerBuild",
+            "gradle test --tests Foo publish",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_flag_values_are_not_tasks() {
+        for c in [
+            "./gradlew test --tests 'com.x.FooTest'",
+            "./gradlew test --tests '*Foo*'",
+            "gradle test -x lint",
+            "gradle test --console plain --warning-mode all",
+            "gradle test --continue",
+            "./gradlew build --offline",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn mvn_deploy_install_not_wrapped() {
+        for c in ["mvn test deploy", "mvn package install", "mvnw verify site"] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        assert!(wrap("mvn clean verify").is_some());
+    }
+
+    #[test]
+    fn mvn_lifecycle_phases_and_module_selection_wrapped() {
+        for c in [
+            "mvn validate",
+            "mvn clean test-compile",
+            "mvn test -pl core -am",
+            "mvn verify -T 4",
+            "mvn package -B -ntp -fae",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in ["mvn test -P release", "mvn site", "mvn release:prepare"] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn make_side_effect_targets_not_wrapped() {
+        for c in [
+            "make deploy",
+            "make release",
+            "make install",
+            "make test && make deploy",
+            "make push-image",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "make",
+            "make test",
+            "make -j4 build",
+            "make lint check",
+            "make test-unit",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn make_flags_unchanged_and_prefixed_targets_still_screened() {
+        for c in [
+            "make -j 4 test",
+            "make -k -j8 check",
+            "make -s -n build",
+            "make --jobs 2 ci",
+            "make check_all typecheck",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in [
+            "make build-and-deploy",
+            "make test-publish",
+            "make testing",
+            "make docs",
+            "make -j deploy",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn side_effect_segment_poisons_the_whole_command() {
+        assert!(wrap("pytest && make deploy").is_none());
+        assert!(wrap("pytest tests && gradle publish").is_none());
+    }
+
+    #[test]
+    fn npm_ci_needs_ignore_scripts() {
+        assert!(wrap("npm ci").is_none());
+        assert!(wrap("npm ci --ignore-scripts").is_some());
+        assert!(wrap("npm ci --no-audit --ignore-scripts --no-fund").is_some());
+        assert!(wrap("npm ci --no-audit --no-fund").is_none());
+    }
+
+    #[test]
+    fn watch_modes_not_wrapped() {
+        for c in [
+            "jest --watchAll",
+            "jest --watch",
+            "vitest --watch",
+            "vitest watch",
+            "tsc -w",
+            "npm test -- --watch",
+            "pytest -f",
+            "cargo doc --open",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn watch_mode_spellings_not_wrapped() {
+        for c in [
+            "npx jest --watch-all",
+            "vitest -w",
+            "vitest dev",
+            "npx vitest --watch=true",
+            "tsc --watch",
+            "tsc -b --watch",
+            "pnpm test -- --watchAll",
+            "yarn test --watch",
+            "npm run test -- --watch",
+            "bun test --watch",
+            "pytest --looponfail",
+            "pytest -xf",
+            "python -m pytest -vf",
+            "cargo doc --no-deps --open",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn one_shot_runs_with_watch_like_flags_still_wrapped() {
+        for c in [
+            "yarn test --watchAll=false",
+            "jest --watchman",
+            "jest -w 4",
+            "pytest -rfE",
+            "pytest --lf",
+            "vitest run",
+            "tsc --noEmit",
+            "cargo doc --no-deps",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
 }

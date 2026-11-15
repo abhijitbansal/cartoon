@@ -79,9 +79,10 @@ fn deny_rule_in_project_settings_emits_nothing() {
     let (_tmp, home, proj) = home_and_project();
     write_settings(
         &proj.join(".claude/settings.json"),
-        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+        r#"{"permissions":{"deny":["Bash(make check:*)"]}}"#,
     );
-    let event = bash_event(&proj, "make test && make deploy");
+    // `make check` alone would be rewritten; only the rule stops it.
+    let event = bash_event(&proj, "make test && make check");
     assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
 }
 
@@ -90,9 +91,9 @@ fn quoted_command_under_deny_rule_emits_nothing() {
     let (_tmp, home, proj) = home_and_project();
     write_settings(
         &proj.join(".claude/settings.json"),
-        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+        r#"{"permissions":{"deny":["Bash(make check:*)"]}}"#,
     );
-    for cmd in [r#"make "deploy""#, "make 'deploy'", "make dep'loy'"] {
+    for cmd in [r#"make "check""#, "make 'check'", "make ch'eck'"] {
         let event = bash_event(&proj, cmd);
         assert_eq!(
             rewrite_event(cartoon_with_home(&home), &proj, &event),
@@ -135,11 +136,11 @@ fn project_dir_rules_apply_when_shell_cwd_is_elsewhere() {
     fs::create_dir_all(&other).unwrap();
     write_settings(
         &proj.join(".claude/settings.json"),
-        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+        r#"{"permissions":{"deny":["Bash(make check:*)"]}}"#,
     );
     let mut cmd = cartoon_with_home(&home);
     cmd.env("CLAUDE_PROJECT_DIR", &proj);
-    let event = bash_event(&other, "make deploy");
+    let event = bash_event(&other, "make check");
     assert_eq!(rewrite_event(cmd, &other, &event), "");
 }
 
@@ -185,6 +186,31 @@ fn rewrite_never_approves_code_loading_flags() {
         "pytest ../outside",
     ] {
         assert_eq!(rewrite(tmp.path(), cmd), "", "{cmd} must not be rewritten");
+    }
+}
+
+#[test]
+fn rewrite_never_approves_side_effects_or_watch_modes() {
+    let tmp = tempfile::tempdir().unwrap();
+    for cmd in [
+        "mvn test deploy",
+        "gradle build publish",
+        "./gradlew :app:publish",
+        "make deploy",
+        "pytest && make deploy",
+        "npm ci",
+        "jest --watchAll",
+        "cargo doc --open",
+    ] {
+        assert_eq!(rewrite(tmp.path(), cmd), "", "{cmd} must not be rewritten");
+    }
+    for cmd in [
+        "npm ci --ignore-scripts",
+        "gradle :lib:testDebugUnitTest",
+        "make test",
+    ] {
+        let out = rewrite(tmp.path(), cmd);
+        assert!(out.contains("updatedInput"), "{cmd}: {out}");
     }
 }
 
