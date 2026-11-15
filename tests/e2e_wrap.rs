@@ -380,3 +380,27 @@ printf 'a\nb\nc\n'"#;
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "c\n");
 }
+
+/// Final review I15: `cartoon -c '<adapter cmd> 2>&1 | tail -N'` ran through
+/// `sh` and returned tail's exit code 0 on a failing run.
+#[cfg(unix)]
+#[test]
+fn merged_stderr_before_a_dropped_tail_keeps_the_tool_exit_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = stub_tool(
+        tmp.path(),
+        "pytest",
+        "i=1; while [ $i -le 50 ]; do echo \"out $i\"; i=$((i+1)); done; echo 'boom on stderr' >&2; exit 1",
+    );
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest 2>&1 | tail -3"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("boom on stderr"), "merged: {stdout}");
+    assert!(!stdout.contains("out 10\n"), "{stdout}");
+}

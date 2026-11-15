@@ -278,19 +278,42 @@ pub const DISPLAY_FILTERS: &[&str] = &[
 /// or `| tail -2 && echo X` would silently lose the redirect / the trailing
 /// command if the filter were dropped, so those keep `sh -c`.
 pub fn shell_argv_with_filter(s: &str) -> (Vec<String>, Option<String>) {
+    let (argv, filter, _) = split_shell_command(s);
+    (argv, filter)
+}
+
+/// `shell_argv_with_filter`, plus whether the left side ended in one
+/// `2>&1` that was stripped: `<adapter cmd> 2>&1 | tail -N` runs the
+/// adapter directly with merged streams (the caller turns
+/// `--merge-streams` on), so its exit code is the tool's, not tail's.
+pub fn split_shell_command(s: &str) -> (Vec<String>, Option<String>, bool) {
     if let Some((lhs_str, rhs_str)) = split_single_pipe(s) {
+        let (lhs_str, merged) = strip_merge_suffix(lhs_str.trim_end_matches(' '));
         if !needs_shell(lhs_str) && !has_unquoted_operator(rhs_str) {
             if let (Ok(lhs), Ok(rhs)) = (shell_words::split(lhs_str), shell_words::split(rhs_str)) {
                 let filter_ok = rhs
                     .first()
                     .is_some_and(|f| DISPLAY_FILTERS.contains(&f.as_str()));
                 if !lhs.is_empty() && filter_ok && crate::adapters::find_adapter(&lhs).is_some() {
-                    return (lhs, Some(shell_words::join(rhs.iter().map(String::as_str))));
+                    let filter = shell_words::join(rhs.iter().map(String::as_str));
+                    return (lhs, Some(filter), merged);
                 }
             }
         }
     }
-    (shell_argv(s), None)
+    (shell_argv(s), None, false)
+}
+
+/// The stderr merge agents put before a pipe.
+const MERGE_STDERR: &str = "2>&1";
+
+/// Drop one trailing ` 2>&1` word, and say whether one was dropped.
+/// Anything else, including a second one, stays (and still needs `sh`).
+pub(crate) fn strip_merge_suffix(s: &str) -> (&str, bool) {
+    match s.strip_suffix(MERGE_STDERR) {
+        Some(head) if head.ends_with(' ') => (head.trim_end_matches(' '), true),
+        _ => (s, false),
+    }
 }
 
 /// Split `s` at its one unquoted `|` (not `||`, not `|&`). None when there is
@@ -401,7 +424,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         if !cli.command.is_empty() {
             anyhow::bail!("-c/--shell takes the whole command as one string; drop the extra args");
         }
-        let (argv, dropped_filter) = shell_argv_with_filter(&s);
+        let (argv, dropped_filter, merged) = split_shell_command(&s);
         if argv.is_empty() {
             anyhow::bail!("-c/--shell got an empty command string");
         }
@@ -412,7 +435,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             junit: cli.junit,
             max_tokens: cli.max_tokens,
             dropped_filter,
-            merge_streams: cli.merge_streams,
+            merge_streams: cli.merge_streams || merged,
         });
     }
     if cli.command.is_empty() {
@@ -748,6 +771,27 @@ mod tests {
         let (argv, dropped) = shell_argv_with_filter("npx jest src/ | head -20");
         assert_eq!(argv, sv(&["npx", "jest", "src/"]));
         assert_eq!(dropped.as_deref(), Some("head -20"));
+    }
+
+    #[test]
+    fn merged_stderr_before_a_dropped_filter_turns_merge_streams_on() {
+        // Final review I15: `2>&1` made the left side need `sh`, so the
+        // pipeline's exit code (tail's 0) replaced the tool's.
+        let (argv, dropped, merged) =
+            split_shell_command("xcodebuild test -scheme A 2>&1 | tail -40");
+        assert_eq!(argv, sv(&["xcodebuild", "test", "-scheme", "A"]));
+        assert_eq!(dropped.as_deref(), Some("tail -40"));
+        assert!(merged);
+        let (argv, dropped, merged) = split_shell_command("pytest -q | tail -5");
+        assert_eq!(
+            (argv, dropped.as_deref(), merged),
+            (sv(&["pytest", "-q"]), Some("tail -5"), false)
+        );
+        // Only one trailing `2>&1`, and only before a dropped filter.
+        let (argv, dropped, _) = split_shell_command("pytest 2>&1 2>&1 | tail -5");
+        assert_eq!((argv[0].as_str(), dropped), ("sh", None));
+        let (argv, _, merged) = split_shell_command("pytest 2>&1");
+        assert_eq!((argv[0].as_str(), merged), ("sh", false));
     }
 
     #[test]

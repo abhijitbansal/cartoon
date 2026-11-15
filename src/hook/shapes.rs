@@ -84,10 +84,6 @@ const BEAUTIFY_FLAGS: &[&str] = &[
     "--no-color",
 ];
 
-/// The stderr merge the hook strips. It must be the last whitespace-
-/// delimited word of the body.
-const MERGE_STDERR: &str = "2>&1";
-
 /// Split `cmd` into a `Shape`, or None when it carries a `cd`, pipe or
 /// trailing filter that is not exactly an accepted form. A command with no
 /// such wrapper comes back as its trimmed self in `body`.
@@ -150,13 +146,10 @@ fn spaces_trimmed(s: &str) -> &str {
     s.trim_matches(' ')
 }
 
-/// Drop one trailing ` 2>&1`. Anything else, including a second one, stays
-/// for `lex` to refuse.
+/// Drop one trailing ` 2>&1` (the last whitespace-delimited word of the
+/// body). Anything else, including a second one, stays for `lex` to refuse.
 fn strip_merge(s: &str) -> &str {
-    match s.strip_suffix(MERGE_STDERR) {
-        Some(head) if head.ends_with(' ') => head.trim_end_matches(' '),
-        _ => s,
-    }
+    crate::cli::strip_merge_suffix(s).0
 }
 
 /// The filter after the pipe, normalised to single spaces, when it is an
