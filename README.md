@@ -287,12 +287,13 @@ cartoon doctor                 # health report: hook, config, allowlist gaps, le
 ### Pipes inside `-c`
 
 Agents write `pytest -v | tail -5` because they want less output — which is
-cartoon's whole job. When the string is `<adapter-detected command> | <pure
-output filter>` (`head`, `tail`, `grep`, `wc`, `cat`, `less`, `more`),
-cartoon runs the adapter and drops the filter, disclosing it as
-`pipe_filter_dropped: "tail -5"` in the report. Anything else (`tee`,
-`xargs`, `sort`, redirections, two pipes, a non-adapter command) keeps the
-plain `sh -c` behavior. The hook still never auto-approves a piped compound;
+cartoon's whole job. When the string is `<adapter-detected command> |
+<display filter>` (`head`, `tail`, `cat`, `less`, `more`, `xcbeautify`,
+`xcpretty`), cartoon runs the adapter and drops the filter, disclosing it as
+`pipe_filter_dropped: "tail -5"` in the report. Anything else (`grep`, `wc`,
+`tee`, `xargs`, `sort`, redirections, two pipes, a non-adapter command)
+keeps the plain `sh -c` behavior, so `pytest | grep -c PASSED` returns the
+real count. The hook still never auto-approves a piped compound;
 this applies only when `cartoon -c` is invoked explicitly.
 
 ### `--junit`: any runner that writes JUnit XML

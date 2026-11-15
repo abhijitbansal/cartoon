@@ -246,3 +246,12 @@ fn doctor_reports_every_section_and_exits_zero() {
         .stdout(contains("ledger:"))
         .stdout(contains("hook"));
 }
+
+#[test]
+fn shell_grep_count_pipe_runs_natively() {
+    cartoon()
+        .args(["-c", r#"printf "a\nb\n" | grep -c a"#])
+        .assert()
+        .success()
+        .stdout(contains("1"));
+}

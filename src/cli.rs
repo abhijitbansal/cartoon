@@ -251,12 +251,22 @@ pub fn shell_argv(s: &str) -> Vec<String> {
     }
 }
 
-/// Output filters whose only job is to shrink text — which the adapter
-/// report already does better. `tee`, `xargs`, `sort` and friends change or
-/// redirect the data and keep today's `sh -c` behavior.
-const PURE_FILTERS: &[&str] = &["head", "tail", "grep", "wc", "cat", "less", "more"];
+/// Display-only filters: they only trim or prettify text the adapter report
+/// already shrinks, so `<adapter cmd> | <filter>` drops the filter. `grep`
+/// and `wc` are deliberately absent: they compute an answer (a match count,
+/// a line count) the caller wants, so those pipes run natively via `sh -c`,
+/// as do `tee`, `xargs`, `sort` and friends.
+pub const DISPLAY_FILTERS: &[&str] = &[
+    "head",
+    "tail",
+    "cat",
+    "less",
+    "more",
+    "xcbeautify",
+    "xcpretty",
+];
 
-/// `<adapter cmd> | <pure output filter>` → run the adapter and drop the
+/// `<adapter cmd> | <display filter>` → run the adapter and drop the
 /// filter (disclosed in the report as `pipe_filter_dropped`). Anything else
 /// goes through `shell_argv` unchanged. Closes the `cartoon -c 'pytest | tail'`
 /// gap (issue #12).
@@ -270,7 +280,7 @@ pub fn shell_argv_with_filter(s: &str) -> (Vec<String>, Option<String>) {
             if let (Ok(lhs), Ok(rhs)) = (shell_words::split(lhs_str), shell_words::split(rhs_str)) {
                 let filter_ok = rhs
                     .first()
-                    .is_some_and(|f| PURE_FILTERS.contains(&f.as_str()));
+                    .is_some_and(|f| DISPLAY_FILTERS.contains(&f.as_str()));
                 if !lhs.is_empty() && filter_ok && crate::adapters::find_adapter(&lhs).is_some() {
                     return (lhs, Some(shell_words::join(rhs.iter().map(String::as_str))));
                 }
@@ -724,9 +734,49 @@ mod tests {
         let (argv, dropped) = shell_argv_with_filter("pytest -v | tail -5");
         assert_eq!(argv, sv(&["pytest", "-v"]));
         assert_eq!(dropped.as_deref(), Some("tail -5"));
-        let (argv, dropped) = shell_argv_with_filter("npx jest src/ | grep -i fail");
+        let (argv, dropped) = shell_argv_with_filter("npx jest src/ | head -20");
         assert_eq!(argv, sv(&["npx", "jest", "src/"]));
-        assert_eq!(dropped.as_deref(), Some("grep -i fail"));
+        assert_eq!(dropped.as_deref(), Some("head -20"));
+    }
+
+    #[test]
+    fn grep_count_runs_natively() {
+        let (argv, dropped) = shell_argv_with_filter("pytest -v | grep -c PASSED");
+        assert_eq!(dropped, None);
+        assert_eq!(argv[0], "sh");
+    }
+
+    #[test]
+    fn grep_and_wc_pipes_run_natively() {
+        assert_eq!(shell_argv_with_filter("pytest | wc -l").1, None);
+        assert_eq!(
+            shell_argv_with_filter("npx jest src/ | grep -i fail").1,
+            None
+        );
+        assert_eq!(
+            &shell_argv_with_filter("pytest | wc -l").0[..2],
+            &sv(&["sh", "-c"])[..]
+        );
+    }
+
+    #[test]
+    fn tail_and_xcbeautify_dropped() {
+        assert_eq!(
+            shell_argv_with_filter("pytest -v | tail -5").1.as_deref(),
+            Some("tail -5")
+        );
+        assert_eq!(
+            shell_argv_with_filter("xcodebuild test -scheme A | xcbeautify")
+                .1
+                .as_deref(),
+            Some("xcbeautify")
+        );
+        assert_eq!(
+            shell_argv_with_filter("xcodebuild test -scheme A | xcpretty")
+                .1
+                .as_deref(),
+            Some("xcpretty")
+        );
     }
 
     #[test]
