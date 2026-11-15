@@ -63,7 +63,7 @@ pub(super) fn normalise(cmd: &str, root: Option<&Path>) -> Option<Shape> {
     let trimmed = cmd.trim();
     let (cd, rest) = peel_cd(trimmed, root)?;
     let (body, filter) = match crate::cli::split_single_pipe(rest) {
-        Some((lhs, rhs)) => (strip_merge(lhs.trim()), Some(display_filter(rhs)?)),
+        Some((lhs, rhs)) => (strip_merge(spaces_trimmed(lhs)), Some(display_filter(rhs)?)),
         // No pipe, or several: `lex` refuses any `|` left in the body.
         None => (strip_merge(rest), None),
     };
@@ -92,7 +92,7 @@ fn peel_cd<'a>(cmd: &'a str, root: Option<&Path>) -> Option<(Option<String>, &'a
         return Some((None, cmd));
     };
     let (dir, rest) = after.split_once("&&")?;
-    let (dir, rest) = (dir.trim(), rest.trim());
+    let (dir, rest) = (spaces_trimmed(dir), spaces_trimmed(rest));
     (!rest.is_empty() && dir_in_project(dir, root?)).then(|| (Some(dir.to_string()), rest))
 }
 
@@ -111,11 +111,18 @@ fn dir_in_project(dir: &str, root: &Path) -> bool {
     target.is_dir() && target.starts_with(&root)
 }
 
+/// Trim plain spaces only. A tab, newline or other Unicode whitespace at a
+/// shape boundary is shell syntax (a newline ends the command), so it must
+/// stay in the body for `lex` to refuse rather than be trimmed away.
+fn spaces_trimmed(s: &str) -> &str {
+    s.trim_matches(' ')
+}
+
 /// Drop one trailing ` 2>&1`. Anything else, including a second one, stays
 /// for `lex` to refuse.
 fn strip_merge(s: &str) -> &str {
     match s.strip_suffix(MERGE_STDERR) {
-        Some(head) if head.ends_with(' ') => head.trim_end(),
+        Some(head) if head.ends_with(' ') => head.trim_end_matches(' '),
         _ => s,
     }
 }

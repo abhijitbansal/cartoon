@@ -478,7 +478,9 @@ pub fn wrap_command_in(
 ) -> Option<(String, bool)> {
     let shape = shapes::normalise(cmd, root)?;
     let segments = lex(&shape.body)?;
-    // A display filter only ever follows one adapter command.
+    // A display filter only ever follows one adapter command. `shapes`
+    // already refuses `a && b | tail` through the CLI-drop check; this keeps
+    // the rule local instead of relying on `cli.rs` internals.
     if shape.filter.is_some() && segments.len() != 1 {
         return None;
     }
@@ -1886,6 +1888,12 @@ mod tests {
             "cargo build && cargo test | tail -5",
             "CI=1 pytest | tail -5",
             "cartoon pytest | tail -5",
+            "pytest\n| tail -5",
+            "pytest |\ntail -5",
+            "pytest\t| tail -5",
+            "pytest\n 2>&1",
+            "pytest\n2>&1 | tail -5",
+            "pytest\n 2>&1 | tail -5",
         ] {
             assert!(wrap(c).is_none(), "{c}");
         }
@@ -1961,6 +1969,11 @@ mod tests {
             "cd App",
             "cd App && rm -rf x",
             "cd App; pytest",
+            "cd \nApp && pytest",
+            "cd App\n&& pytest",
+            "cd App &&\npytest",
+            "cd \tApp && pytest",
+            "cd App\u{a0}&& pytest",
         ] {
             assert!(wrap_in(c, root.path()).is_none(), "{c}");
         }
