@@ -54,6 +54,30 @@ pub fn render(report: &TestReport, trace_lines: usize) -> String {
     crate::toon::encode_with(&report_value(report, trace_lines), &opts)
 }
 
+/// A non-test report (diagnostics, lint counts): cwd-relative paths and the
+/// same one-space indent as `render`.
+pub fn render_value(value: &Value) -> String {
+    let mut v = value.clone();
+    relativize_value(&mut v);
+    let opts = crate::toon::Options {
+        indent_size: REPORT_INDENT,
+        ..Default::default()
+    };
+    crate::toon::encode_with(&v, &opts)
+}
+
+/// Seconds to the millisecond: a float sum such as `6.111999988555908`
+/// costs tokens and says nothing more. Non-finite values (an absurd
+/// timestamp in untrusted runner output) would serialize to null; clamp
+/// them to 0.
+fn round_duration(d: f64) -> f64 {
+    if d.is_finite() {
+        (d * 1000.0).round() / 1000.0
+    } else {
+        0.0
+    }
+}
+
 /// The report as a JSON value, before TOON encoding.
 fn report_value(report: &TestReport, trace_lines: usize) -> Value {
     let rel = |s: &str| relativize(s);
@@ -66,9 +90,7 @@ fn report_value(report: &TestReport, trace_lines: usize) -> Value {
             "passed": report.passed,
             "failed": report.failed,
             "skipped": report.skipped,
-            // Non-finite durations (e.g. an absurd timestamp in untrusted
-            // runner output) would serialize to null/panic; clamp to 0.
-            "duration_s": if report.duration_s.is_finite() { report.duration_s } else { 0.0 },
+            "duration_s": round_duration(report.duration_s),
         }),
     );
     if !report.failures.is_empty() {
@@ -497,6 +519,23 @@ mod tests {
         assert!(out.contains("failed: 2"));
         assert!(out.contains("failures[2]{id,loc,msg}:"));
         assert!(out.contains("tests/test_auth.py::test_expiry"));
+    }
+
+    #[test]
+    fn duration_is_rounded_to_milliseconds() {
+        // Final review M23: `duration_s: 6.111999988555908` in a real report.
+        let mut r = sample();
+        r.duration_s = 6.111999988555908;
+        let out = render(&r, 20);
+        assert!(out.contains("duration_s: 6.112\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn value_reports_use_the_test_report_indent() {
+        let v = json!({"runner": "swift-build", "summary": {"errors": 1, "warnings": 0}});
+        let out = super::super::AdapterReport::Value(v).render(5);
+        assert!(out.contains("\n errors: 1"), "got:\n{out}");
+        assert!(!out.contains("\n  errors"), "got:\n{out}");
     }
 
     #[test]

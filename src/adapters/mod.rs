@@ -76,12 +76,8 @@ impl AdapterReport {
     pub fn render(&self, trace_lines: usize) -> String {
         match self {
             AdapterReport::Tests(r) => report::render(r, trace_lines),
-            AdapterReport::Value(v) => {
-                // Same cwd-relative paths as test reports (report::render).
-                let mut v = v.clone();
-                report::relativize_value(&mut v);
-                crate::toon::encode(&v)
-            }
+            // Same cwd-relative paths and indent as test reports.
+            AdapterReport::Value(v) => report::render_value(v),
         }
     }
 }
