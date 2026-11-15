@@ -91,6 +91,7 @@ fn every_reserved_subcommand_prints_its_own_help_and_exits_0() {
         ("adapters", "cartoon adapters"),
         ("hook", "cartoon hook"),
         ("instructions", "cartoon instructions"),
+        ("setup", "cartoon setup"),
     ] {
         for flag in ["--help", "-h"] {
             let out = cartoon()
@@ -126,6 +127,7 @@ fn top_level_help_lists_every_reserved_subcommand() {
         "hook",
         "instructions",
         "ingest",
+        "setup",
     ] {
         assert!(help.contains(&format!("`{sub}`")), "{sub}:\n{help}");
     }
@@ -343,4 +345,88 @@ fn removed_tag_flag_without_a_value_still_gets_the_hint() {
     let err = text(&o.stderr);
     assert!(err.contains("removed in 0.8.0"), "{err}");
     assert!(err.contains("--compress"), "{err}");
+}
+
+const BLOCK_MARKER: &str = "BEGIN cartoon instructions";
+
+/// `cartoon setup` in a temp HOME and a temp project, so the real
+/// `~/.claude/settings.json` is never touched.
+fn setup_in(home: &std::path::Path, project: &std::path::Path, args: &[&str]) -> Output {
+    cartoon()
+        .env("HOME", home)
+        .current_dir(project)
+        .arg("setup")
+        .args(args)
+        .output()
+        .expect("run cartoon setup")
+}
+
+#[test]
+fn setup_installs_hook_and_block_idempotently() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("CLAUDE.md"), "# My rules\n").unwrap();
+
+    for round in 1..=2 {
+        let out = setup_in(home.path(), project.path(), &[]);
+        let stdout = text(&out.stdout);
+        assert_eq!(out.status.code(), Some(0), "round {round}: {stdout}");
+        // The doctor report is printed last; its first key is the version.
+        assert!(stdout.contains("version:"), "round {round}: {stdout}");
+    }
+
+    let settings = std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap();
+    assert_eq!(settings.matches("cartoon hook rewrite").count(), 1);
+    let doc = std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap();
+    assert_eq!(doc.matches(BLOCK_MARKER).count(), 1);
+    assert!(doc.starts_with("# My rules\n"), "{doc}");
+}
+
+#[test]
+fn setup_no_instructions_leaves_docs_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("CLAUDE.md"), "# My rules\n").unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--no-instructions"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stdout));
+
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap(),
+        "# My rules\n"
+    );
+    assert!(!project.path().join("AGENTS.md").exists());
+    assert!(home.path().join(".claude/settings.json").exists());
+}
+
+#[test]
+fn setup_project_writes_the_hook_into_the_project() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--project"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stdout));
+
+    assert!(project.path().join(".claude/settings.json").exists());
+    assert!(!home.path().join(".claude/settings.json").exists());
+    // No CLAUDE.md here, so the cross-agent AGENTS.md carries the block.
+    let doc = std::fs::read_to_string(project.path().join("AGENTS.md")).unwrap();
+    assert_eq!(doc.matches(BLOCK_MARKER).count(), 1);
+}
+
+#[test]
+fn setup_unknown_flag_errors_and_names_the_accepted_ones() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--bogus"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = text(&out.stderr);
+    assert!(err.contains("--bogus"), "{err}");
+    assert!(
+        err.contains("--project") && err.contains("--no-instructions"),
+        "{err}"
+    );
+    // Nothing was installed before the error.
+    assert!(!home.path().join(".claude").exists());
 }

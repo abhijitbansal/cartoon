@@ -92,6 +92,17 @@ pub(super) fn install(t: Target) -> Result<i32> {
     Ok(code)
 }
 
+/// Install (or refresh) the Claude Code hook entry and nothing else: no
+/// instruction-file offer, no prompt, safe to call unattended. Used by
+/// `cartoon setup`.
+pub fn install_claude_hook(project: bool) -> Result<i32> {
+    install_claude(Target {
+        copilot: false,
+        project,
+        instructions: false,
+    })
+}
+
 pub(super) fn uninstall(t: Target) -> Result<i32> {
     let code = if t.copilot {
         uninstall_copilot(t)?

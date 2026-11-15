@@ -26,36 +26,24 @@ const MARKER_BEGIN: &str =
     "<!-- BEGIN cartoon instructions (managed by `cartoon instructions`; edit outside this block) -->";
 const MARKER_END: &str = "<!-- END cartoon instructions -->";
 
-/// The directive itself. Front-loads the hard rule and the pipe ban, because
-/// the pipe case is the one the hook can't catch. Kept tight — it lives in the
-/// agent's always-on context.
-const BODY: &str = r#"## CLI output: wrap noisy commands in `cartoon` — never pipe them
+/// The directive itself. States what the hook cannot do (rewrite a piped
+/// command), names the recovery commands, and makes no savings claim. Kept
+/// under 1,200 bytes with its markers — it lives in the agent's always-on
+/// context.
+const BODY: &str = r#"## Noisy dev commands: run them bare under `cartoon`
 
-Hard rule, not a suggestion. Before running any test, build, lint, typecheck,
-or JSON-emitting CLI, prefix it with `cartoon`. Wrapping is always safe: exit
-codes are mirrored exactly, parse failures pass the original through, args are
-never reordered, and a net-savings guard means the output never gets larger.
+Run tests, builds, linters and JSON CLIs as `cartoon <cmd>`; the Claude Code
+hook does this for you. Exit codes are mirrored and the raw output is archived.
 
-ALWAYS prefix these (running one bare is a mistake): `pytest`,
-`python -m pytest`, `unittest`, `jest`, `vitest`, `tsc`, `eslint`, `ruff`,
-`mypy`, `make`, `cargo build|test|check|clippy`, `go test|build|vet`,
-`npm test`, `swift test|build`, `xcodebuild test|build`, the same tools run
-through uv (`uv run pytest`, `uvx ruff check`), and any `… --output json` CLI
-(`aws`, `gh`, `kubectl`). Examples: `cartoon pytest -q`,
-`cartoon uv run pytest`, `cartoon npx jest src/`, `cartoon make`.
+Never pipe them into `head`, `tail` or `grep`: the cut is lossy, and the hook
+cannot rewrite a piped command. Run them bare. `2>&1` is fine.
 
-NEVER pipe a noisy command into `head`/`tail`/`grep` to shrink it. A pipe is
-doubly wrong: it keeps an arbitrary slice (a build's real error sits mid-log
-while `tail` shows only `BUILD FAILED`), AND the auto-wrap hook cannot rewrite
-a piped command, so you lose cartoon entirely. Wrap the command bare instead,
-then search the archived raw log: `cartoon logs grep <pattern> --last`.
+Need more than the report shows? Do not rerun. Read the archive:
+- `cartoon logs grep "<pattern>" --last` searches the newest raw output
+- `cartoon last` re-shows the newest report
+- `cartoon diff` compares the last two runs (fixed, still failing, new)
 
-    pytest | tail -20      # WRONG: lossy cut, and the hook can't wrap it
-    cartoon pytest         # RIGHT: signal kept, ~70% fewer tokens
-
-Don't wrap interactive/TTY commands (REPLs, watch modes). If `cartoon` is
-missing: `uv tool install cartoon` (or `pipx install cartoon` /
-`npm i -g cartoon-wrap` / `cargo install cartoon`)."#;
+Skip interactive and watch-mode commands."#;
 
 /// Which instruction file to manage. All are project-scoped: AGENTS.md,
 /// copilot-instructions.md and CLAUDE.md all live in the repo, so unlike the
@@ -353,9 +341,18 @@ mod tests {
         assert!(b.starts_with(MARKER_BEGIN));
         assert!(b.ends_with(MARKER_END));
         // The directive's whole reason for existing: the pipe case.
-        assert!(b.contains("NEVER pipe"));
-        assert!(b.contains("cartoon logs grep <pattern> --last"));
-        assert!(b.contains("cartoon pytest"));
+        assert!(b.contains("Never pipe"));
+        assert!(b.contains("`cartoon logs grep \"<pattern>\" --last`"));
+        assert!(b.contains("`cartoon last`"));
+        assert!(b.contains("`cartoon diff`"));
+        assert!(b.contains("`2>&1` is fine"));
+    }
+
+    #[test]
+    fn instructions_block_has_no_percentages_and_is_small() {
+        let b = block();
+        assert!(!b.contains('%'), "{b}");
+        assert!(b.len() < 1200, "block is {} bytes", b.len());
     }
 
     #[test]

@@ -138,7 +138,7 @@ mod shapes;
 use permissions::UserRules;
 use policy::{args_ok, side_effect_free_target, tool_args_ok};
 
-pub use install::{status_rows, HookRow, HookState};
+pub use install::{install_claude_hook, status_rows, HookRow, HookState};
 
 /// Wrap regardless of arguments.
 pub const ALWAYS: &[&str] = &[

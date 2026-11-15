@@ -40,7 +40,7 @@ progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
 `stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, \
-`instructions`, `ingest`, and `mcp` are reserved words (each takes --help); to wrap a \
+`instructions`, `setup`, `ingest`, and `mcp` are reserved words (each takes --help); to wrap a \
 binary literally named `stats`, use: cartoon env stats. `last` and `diff` are \
 reserved only in the forms above (`cartoon diff a.txt b.txt` wraps diff). A \
 command whose name starts with `-` goes after `--`: cartoon -- --weird-bin"
@@ -102,7 +102,7 @@ pub struct Cli {
 
     /// Command to wrap plus its args (or a reserved subcommand: stats |
     /// adapters | doctor | init | logs | learn | hook | instructions |
-    /// ingest | mcp). Unknown `--flags` before the command are an error, not a
+    /// setup | ingest | mcp). Unknown `--flags` before the command are an error, not a
     /// command name; use `--` to run a binary whose name starts with `-`.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -137,6 +137,9 @@ pub enum Mode {
     Instructions {
         args: Vec<String>,
     },
+    /// `cartoon setup [--project] [--no-instructions]`: hook + instructions
+    /// block + doctor report, in one non-interactive step.
+    Setup(crate::setup::Options),
     /// Run an existing log (file or stdin) through the compression flow.
     Ingest {
         source: String,
@@ -441,6 +444,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "instructions" => Ok(Mode::Instructions {
             args: cli.command[1..].to_vec(),
         }),
+        "setup" => Ok(Mode::Setup(crate::setup::parse_args(&cli.command[1..])?)),
         "mcp" => Ok(Mode::Mcp {
             args: cli.command[1..].to_vec(),
         }),
@@ -554,6 +558,13 @@ fn help_text(sub: &str) -> Option<&'static str> {
             "       cartoon instructions (status | print)\n\n",
             "Write the wrap/never-pipe directive into CLAUDE.md if present, else\n",
             "AGENTS.md (or the file the flag names)."
+        ),
+        "setup" => concat!(
+            "usage: cartoon setup [--project] [--no-instructions]\n\n",
+            "Install the Claude Code hook (user scope, or this project's\n",
+            ".claude/settings.json with --project), write the instructions block\n",
+            "into CLAUDE.md if present, else AGENTS.md (skip with --no-instructions),\n",
+            "then print the doctor report. Idempotent; never prompts."
         ),
         "last" => concat!(
             "usage: cartoon last [--cmd <substring>]\n\n",
@@ -1123,6 +1134,7 @@ mod tests {
             ("logs", "cartoon logs"),
             ("hook", "cartoon hook"),
             ("instructions", "cartoon instructions"),
+            ("setup", "cartoon setup"),
             ("ingest", "ingest (<file> | -)"),
             ("mcp", "cartoon mcp"),
         ] {
@@ -1203,6 +1215,27 @@ mod tests {
     }
 
     #[test]
+    fn setup_parses_its_flags_and_rejects_others() {
+        use crate::setup::Options;
+        assert_eq!(
+            mode(&["cartoon", "setup"]),
+            Mode::Setup(Options {
+                project: false,
+                instructions: true
+            })
+        );
+        assert_eq!(
+            mode(&["cartoon", "setup", "--project", "--no-instructions"]),
+            Mode::Setup(Options {
+                project: true,
+                instructions: false
+            })
+        );
+        let e = parse_mode(Cli::parse_from(["cartoon", "setup", "--bogus"])).unwrap_err();
+        assert!(e.to_string().contains("--no-instructions"), "{e}");
+    }
+
+    #[test]
     fn mcp_subcommand_collects_args() {
         assert_eq!(mode(&["cartoon", "mcp"]), Mode::Mcp { args: vec![] });
     }
@@ -1226,6 +1259,7 @@ mod tests {
             "learn",
             "hook",
             "instructions",
+            "setup",
             "ingest",
             "mcp",
         ] {

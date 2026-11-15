@@ -28,8 +28,8 @@ fn install_creates_agents_md_with_the_directive() {
 
     let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
     assert!(body.contains("BEGIN cartoon instructions"));
-    assert!(body.contains("NEVER pipe"));
-    assert!(body.contains("cartoon logs grep <pattern> --last"));
+    assert!(body.contains("Never pipe"));
+    assert!(body.contains("cartoon logs grep \"<pattern>\" --last"));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn print_emits_the_block_without_writing() {
         .assert()
         .success()
         .stdout(contains("BEGIN cartoon instructions"))
-        .stdout(contains("NEVER pipe"));
+        .stdout(contains("Never pipe"));
     assert!(!tmp.path().join("AGENTS.md").exists());
 }
 
@@ -285,7 +285,7 @@ fn hook_install_instructions_refreshes_a_stale_body() {
         "stale body not removed"
     );
     assert!(
-        body.contains("NEVER pipe"),
+        body.contains("Never pipe"),
         "current directive body not written"
     );
 }
