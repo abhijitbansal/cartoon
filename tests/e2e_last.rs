@@ -158,13 +158,13 @@ fn e2e_last_and_diff_follow_an_edit_run_fix_loop() {
     assert!(new.contains("test_alpha"), "{rev}");
 }
 
-/// A small failing run whose traceback is short: the list-form report
-/// (one hyphenated line per trace line) costs a little more than pytest's own
-/// output, so the net-savings guard emits pytest's output untouched. That is
-/// the intended boundary since traces render one line each: a small failure
-/// may pass through, but it never costs more than the raw run.
+/// A small failing run whose traceback is short sits near the net-savings
+/// boundary: the list-form report (one hyphenated line per trace line) costs
+/// about as much as pytest's own output. Which one the guard emits depends on
+/// the installed pytest's verbosity; either way it never costs more than the
+/// raw run.
 #[test]
-fn small_failure_passes_through_when_the_report_costs_more() {
+fn small_failure_never_costs_more_than_the_raw_run() {
     if !have("pytest") {
         eprintln!("SKIP: pytest not installed");
         return;
@@ -184,9 +184,13 @@ fn small_failure_passes_through_when_the_report_costs_more() {
     let raw = String::from_utf8(raw.stdout).unwrap();
 
     let out = pytest(state.path(), proj.path());
+    // Which side of the boundary this run lands on depends on how verbose
+    // the installed pytest is, so assert the guard's invariant rather than
+    // its choice: the output is either pytest's own or a report, and never
+    // costs more than the raw run.
     assert!(
-        out.contains("short test summary info") && !out.contains("runner: pytest"),
-        "a small failure that the report would not shrink passes through: {out}"
+        out.contains("short test summary info") || out.starts_with("runner: pytest"),
+        "output is either the raw run or a report: {out}"
     );
     let tok = |s: &str| cartoon::stats::estimate_tokens(s, "o200k");
     // Both runs print their own timing, hence the slack of a few tokens.
