@@ -1,5 +1,3 @@
-use clap::Parser;
-
 /// `CARTOON_MAX_TOKENS`, warning (not silently ignoring) a value that is not
 /// a number.
 fn env_max_tokens() -> Option<usize> {
@@ -17,7 +15,7 @@ fn env_max_tokens() -> Option<usize> {
 }
 
 fn main() {
-    let cli = cartoon::cli::Cli::parse();
+    let cli = cartoon::cli::parse_or_exit();
     let code = match cartoon::cli::parse_mode(cli) {
         Ok(cartoon::cli::Mode::Wrap {
             argv,

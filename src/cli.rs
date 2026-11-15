@@ -61,7 +61,15 @@ pub struct Cli {
     pub raw: bool,
 
     /// Removed in 0.8.0 (hidden; parsing it only produces the error).
-    #[arg(long = "tag", value_name = "TAG", hide = true)]
+    /// The value is optional only so a bare `--tag` reaches the removal error
+    /// instead of clap's "a value is required".
+    #[arg(
+        long = "tag",
+        value_name = "TAG",
+        hide = true,
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
     pub tags: Vec<String>,
 
     /// Removed in 0.8.0 (hidden; parsing it only produces the error).
@@ -358,6 +366,20 @@ fn reject_removed_flags(cli: &Cli) -> anyhow::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Parse the process arguments. An unknown option gets clap's error plus the
+/// flags that are accepted (the agent-facing CLI never leaves a caller guessing).
+pub fn parse_or_exit() -> Cli {
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if e.kind() == clap::error::ErrorKind::UnknownArgument => {
+            let _ = e.print();
+            eprintln!("accepted flags: {ACCEPTED_FLAGS}");
+            std::process::exit(e.exit_code());
+        }
+        Err(e) => e.exit(),
+    }
 }
 
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
@@ -1007,6 +1029,14 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn bare_tag_flag_gets_the_removal_error() {
+        let e = parse_mode(Cli::parse_from(["cartoon", "--tag"]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("removed in 0.8.0"), "{e}");
     }
 
     #[test]

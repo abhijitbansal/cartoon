@@ -299,3 +299,20 @@ fn shell_string_pipe_to_tail_still_gets_the_adapter_report() {
     assert!(out.contains("runner: pytest"), "got:\n{out}");
     assert!(out.contains("pipe_filter_dropped: tail -5"), "got:\n{out}");
 }
+
+/// CARTOON_E2E_STRICT turns a missing tool into a panic, except the
+/// Apple-only tools (the strict CI job runs on Linux) and names listed in
+/// CARTOON_E2E_ALLOW_MISSING.
+#[test]
+fn strict_mode_requires_every_tool_but_apple_and_allowed_ones() {
+    use common::strict_requires;
+    assert!(!strict_requires("jest", None, None));
+    assert!(!strict_requires("jest", Some("0"), None));
+    assert!(strict_requires("jest", Some("1"), None));
+    assert!(strict_requires("pytest-xdist", Some("1"), Some("")));
+    for apple in ["xcodebuild", "xcrun", "swift"] {
+        assert!(!strict_requires(apple, Some("1"), None), "{apple}");
+    }
+    assert!(!strict_requires("go", Some("1"), Some("ruff, go")));
+    assert!(strict_requires("gofmt", Some("1"), Some("ruff,go")));
+}

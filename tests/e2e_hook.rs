@@ -382,3 +382,48 @@ fn install_migrates_a_pre_0_8_entry_in_place() {
     let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
     assert!(!cmd.contains("--deny-mode"), "{cmd}");
 }
+
+const PRE_0_8_ENTRY: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_in_terminal","hooks":[{"type":"command","command":"command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0"}]}]}}"#;
+
+fn run_in(home: &std::path::Path, proj: &std::path::Path, args: &[&str]) -> String {
+    let out = cartoon()
+        .env("HOME", home)
+        .current_dir(proj)
+        .args(args)
+        .assert()
+        .success();
+    String::from_utf8(out.get_output().stdout.clone()).unwrap()
+}
+
+#[test]
+fn doctor_does_not_count_a_legacy_copilot_file_as_an_installed_hook() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &home.join(".copilot/hooks/cartoon.json"),
+        r#"{"hooks":{"preToolUse":[{"command":"cartoon hook rewrite"}]}}"#,
+    );
+    let out = run_in(&home, &proj, &["doctor"]);
+    assert!(out.contains("# hook not installed"), "{out}");
+    assert!(!out.contains("# hook installed"), "{out}");
+    assert!(out.contains("cartoon hook uninstall --copilot"), "{out}");
+    let status = run_in(&home, &proj, &["hook", "status"]);
+    assert!(status.contains("legacy"), "{status}");
+}
+
+#[test]
+fn status_and_doctor_flag_a_pre_0_8_entry_as_stale() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(&home.join(".claude/settings.json"), PRE_0_8_ENTRY);
+    let status = run_in(&home, &proj, &["hook", "status"]);
+    assert!(status.contains("stale"), "{status}");
+    assert!(!status.contains(": installed"), "{status}");
+    let out = run_in(&home, &proj, &["doctor"]);
+    assert!(out.contains("stale"), "{out}");
+    assert!(out.contains("# hook stale"), "{out}");
+    assert!(!out.contains("# hook installed"), "{out}");
+    // Re-running install refreshes it, after which status is clean.
+    run_in(&home, &proj, &["hook", "install"]);
+    let status = run_in(&home, &proj, &["hook", "status"]);
+    assert!(status.contains(": installed"), "{status}");
+    assert!(!status.contains("stale"), "{status}");
+}

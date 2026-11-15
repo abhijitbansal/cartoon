@@ -211,6 +211,19 @@ fn is_our_entry(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Is our entry exactly what `claude_entry()` writes today (matcher and
+/// command)? A pre-0.8 entry (`Bash|run_in_terminal` matcher, or a
+/// `--deny-mode` command that `hook rewrite` now refuses) is ours but stale:
+/// it wraps nothing until `hook install` refreshes it.
+fn entry_is_current(entry: &Value) -> bool {
+    let want = claude_entry();
+    entry["matcher"] == want["matcher"]
+        && entry["hooks"].as_array().is_some_and(|hs| {
+            hs.iter()
+                .any(|h| h["command"] == want["hooks"][0]["command"])
+        })
+}
+
 /// Outcome of inserting our entry into a settings `PreToolUse` array.
 #[derive(Debug, PartialEq, Eq)]
 enum Upsert {
@@ -228,7 +241,7 @@ fn upsert_claude_entry(arr: &mut Vec<Value>) -> Upsert {
             arr.push(want);
             Upsert::Added
         }
-        Some(existing) if *existing == want => Upsert::Unchanged,
+        Some(existing) if entry_is_current(existing) => Upsert::Unchanged,
         Some(existing) => {
             *existing = want;
             Upsert::Refreshed
@@ -377,40 +390,76 @@ fn is_our_copilot_file(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| s.contains(HOOK_MARKER))
 }
 
-/// Is our hook entry present in a Claude-format settings.json?
-fn claude_entry_present(path: &Path) -> bool {
-    std::fs::read_to_string(path)
+/// State of our hook entry in a Claude-format settings.json.
+fn claude_entry_state(path: &Path) -> HookState {
+    let entries = std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v["hooks"]["PreToolUse"].as_array().cloned())
-        .is_some_and(|arr| arr.iter().any(is_our_entry))
+        .unwrap_or_default();
+    match entries.iter().find(|e| is_our_entry(e)) {
+        None => HookState::Missing,
+        Some(e) if entry_is_current(e) => HookState::Installed,
+        Some(_) => HookState::Stale,
+    }
 }
 
 // --- status across every surface ---
 
-/// (path, surface, installed) for every hook location, user and project
-/// scope. Shared by `hook status` and `cartoon doctor`.
-pub fn status_rows() -> Vec<(String, &'static str, bool)> {
+/// What `hook status` and `cartoon doctor` know about one hook location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookState {
+    /// Our entry is present and current.
+    Installed,
+    /// Our entry is present in a pre-0.8 shape that no longer wraps.
+    Stale,
+    Missing,
+    /// A Copilot CLI hook file from before 0.8.0: dead weight, never a
+    /// working hook.
+    Legacy,
+}
+
+impl HookState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Stale => "stale (pre-0.8 entry, no longer wraps): re-run `cartoon hook install`",
+            Self::Missing => "not installed",
+            Self::Legacy => {
+                "legacy, unused since 0.8.0: remove with `cartoon hook uninstall --copilot`"
+            }
+        }
+    }
+}
+
+pub struct HookRow {
+    pub path: String,
+    pub surface: &'static str,
+    pub state: HookState,
+}
+
+/// One row per hook location, user and project scope. Shared by
+/// `hook status` and `cartoon doctor`.
+pub fn status_rows() -> Vec<HookRow> {
     let mut rows = Vec::new();
     for project in [false, true] {
         if let Ok(path) = claude_settings_path(project) {
-            rows.push((
-                path.display().to_string(),
-                "Claude Code",
-                claude_entry_present(&path),
-            ));
+            rows.push(HookRow {
+                state: claude_entry_state(&path),
+                path: path.display().to_string(),
+                surface: "Claude Code",
+            });
         }
     }
-    // A Copilot CLI hook written before 0.8.0 is dead weight now; list it
-    // only when present, with the command that removes it.
+    // A Copilot CLI hook written before 0.8.0: listed only when present.
     for project in [false, true] {
         if let Ok(path) = copilot_path(project) {
             if is_our_copilot_file(&path) {
-                rows.push((
-                    path.display().to_string(),
-                    "legacy Copilot CLI hook, unused since 0.8.0: remove with `cartoon hook uninstall --copilot`",
-                    true,
-                ));
+                rows.push(HookRow {
+                    path: path.display().to_string(),
+                    surface: "Copilot CLI",
+                    state: HookState::Legacy,
+                });
             }
         }
     }
@@ -418,18 +467,10 @@ pub fn status_rows() -> Vec<(String, &'static str, bool)> {
 }
 
 pub(super) fn status() -> Result<i32> {
-    for (path, surface, installed) in status_rows() {
-        println!("{path} ({surface}): {}", yes_no(installed));
+    for row in status_rows() {
+        println!("{} ({}): {}", row.path, row.surface, row.state.label());
     }
     Ok(0)
-}
-
-fn yes_no(installed: bool) -> &'static str {
-    if installed {
-        "installed"
-    } else {
-        "not installed"
-    }
 }
 
 #[cfg(test)]
@@ -546,5 +587,39 @@ mod tests {
         let fresh = dir.path().join("sub/new.json");
         write_atomic(&fresh, "{}").unwrap();
         assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "{}");
+    }
+
+    #[test]
+    fn entry_state_distinguishes_current_stale_and_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(claude_entry_state(&path), HookState::Missing);
+        let doc = |e: Value| json!({"hooks": {"PreToolUse": [e]}}).to_string();
+        std::fs::write(&path, doc(claude_entry())).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Installed);
+        let old_cmd = json!({
+            "matcher": "Bash",
+            "hooks": [{ "type": "command", "command": "command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0" }]
+        });
+        std::fs::write(&path, doc(old_cmd)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Stale);
+        let old_matcher = json!({
+            "matcher": "Bash|run_in_terminal",
+            "hooks": [{ "type": "command", "command": hook_command() }]
+        });
+        std::fs::write(&path, doc(old_matcher)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Stale);
+        let other = json!({"matcher":"Bash","hooks":[{"type":"command","command":"other"}]});
+        std::fs::write(&path, doc(other)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Missing);
+    }
+
+    #[test]
+    fn extra_keys_on_a_current_entry_are_not_stale() {
+        let mut e = claude_entry();
+        e["hooks"][0]["timeout"] = json!(5);
+        assert!(entry_is_current(&e));
+        let mut arr = vec![e];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Unchanged);
     }
 }

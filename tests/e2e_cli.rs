@@ -324,3 +324,23 @@ fn logs_tag_filter_removed() {
         text(&o.stderr)
     );
 }
+
+#[test]
+fn unknown_flag_error_lists_accepted_flags() {
+    let o = run(&["--nope", "pytest"]);
+    assert_eq!(o.status.code(), Some(2));
+    let err = text(&o.stderr);
+    assert!(err.contains("--nope"), "{err}");
+    assert!(err.contains("accepted flags"), "{err}");
+    assert!(err.contains("--compress"), "{err}");
+    assert!(err.contains("--merge-streams"), "{err}");
+}
+
+#[test]
+fn removed_tag_flag_without_a_value_still_gets_the_hint() {
+    let o = run(&["--tag"]);
+    assert_eq!(o.status.code(), Some(2));
+    let err = text(&o.stderr);
+    assert!(err.contains("removed in 0.8.0"), "{err}");
+    assert!(err.contains("--compress"), "{err}");
+}
