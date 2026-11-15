@@ -15,15 +15,18 @@ pub enum Action {
     Archive,
 }
 
-/// Flags whose following token is a VALUE, not an action — so a scheme or
-/// target literally named "test"/"build" cannot trip detection.
-const VALUE_FLAGS: &[&str] = &[
+/// Flags whose following token is a VALUE, not an action — so a scheme,
+/// target or path literally named "test"/"build" cannot trip detection. The
+/// hook's xcodebuild allowlist (`hook::policy`) skips the same values.
+pub const VALUE_FLAGS: &[&str] = &[
     "-scheme",
     "-target",
     "-project",
     "-workspace",
     "-destination",
+    "-destination-timeout",
     "-resultBundlePath",
+    "-resultStreamPath",
     "-configuration",
     "-sdk",
     "-arch",
@@ -31,33 +34,109 @@ const VALUE_FLAGS: &[&str] = &[
     "-xcconfig",
     "-only-testing",
     "-skip-testing",
+    "-only-test-configuration",
+    "-skip-test-configuration",
     "-testPlan",
+    "-testProductsPath",
     "-xctestrun",
     "-toolchain",
+    "-jobs",
+    "-archivePath",
+    "-exportPath",
+    "-exportOptionsPlist",
+    "-localizationPath",
+    "-exportLanguage",
+    "-enableCodeCoverage",
+    "-enableAddressSanitizer",
+    "-enableThreadSanitizer",
+    "-enableUndefinedBehaviorSanitizer",
+    "-test-iterations",
+    "-test-timeouts-enabled",
+    "-test-repetition-relaunch-enabled",
+    "-parallel-testing-enabled",
+    "-parallel-testing-worker-count",
+    "-maximum-parallel-testing-workers",
+    "-maximum-concurrent-test-device-destinations",
+    "-maximum-concurrent-test-simulator-destinations",
+    "-default-test-execution-time-allowance",
+    "-maximum-test-execution-time-allowance",
+    "-collect-test-diagnostics",
+    "-testLanguage",
+    "-testRegion",
+    "-clonedSourcePackagesDirPath",
+    "-packageCachePath",
+    "-scmProvider",
+    "-resultBundleVersion",
+    "-defaultLanguage",
+    "-codesizeProfileOutputDir",
+    "-enableCodesizeProfile",
+    "-enablePerformanceTestsDiagnostics",
+    "-packageAuthorizationProvider",
+    "-packageFingerprintPolicy",
+    "-packageSigningEntityPolicy",
 ];
 
-/// Classify an `xcodebuild` invocation. `Test` wins when any test action is
-/// present (e.g. `clean test`); `Archive` when `archive`/`-exportArchive`
-/// appears with no test action; `Build` only when a build action appears
-/// alone. Returns `None` for non-xcodebuild commands or actions we don't
-/// summarize (`clean`-only, `analyze`, `-list`, ...).
+/// A flag that switches xcodebuild out of its build/test actions into
+/// another mode (export, import, download, delete, first-launch setup,
+/// package resolution, framework packaging, project conversion). New Xcode releases add more
+/// `-export*`/`-import*`/`-download*` modes, so those prefixes all count
+/// (except the value flags `-exportPath`, `-exportOptionsPlist`, ...).
+pub fn is_mode_switch(tok: &str) -> bool {
+    let Some(name) = tok.strip_prefix('-') else {
+        return false;
+    };
+    if VALUE_FLAGS.contains(&tok) {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    ["export", "import", "download"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+        || matches!(
+            lower.as_str(),
+            "create-xcframework"
+                | "runfirstlaunch"
+                | "checkfirstlaunchstatus"
+                | "checkfornewercomponents"
+                | "resolvepackagedependencies"
+                | "deletecomponent"
+                | "showcomponent"
+                | "preparedevicesupport"
+                | "convert-project"
+                | "find-executable"
+                | "find-library"
+                | "enumerate-tests"
+                | "license"
+        )
+}
+
+/// Classify an `xcodebuild` invocation. `Archive` wins when
+/// `archive`/`-exportArchive`/`-exportNotarizedApp` appears anywhere, even
+/// next to a test action, so an export is never summarized as a test run;
+/// then `Test` when any test action is present (e.g. `clean test`); `Build`
+/// only when a build action appears alone. Returns `None` for
+/// non-xcodebuild commands, other mode switches (`-importLocalizations`,
+/// `-downloadAllPlatforms`, ...) and actions we don't summarize
+/// (`clean`-only, `analyze`, `-list`, ...).
 pub fn action(argv: &[String]) -> Option<Action> {
     let argv = super::strip_xcrun(argv);
     let first = argv.first()?;
     if basename(first) != "xcodebuild" {
         return None;
     }
-    let mut has_build = false;
-    let mut has_archive = false;
+    let (mut has_test, mut has_build, mut has_archive) = (false, false, false);
     let mut skip_next = false;
     for tok in &argv[1..] {
         if skip_next {
             skip_next = false;
             continue;
         }
-        if tok == "-exportArchive" {
+        if matches!(tok.as_str(), "-exportArchive" | "-exportNotarizedApp") {
             has_archive = true;
             continue;
+        }
+        if is_mode_switch(tok) {
+            return None;
         }
         if tok.starts_with('-') {
             // `-flag=value` carries its own value; `-flag value` consumes the next.
@@ -67,16 +146,19 @@ pub fn action(argv: &[String]) -> Option<Action> {
             continue;
         }
         match tok.as_str() {
-            "test" | "test-without-building" => return Some(Action::Test),
+            "test" | "test-without-building" => has_test = true,
             "build" | "build-for-testing" => has_build = true,
             "archive" => has_archive = true,
             _ => {}
         }
     }
     if has_archive {
-        return Some(Action::Archive);
+        Some(Action::Archive)
+    } else if has_test {
+        Some(Action::Test)
+    } else {
+        has_build.then_some(Action::Build)
     }
-    has_build.then_some(Action::Build)
 }
 
 #[cfg(test)]
@@ -115,8 +197,52 @@ mod tests {
             ])),
             Some(Action::Archive)
         );
+        // Archive and export win over a stray `test` word: an export is never
+        // summarized as a test run (final review C1).
         assert_eq!(
             action(&argv(&["xcodebuild", "clean", "archive", "test"])),
+            Some(Action::Archive)
+        );
+        assert_eq!(
+            action(&argv(&[
+                "xcodebuild",
+                "-exportArchive",
+                "-archivePath",
+                "a",
+                "-exportPath",
+                "exp",
+                "test"
+            ])),
+            Some(Action::Archive)
+        );
+        assert_eq!(
+            action(&argv(&["xcodebuild", "-exportNotarizedApp", "test"])),
+            Some(Action::Archive)
+        );
+    }
+
+    #[test]
+    fn other_mode_switches_are_not_summarized() {
+        for mode in [
+            "-importLocalizations",
+            "-exportLocalizations",
+            "-downloadAllPlatforms",
+            "-runFirstLaunch",
+            "-resolvePackageDependencies",
+            "-create-xcframework",
+        ] {
+            assert_eq!(action(&argv(&["xcodebuild", mode, "test"])), None, "{mode}");
+        }
+    }
+
+    #[test]
+    fn archive_path_value_is_not_an_action() {
+        assert_eq!(
+            action(&argv(&["xcodebuild", "build", "-archivePath", "test"])),
+            Some(Action::Build)
+        );
+        assert_eq!(
+            action(&argv(&["xcodebuild", "-enableCodeCoverage", "YES", "test"])),
             Some(Action::Test)
         );
     }

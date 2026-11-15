@@ -215,6 +215,27 @@ fn rewrite_never_approves_side_effects_or_watch_modes() {
 }
 
 #[test]
+fn rewrite_never_approves_xcodebuild_exports_or_account_access() {
+    let tmp = tempfile::tempdir().unwrap();
+    for cmd in [
+        "xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/export test",
+        "xcodebuild test -exportArchive -archivePath a -exportOptionsPlist E.plist",
+        "xcodebuild archive -scheme App -archivePath test",
+        "xcodebuild build install -scheme A",
+        "xcodebuild build -allowProvisioningUpdates -scheme A",
+        "xcodebuild build -IDESkipMacroFingerprintValidation=YES -scheme A",
+        "xcodebuild test -scheme A -destination 'platform=iOS,id=00008110-000A1B2C3D4E'",
+    ] {
+        assert_eq!(rewrite(tmp.path(), cmd), "", "{cmd} must not be rewritten");
+    }
+    let out = rewrite(
+        tmp.path(),
+        "xcodebuild test -scheme A -destination 'platform=iOS Simulator,name=iPhone 15' -enableCodeCoverage YES",
+    );
+    assert!(out.contains("updatedInput"), "{out}");
+}
+
+#[test]
 fn rewrite_still_approves_the_dev_loop() {
     let tmp = tempfile::tempdir().unwrap();
     let inside = tmp.path().join("tests/test_a.py");

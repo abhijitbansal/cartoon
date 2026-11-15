@@ -104,7 +104,10 @@
 //!     full allowlist is practical it is one (`npm ci` flags, `uv` flags,
 //!     `pre-commit run`, `cargo nextest run|list`, mvn lifecycle phases and
 //!     never a goal with `:`, so no ad-hoc plugin download, gradle tasks,
-//!     make targets); elsewhere (pytest has
+//!     make targets, xcodebuild actions `test`/`build`/`clean`/... with no
+//!     mode switch such as `-exportArchive`, no developer-account flag, no
+//!     `-Name=value` default and only simulator or macOS destinations);
+//!     elsewhere (pytest has
 //!     hundreds of flags) it is a deny-list of the code-loading ones. A few
 //!     values are exempt because they are inert and common: `pytest -p no:X`,
 //!     JS built-in reporter/pool names, a short list of mvn `-D` properties

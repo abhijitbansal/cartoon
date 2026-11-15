@@ -552,7 +552,7 @@ pub(super) fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
         // arbitrary plugin; lifecycle phases have none.
         "mvn" | "mvnw" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
         "dotnet" => dotnet_args_ok(args),
-        "xcodebuild" => args.iter().all(|a| xcode_setting_ok(a)),
+        "xcodebuild" => xcodebuild_args_ok(args),
         _ => true,
     };
     special
@@ -806,19 +806,132 @@ fn dotnet_args_ok(args: &[&str]) -> bool {
     })
 }
 
-/// An upper-case `NAME=value` (or `NAME[sdk=*]=value`) argument to
-/// xcodebuild is a build setting; only `XCODE_SAFE_SETTINGS` may be set.
+/// xcodebuild actions an auto-approved run may name; naming none is a
+/// build. Every other bare word (`archive`, `install`, `installsrc`,
+/// `analyze`, `docbuild`, anything unknown) means no rewrite.
+const XCODE_ACTIONS: &[&str] = &[
+    "test",
+    "test-without-building",
+    "build",
+    "build-for-testing",
+    "clean",
+];
+
+/// The other xcodebuild actions. As a flag's value (`-only-testing
+/// archive`) it is refused too: whether xcodebuild reads it as the value or
+/// as the action was not measured for every flag.
+const XCODE_OTHER_ACTIONS: &[&str] = &["archive", "install", "installsrc", "analyze", "docbuild"];
+
+/// xcodebuild option prefixes (lowercased) that reach the Apple Developer
+/// account: creating certificates and profiles, registering devices,
+/// authenticating with an App Store Connect key.
+const XCODE_ACCOUNT_FLAGS: &[&str] = &["allowprovisioning", "authenticationkey"];
+
+/// xcodebuild switches (no value) an auto-approved build or test may carry.
+/// Any other flag that is not a known value flag means no rewrite, so a mode
+/// Xcode adds later is refused until it is reviewed.
+const XCODE_BOOL_FLAGS: &[&str] = &[
+    "-verbose",
+    "-quiet",
+    "-parallelizeTargets",
+    "-alltargets",
+    "-hideShellScriptEnvironment",
+    "-showBuildTimingSummary",
+    "-skipUnavailableActions",
+    "-retry-tests-on-failure",
+    "-run-tests-until-failure",
+    "-disableAutomaticPackageResolution",
+    "-onlyUsePackageVersionsFromResolvedFile",
+    "-skipPackageUpdates",
+    "-disablePackageRepositoryCache",
+];
+
+/// xcodebuild as an allowlist: only the actions in `XCODE_ACTIONS`, only
+/// the switches in `XCODE_BOOL_FLAGS`, the adapter's value flags (whose value
+/// is never judged as an action: `-archivePath test`, `-enableCodeCoverage
+/// YES`) and `-only-testing:X`/`-skip-testing:X`. On top of that, belt and
+/// braces: no mode switch (`-exportArchive`, `-importLocalizations`,
+/// `-downloadPlatform`, ...), no developer-account flag, no `-Name=value`
+/// user-default override (the spelling of
+/// `-IDESkipMacroFingerprintValidation=YES`), no value that is itself a flag
+/// (`-only-testing -exportArchive`; xcodebuild refuses that too) or another
+/// action (`-only-testing archive`), only `XCODE_SAFE_SETTINGS` build
+/// settings, and only simulator or macOS destinations.
+fn xcodebuild_args_ok(args: &[&str]) -> bool {
+    use crate::adapters::xcodebuild::{is_mode_switch, VALUE_FLAGS};
+    let mut rest = args.iter();
+    while let Some(&a) = rest.next() {
+        if let Some(body) = a.strip_prefix('-') {
+            let lower = body.to_ascii_lowercase();
+            if is_mode_switch(a)
+                || body.contains('=')
+                || XCODE_ACCOUNT_FLAGS.iter().any(|p| lower.starts_with(p))
+            {
+                return false;
+            }
+            if VALUE_FLAGS.contains(&a) {
+                let Some(&value) = rest.next() else {
+                    return false;
+                };
+                if value.starts_with('-')
+                    || XCODE_OTHER_ACTIONS.contains(&value)
+                    || (a == "-destination" && !xcode_destination_ok(value))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let known = XCODE_BOOL_FLAGS.contains(&a)
+                || ["-only-testing:", "-skip-testing:"]
+                    .iter()
+                    .any(|p| a.strip_prefix(p).is_some_and(|id| !id.is_empty()));
+            if !known {
+                return false;
+            }
+            continue;
+        }
+        let ok = if a.contains('=') {
+            xcode_setting_ok(a)
+        } else {
+            XCODE_ACTIONS.contains(&a)
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// A `NAME=value` (or `NAME[sdk=*]=value`) argument to xcodebuild is a
+/// build setting; only `XCODE_SAFE_SETTINGS` may be set. Any other
+/// (`CC=`, `SWIFT_EXEC=`, `OTHER_LDFLAGS=`) can swap the compiler or linker.
 fn xcode_setting_ok(a: &str) -> bool {
     let Some((lhs, _)) = a.split_once('=') else {
-        return true;
+        return false;
     };
     let name = lhs.split('[').next().unwrap_or(lhs);
-    let is_setting = !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    !is_setting || XCODE_SAFE_SETTINGS.contains(&name)
+    XCODE_SAFE_SETTINGS.contains(&name)
+}
+
+/// A `-destination` value that runs on this Mac: a simulator
+/// (`platform=iOS Simulator,...`, `generic/platform=iOS Simulator`) or
+/// macOS. A physical device (`platform=iOS,id=...`, `generic/platform=iOS`)
+/// or a destination without a platform (`id=<udid>`, which may be a device)
+/// is refused, as `connectedAndroidTest` is for gradle.
+/// Every `platform` key must pass (`platform=macOS,platform=iOS` is refused).
+fn xcode_destination_ok(value: &str) -> bool {
+    let platforms: Vec<&str> = value
+        .split(',')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            let k = k.trim();
+            (k == "platform" || k == "generic/platform").then_some(v.trim())
+        })
+        .collect();
+    !platforms.is_empty()
+        && platforms
+            .iter()
+            .all(|p| p.ends_with(" Simulator") || matches!(*p, "macOS" | "OS X"))
 }
 
 #[cfg(test)]
@@ -1081,6 +1194,107 @@ mod tests {
             "cargo doc --no-deps --open",
         ] {
             assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_mode_switches_never_wrapped() {
+        // A stray `test` word (or a flag value spelled `test`) once made any
+        // xcodebuild mode look like a test run (final review C1).
+        for c in [
+            "xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/export test",
+            "xcodebuild test -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist",
+            "xcodebuild -exportNotarizedApp -archivePath a test",
+            "xcodebuild -importLocalizations -localizationPath x test",
+            "xcodebuild -exportLocalizations -localizationPath x test",
+            "xcodebuild -downloadAllPlatforms test",
+            "xcodebuild -downloadPlatform iOS test",
+            "xcodebuild -runFirstLaunch test",
+            "xcodebuild -resolvePackageDependencies test",
+            "xcodebuild -create-xcframework -output x test",
+            "xcodebuild -exportSomethingNew test",
+            "xcodebuild test archive -scheme A",
+            "xcodebuild build install -scheme A",
+            "xcodebuild build installsrc -scheme A",
+            "xcodebuild build analyze -scheme A",
+            "xcodebuild build docbuild -scheme A",
+            "xcodebuild archive -scheme App -archivePath test",
+            "xcodebuild -exportArchive -archivePath App.xcarchive -exportPath test -exportOptionsPlist E.plist",
+            "xcrun xcodebuild -exportArchive -archivePath a -exportPath b test",
+            "xcodebuild test -scheme A whatever",
+            // A value flag must not swallow a mode switch or an action.
+            "xcodebuild test -scheme A -only-testing -exportArchive -archivePath a -exportOptionsPlist E.plist",
+            "xcodebuild test -scheme A -only-testing archive",
+            "xcodebuild test -scheme A -skip-testing -exportArchive",
+            "xcodebuild test -scheme A -deleteComponent metaltoolchain",
+            "xcodebuild test -scheme A -convert-project x",
+            "xcodebuild test -scheme A -prepareDeviceSupport",
+            "xcodebuild test -scheme A -someFutureMode",
+            "xcodebuild test -scheme A -skipPackageSignatureValidation",
+            "xcodebuild test -scheme A -defaultPackageRegistryURL https://r.example",
+            "xcodebuild test -scheme A -only-testing:",
+            "xcodebuild test -scheme",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_flag_values_are_not_actions() {
+        for c in [
+            "xcodebuild test -scheme A -enableCodeCoverage YES",
+            "xcodebuild test -scheme A -test-iterations 3",
+            "xcodebuild test -scheme A -parallel-testing-enabled NO",
+            "xcodebuild test -scheme A -only-testing:ATests/Foo",
+            "xcodebuild test -scheme A -skip-testing ATests/Slow",
+            "xcodebuild test -scheme A -destination 'platform=macOS'",
+            "xcodebuild build -project A.xcodeproj -configuration Debug -sdk iphonesimulator",
+            "xcodebuild test -workspace A.xcworkspace -scheme A -derivedDataPath build/dd",
+            "xcodebuild test -scheme A -resultBundlePath build/r.xcresult -testPlan Unit",
+            "xcodebuild build -scheme A -arch arm64 -jobs 8",
+            "xcodebuild test-without-building -scheme A",
+            "xcodebuild build-for-testing -scheme A",
+            "xcodebuild clean build -scheme A",
+            "xcodebuild -scheme A clean test",
+            "xcodebuild test -scheme A -quiet -retry-tests-on-failure -test-iterations 2",
+            "xcodebuild test -scheme A -resultBundleVersion 3 -skipPackageUpdates",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_account_and_validation_overrides_not_wrapped() {
+        // Final review I2: developer-portal access, `-Name=value` user
+        // defaults (the spelling of `-skipMacroValidation`), physical devices.
+        for c in [
+            "xcodebuild build -allowProvisioningUpdates -scheme A",
+            "xcodebuild build -allowProvisioningDeviceRegistration -scheme A",
+            "xcodebuild test -scheme A -authenticationKeyPath key.p8 -authenticationKeyID X -authenticationKeyIssuerID Y",
+            "xcodebuild build -IDESkipMacroFingerprintValidation=YES -scheme A",
+            "xcodebuild build -IDESkipPackagePluginFingerprintValidatation=YES -scheme A",
+            "xcodebuild build -resultBundlePath=r -scheme A",
+            "xcodebuild test -scheme A -destination 'platform=iOS,id=00008110-000A1B2C3D4E'",
+            "xcodebuild test -scheme A -destination 'platform=iOS'",
+            "xcodebuild test -scheme A -destination 'platform=watchOS,name=My Watch'",
+            "xcodebuild test -scheme A -destination 'platform=tvOS,id=x'",
+            "xcodebuild test -scheme A -destination 'platform=visionOS,id=x'",
+            "xcodebuild build -scheme A -destination 'generic/platform=iOS'",
+            "xcodebuild test -scheme A -destination 'id=00008110-000A1B2C3D4E'",
+            "xcodebuild test -scheme A -destination 'platform=iOS Simulator,name=iPhone 15' -destination 'platform=iOS,id=x'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,platform=iOS,id=x'",
+            "xcodebuild build -scheme A lowercase=x",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "xcodebuild test -scheme A -destination 'platform=iOS Simulator,name=iPhone 15'",
+            "xcodebuild test -scheme A -destination 'platform=watchOS Simulator,name=Apple Watch'",
+            "xcodebuild build -scheme A -destination 'generic/platform=iOS Simulator'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,arch=arm64'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,variant=Mac Catalyst'",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
         }
     }
 
