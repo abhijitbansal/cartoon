@@ -397,11 +397,14 @@ fn rewrite_decision_in(
     let (wrapped, force_deny) = wrap_command_in(&cmd, wrap_scripts, root)?;
     let plan_mode = v.get("permission_mode").and_then(Value::as_str) == Some("plan");
     // Rules are checked against the command as typed and as normalised (no
-    // `2>&1`), so an exact rule such as `Bash(swift build)` still guards
-    // `swift build 2>&1`.
-    let normalised = shapes::normalise(&cmd, root).map(|s| s.inner());
+    // `2>&1`, with and without its `cd`), so an exact rule such as
+    // `Bash(swift build)` still guards `swift build 2>&1`.
+    let normalised = shapes::normalise(&cmd, root).map(|s| s.rule_forms());
     let guarded = permissions::is_guarded(&cmd, rules)
-        || normalised.is_some_and(|n| permissions::is_guarded(&n, rules));
+        || normalised
+            .iter()
+            .flatten()
+            .any(|n| permissions::is_guarded(n, rules));
     if plan_mode || guarded {
         return None;
     }
@@ -2081,5 +2084,19 @@ mod tests {
         let rules = guard(&["Bash(swift build)"]);
         assert!(rewrite_decision_in(input, &[], None, &UserRules::default()).is_some());
         assert!(rewrite_decision_in(input, &[], None, &rules).is_none());
+    }
+
+    #[test]
+    fn exact_rule_with_cd_still_guards_the_2to1_form() {
+        let root = project_with_app();
+        let input = json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "cd App && swift build 2>&1"},
+        })
+        .to_string();
+        let rules = guard(&["Bash(cd App && swift build)"]);
+        let open = rewrite_decision_in(&input, &[], Some(root.path()), &UserRules::default());
+        assert!(open.is_some_and(|o| o.contains("\"allow\"")));
+        assert!(rewrite_decision_in(&input, &[], Some(root.path()), &rules).is_none());
     }
 }

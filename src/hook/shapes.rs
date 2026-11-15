@@ -33,6 +33,21 @@ impl Shape {
             None => self.body.clone(),
         }
     }
+
+    /// The normalised forms a user permission rule is checked against: the
+    /// inner command, and the full command with its `cd` when there is one,
+    /// so neither `Bash(swift build)` nor `Bash(cd App && swift build)` is
+    /// dodged by a stripped `2>&1`.
+    pub fn rule_forms(&self) -> Vec<String> {
+        let inner = self.inner();
+        match &self.cd {
+            Some(dir) => {
+                let full = format!("cd {dir} && {inner}");
+                vec![inner, full]
+            }
+            None => vec![inner],
+        }
+    }
 }
 
 /// Display filters the hook lets ride along. A subset of
@@ -176,6 +191,18 @@ mod tests {
         assert_eq!(
             normalise("  pytest -q  ", None),
             Some(shape(None, "pytest -q", None))
+        );
+    }
+
+    #[test]
+    fn rule_forms_keep_the_cd() {
+        assert_eq!(
+            shape(None, "swift build", None).rule_forms(),
+            ["swift build"]
+        );
+        assert_eq!(
+            shape(Some("App"), "swift build", Some("tail -5")).rule_forms(),
+            ["swift build | tail -5", "cd App && swift build | tail -5"]
         );
     }
 

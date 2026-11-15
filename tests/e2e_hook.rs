@@ -516,3 +516,18 @@ fn exact_deny_rule_still_stops_the_2to1_form() {
     let event = bash_event(&proj, "swift build 2>&1");
     assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
 }
+
+#[test]
+fn exact_deny_rule_with_cd_still_stops_the_2to1_form() {
+    let (_tmp, home, proj) = home_and_project();
+    fs::create_dir(proj.join("App")).unwrap();
+    let event = bash_event(&proj, "cd App && swift build 2>&1");
+    // Positive control: with no rule the cd shape is rewritten.
+    let open = rewrite_event(cartoon_with_home(&home), &proj, &event);
+    assert!(open.contains("\"allow\""), "{open}");
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(cd App && swift build)"]}}"#,
+    );
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
