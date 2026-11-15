@@ -815,9 +815,10 @@ fn is_noisy(base: &str, rest: &[&str]) -> bool {
     if let Some((_, subs)) = SUBCOMMAND.iter().find(|(c, _)| *c == base) {
         return next.is_some_and(|n| subs.contains(&n));
     }
-    // python -m pytest / unittest
+    // python -m pytest / unittest, never `-m <any module>` (`pip install`,
+    // `http.server`).
     if base.starts_with("python") {
-        return next == Some("-m");
+        return next == Some("-m") && matches!(rest.get(1), Some(&"pytest" | &"unittest"));
     }
     // uv's own module form after the prefix is stripped: `-m pytest`.
     if base == "-m" || base == "--module" {
@@ -1143,6 +1144,21 @@ mod tests {
         assert!(wrap_command("python -m pytest -q").is_some());
         assert!(wrap_command("python3 -m unittest").is_some());
         assert!(wrap_command("python script.py").is_none());
+    }
+
+    #[test]
+    fn python_module_other_than_a_test_runner_not_wrapped() {
+        for cmd in [
+            "python -m pip install x",
+            "python -m http.server",
+            "python -m mymod",
+            "python3 -m cartoon -c x",
+            "python -m",
+            "uv run python -m pip install x",
+            "uv run python -m mymod",
+        ] {
+            assert!(wrap_command(cmd).is_none(), "{cmd}");
+        }
     }
 
     #[test]

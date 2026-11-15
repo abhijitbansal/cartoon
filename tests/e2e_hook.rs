@@ -458,6 +458,27 @@ fn rewrite_covers_the_agent_shapes_around_xcodebuild() {
 }
 
 #[test]
+fn rewrite_refuses_python_modules_other_than_test_runners() {
+    let (_tmp, home, proj) = home_and_project();
+    let allowed = rewrite_event(
+        cartoon_with_home(&home),
+        &proj,
+        &bash_event(&proj, "python -m pytest -q"),
+    );
+    assert!(allowed.contains("\"allow\""), "{allowed}");
+    for cmd in [
+        "python -m pip install x",
+        "python -m http.server",
+        "python -m mymod",
+        "python -m cartoon -c x",
+        "python3 -m cartoon -c x",
+    ] {
+        let out = rewrite_event(cartoon_with_home(&home), &proj, &bash_event(&proj, cmd));
+        assert_eq!(out, "", "{cmd}");
+    }
+}
+
+#[test]
 fn rewrite_refuses_unsafe_pipes_and_cds() {
     let (_tmp, home, proj) = home_and_project();
     fs::create_dir(proj.join("App")).unwrap();
