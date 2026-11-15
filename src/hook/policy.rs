@@ -787,11 +787,20 @@ fn norm(name: &str) -> String {
         .collect()
 }
 
+/// MSBuild targets (`-t:`/`-target:`/`--target`/`/t:`, case-insensitive)
+/// an auto-approved dotnet run may name. Any other target (`Publish`,
+/// `PublishContainer`, `Pack`, `Push`, `Deploy`, ...) can publish or run
+/// whatever the project binds to it.
+const DOTNET_TARGETS: &[&str] = &["build", "rebuild", "clean", "test", "vstest"];
+
 /// dotnet: no MSBuild response files (`@x.rsp`), no inline runsettings
-/// after `--`, and none of `DOTNET_DENY` in any `-x`/`--x`/`/x` spelling.
+/// after `--`, none of `DOTNET_DENY` in any `-x`/`--x`/`/x` spelling, and
+/// only `DOTNET_TARGETS` as targets (every one in a `;`/`,` list, every
+/// repeat of the switch; the value glued after `:`/`=` or the next token).
 fn dotnet_args_ok(args: &[&str]) -> bool {
-    args.iter().all(|a| {
-        if *a == "--" || a.starts_with('@') {
+    let mut rest = args.iter();
+    while let Some(&a) = rest.next() {
+        if a == "--" || a.starts_with('@') {
             return false;
         }
         let body = a
@@ -799,10 +808,34 @@ fn dotnet_args_ok(args: &[&str]) -> bool {
             .or_else(|| a.strip_prefix('-'))
             .or_else(|| a.strip_prefix('/'));
         let Some(body) = body else {
-            return true;
+            continue;
         };
-        let name = body.split([':', '=']).next().unwrap_or(body);
-        !DOTNET_DENY.contains(&norm(name).as_str())
+        let (name, glued) = match body.find([':', '=']) {
+            Some(at) => (&body[..at], Some(&body[at + 1..])),
+            None => (body, None),
+        };
+        let name = norm(name);
+        if DOTNET_DENY.contains(&name.as_str()) {
+            return false;
+        }
+        if name == "t" || name == "target" {
+            let Some(value) = glued.or_else(|| rest.next().copied()) else {
+                return false;
+            };
+            if !dotnet_targets_ok(value) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Every target in a `;`/`,` list is in `DOTNET_TARGETS`; an empty list or
+/// entry is refused.
+fn dotnet_targets_ok(value: &str) -> bool {
+    value.split([';', ',']).all(|t| {
+        let t = t.trim().to_ascii_lowercase();
+        DOTNET_TARGETS.contains(&t.as_str())
     })
 }
 
@@ -1293,6 +1326,43 @@ mod tests {
             "xcodebuild build -scheme A -destination 'generic/platform=iOS Simulator'",
             "xcodebuild test -scheme A -destination 'platform=macOS,arch=arm64'",
             "xcodebuild test -scheme A -destination 'platform=macOS,variant=Mac Catalyst'",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn dotnet_targets_other_than_build_and_test_not_wrapped() {
+        // Final review I1: `-t:PublishContainer` pushes an image, `-t:Push`
+        // and `-t:Deploy` run whatever the project binds to them.
+        for c in [
+            "dotnet build -t:PublishContainer",
+            "dotnet build -t:Deploy",
+            "dotnet build -restore -t:Push",
+            "dotnet build -c Release -t:Pack",
+            "dotnet test -t:Publish",
+            "dotnet build -target:Publish",
+            "dotnet build --target Publish",
+            "dotnet build --target:Publish",
+            "dotnet build /t:Publish",
+            "dotnet build -T:publish",
+            "dotnet build '-t:Build;Publish'",
+            "dotnet build -t:Build,Publish",
+            "dotnet build -t:Build -t:Publish",
+            "dotnet build -t:",
+            "dotnet build --target",
+            "dotnet build -t:Build=x",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "dotnet build -t:Build",
+            "dotnet build -t:rebuild",
+            "dotnet build '-t:Clean;Build'",
+            "dotnet test -t:VSTest",
+            "dotnet build --target Test",
+            // `/t:` forms are refused earlier as absolute paths.
+            "dotnet build -t:Clean,Build",
         ] {
             assert!(wrap(c).is_some(), "{c}");
         }
