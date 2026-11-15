@@ -397,7 +397,7 @@ have no adapter (ladder compression only), and ledger health (malformed
 lines, negative-saved runs, the biggest uncompressed commands). Paste it into
 a bug report.
 
-Failing test run, before (pytest, ~4800 tokens) vs after (~300 tokens):
+Failing test run, after cartoon:
 
 ```
 runner: pytest
@@ -437,14 +437,14 @@ stage that understands the content wins:
 
 Every rule is a pure function that no-ops when its pattern is absent, so
 plain prose is never mangled. Measured on the golden corpus by the test
-suite (`tests/corpus.rs`, part of `cargo test`; token reduction at the
-aggressive tier, signal lines asserted intact):
+suite (`tests/corpus.rs`, part of `cargo test`; signal lines asserted
+intact at the aggressive tier):
 
-| Fixture | Reduction | Signal kept |
-|---|---|---|
-| chatty service log (156 lines, 1 ERROR) | **−92.5%** | ERROR + WARN verbatim, ±2 lines context |
-| real `cargo build` failure (3 errors) | **−61.5%** | all errors + locations in a TOON table |
-| npm ERESOLVE conflict | ±0% | guard emits the original — never negative |
+| Fixture | Signal kept |
+|---|---|
+| chatty service log (156 lines, 1 ERROR) | ERROR + WARN verbatim, ±2 lines context |
+| real `cargo build` failure (3 errors) | all errors + locations in a TOON table |
+| npm ERESOLVE conflict | guard emits the original, so output is never larger |
 
 ## Guarantees
 

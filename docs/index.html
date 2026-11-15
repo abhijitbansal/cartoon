@@ -352,8 +352,8 @@
     <figure class="blueprint anim" style="--i:1">
       <div class="frame">
 <svg viewBox="0 0 880 470" role="img" aria-labelledby="heroTitle heroDesc" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;font-family:'JetBrains Mono','SF Mono',Consolas,monospace">
-  <title id="heroTitle">cartoon compression: ~800 noisy log lines collapse into 12 structured TOON lines</title>
-  <desc id="heroDesc">A faux terminal. On the left, a scrolling stack of ~800 noisy pytest log lines (~4,800 tokens) with one buried failure in rust. They funnel through a guarded aperture in the center into a clean panel of 12 structured TOON lines (~300 tokens) on the right.</desc>
+  <title id="heroTitle">cartoon compression: a noisy pytest log collapses into a short structured TOON report</title>
+  <desc id="heroDesc">A faux terminal. On the left, a scrolling stack of noisy pytest log lines with one buried failure in rust. They funnel through a guarded aperture in the center into a clean panel of structured TOON lines on the right.</desc>
   <defs>
     <linearGradient id="hg-funnel" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="var(--rust)" stop-opacity="0.18"/>
@@ -391,7 +391,7 @@
   <line x1="2" y1="36" x2="878" y2="36" stroke="var(--border)"/>
 
   <text x="18" y="60" font-size="9" letter-spacing="1" class="hg-err">STDOUT / STDERR · RAW</text>
-  <text x="18" y="80" font-size="10.5" class="hg-dim">~800 lines</text>
+  <text x="18" y="80" font-size="10.5" class="hg-dim">full raw log</text>
   <rect x="18" y="92" width="300" height="316" rx="6" fill="var(--surface2)" stroke="var(--border)"/>
   <g clip-path="url(#hg-noise)">
     <g class="hg-stream" font-size="9">
@@ -425,7 +425,7 @@
       </g>
     </g>
   </g>
-  <text x="168" y="426" text-anchor="middle" font-size="9.5" class="hg-dim">~4,800 tokens · 1 ERROR buried</text>
+  <text x="168" y="426" text-anchor="middle" font-size="9.5" class="hg-dim">1 ERROR buried</text>
 
   <path d="M318 92 L432 196 L432 304 L318 408 Z" fill="url(#hg-funnel)"/>
   <line x1="318" y1="92" x2="432" y2="196" stroke="var(--gold)" stroke-opacity=".4"/>
@@ -438,7 +438,7 @@
   <text x="589" y="216" text-anchor="middle" font-size="8" letter-spacing="1" class="hg-dim">GUARD</text>
   <text x="376" y="262" text-anchor="middle" font-size="7.5" class="hg-num fine-only">MATCH · DETECT · LADDER</text>
 
-  <text x="446" y="60" font-size="9" letter-spacing="1" class="hg-str">TOON · STRUCTURED · 12 lines</text>
+  <text x="446" y="60" font-size="9" letter-spacing="1" class="hg-str">TOON · STRUCTURED</text>
   <rect x="446" y="80" width="416" height="328" rx="6" fill="var(--surface-elevated)" stroke="var(--green)" stroke-opacity=".4"/>
   <g font-size="11.5" transform="translate(462,104)">
     <g class="hg-out" style="animation-delay:.05s"><text class="hg-dim" x="-14">1</text><text class="hg-key">runner:</text><text x="64" class="hg-str">pytest</text></g>
@@ -454,10 +454,10 @@
     <g class="hg-out" style="animation-delay:.7s" transform="translate(0,196)"><text class="hg-dim" x="-22">11</text><text class="hg-key">raw_log:</text><text x="74" class="hg-dim">runs/20260611-051415</text></g>
     <g class="hg-out" style="animation-delay:.8s" transform="translate(0,218)"><text class="hg-dim" x="-22">12</text><text class="hg-str hg-cur">&#9613;</text></g>
   </g>
-  <text x="654" y="426" text-anchor="middle" font-size="9.5" class="hg-str">~300 tokens · this run &#8722;93.8%</text>
+  <text x="654" y="426" text-anchor="middle" font-size="9.5" class="hg-str">failures kept verbatim</text>
 </svg>
       </div>
-      <figcaption><b>FIG.1</b> — ~800 noisy lines &#8594; 12 structured TOON rows · one buried failure kept verbatim</figcaption>
+      <figcaption><b>FIG.1</b> — noisy log &#8594; structured TOON rows · one buried failure kept verbatim</figcaption>
     </figure>
   </section>
 
@@ -493,8 +493,6 @@ cartoon hook status    # check · uninstall to remove</pre>
 
   <div class="statband">
     <div class="stat gold anim" style="--i:2"><div class="n">81–93%</div><div class="l">smaller than verbose test runs (benchmarks/README.md; baselines named there)</div></div>
-    <div class="stat anim" style="--i:3"><div class="n">92.5%</div><div class="l">token cut · chatty service log</div><div class="m">measured by cargo test</div></div>
-    <div class="stat anim" style="--i:4"><div class="n">61.5%</div><div class="l">token cut · cargo build failure</div><div class="m">measured by cargo test</div></div>
     <div class="stat anim" style="--i:5"><div class="n">0</div><div class="l">risk — output never gets bigger</div></div>
   </div>
 
@@ -575,7 +573,7 @@ tests/test_auth.py::test_logout PASSED             [  4%]
 &hellip;44 more lines of PASSED&hellip;
 tests/test_auth.py::test_expiry FAILED             [ 87%]
 &hellip;full session banner, warnings, summary&hellip;</pre>
-      <div class="cost">~4,800 tokens → the agent</div>
+      <div class="cost">every line → the agent</div>
     </div>
     <div class="after">
       <div class="balabel">cartoon pytest</div>
@@ -592,12 +590,12 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
 <span class="tok-key">traces:</span>
   "tests/test_auth.py::test_expiry"[2]: "tests/test_auth.py:42 in test_expiry",assert token.exp &lt; now()
 <span class="tok-key">raw_log:</span> ~/.local/state/cartoon/runs/20260611-051415-342d</pre>
-      <div class="cost">~300 tokens — failures keep full detail</div>
+      <div class="cost">failures keep full detail</div>
     </div>
   </div>
   <div class="ba-meter anim" style="--i:8">
     <span class="line"></span>
-    ~4,800 &#8594; ~300 tokens · <span class="scope">this run</span> <b>&#8722;93.8%</b>
+    full log &#8594; short report · <span class="scope">this run</span>
     <span class="line"></span>
   </div>
 
@@ -825,77 +823,6 @@ tests/test_auth.py::test_expiry FAILED             [ 87%]
       </tbody>
     </table>
   </div>
-
-  <figure class="blueprint anim" style="--i:24">
-    <div class="frame">
-<svg viewBox="0 0 720 340" role="img" aria-labelledby="dvTitle dvDesc" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block;font-family:'JetBrains Mono','SF Mono',Consolas,monospace">
-  <title id="dvTitle">Measured token reduction across the golden corpus</title>
-  <desc id="dvDesc">Horizontal blueprint bar chart, measured by the test suite (cargo test). Chatty service log reduced 92.5 percent. Cargo build failure reduced 61.5 percent. npm ERESOLVE conflict net zero percent because the net-savings guard emits the original byte-for-byte. Verbose test runs are about 70 percent smaller (an estimate; see the benchmark).</desc>
-  <defs>
-    <style>
-      .dv-grow{transform:scaleX(1);transform-box:fill-box;transform-origin:left}
-      @media (prefers-reduced-motion: no-preference){
-        .dv-grow{animation:dv-bar .8s cubic-bezier(.2,.8,.2,1) both}
-      }
-      @keyframes dv-bar{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-    </style>
-  </defs>
-
-  <text x="8" y="20" font-size="9" letter-spacing="1.5" fill="var(--gold)">FIG.2 — TOKEN REDUCTION · GOLDEN CORPUS · MEASURED BY CARGO TEST</text>
-
-  <g transform="translate(8 40)">
-    <line x1="500" y1="-4" x2="500" y2="236" stroke="var(--rust)" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>
-    <text x="500" y="248" font-size="8" fill="var(--rust)" text-anchor="middle">100% raw</text>
-    <line x1="140" y1="-4" x2="140" y2="236" stroke="var(--navy)" stroke-width="1" opacity="0.5"/>
-    <text x="140" y="248" font-size="8" fill="var(--navy)" text-anchor="middle">0%</text>
-    <line x1="320" y1="-4" x2="320" y2="236" stroke="var(--navy)" stroke-width="0.6" stroke-dasharray="1 4" opacity="0.4"/>
-    <text x="320" y="248" font-size="8" fill="var(--text-dim)" text-anchor="middle">50% cut</text>
-
-    <g transform="translate(0 18)">
-      <text x="132" y="14" font-size="9.5" fill="var(--text)" text-anchor="end">chatty service log</text>
-      <text x="132" y="26" font-size="7.5" fill="var(--text-dim)" text-anchor="end">156 lines · 1 ERROR buried</text>
-      <rect x="140" y="2" width="360" height="22" rx="3" fill="var(--rust)" opacity="0.12"/>
-      <rect x="140" y="2" width="27" height="22" rx="3" fill="var(--green)" opacity="0.9" class="dv-grow"/>
-      <g stroke="var(--green)" stroke-width="0.8">
-        <line x1="167" y1="-3" x2="500" y2="-3"/>
-        <path d="M171 -7 L167 -3 L171 1 M496 -7 L500 -3 L496 1" fill="none"/>
-      </g>
-      <text x="333" y="-8" font-size="10" fill="var(--green)" text-anchor="middle" font-weight="600">&#8722;92.5%</text>
-      <text x="510" y="18" font-size="7.5" fill="var(--text-dim)" class="fine-only">ERROR+WARN verbatim</text>
-    </g>
-
-    <g transform="translate(0 86)">
-      <text x="132" y="14" font-size="9.5" fill="var(--text)" text-anchor="end">cargo build failure</text>
-      <text x="132" y="26" font-size="7.5" fill="var(--text-dim)" text-anchor="end">3 compile errors</text>
-      <rect x="140" y="2" width="360" height="22" rx="3" fill="var(--rust)" opacity="0.12"/>
-      <rect x="140" y="2" width="139" height="22" rx="3" fill="var(--green)" opacity="0.9" class="dv-grow" style="animation-delay:.12s"/>
-      <g stroke="var(--green)" stroke-width="0.8">
-        <line x1="279" y1="-3" x2="500" y2="-3"/>
-        <path d="M283 -7 L279 -3 L283 1 M496 -7 L500 -3 L496 1" fill="none"/>
-      </g>
-      <text x="389" y="-8" font-size="10" fill="var(--green)" text-anchor="middle" font-weight="600">&#8722;61.5%</text>
-      <text x="510" y="18" font-size="7.5" fill="var(--text-dim)" class="fine-only">all errors + locs</text>
-    </g>
-
-    <g transform="translate(0 154)">
-      <text x="132" y="14" font-size="9.5" fill="var(--text)" text-anchor="end">npm ERESOLVE conflict</text>
-      <text x="132" y="26" font-size="7.5" fill="var(--text-dim)" text-anchor="end">guard engages</text>
-      <rect x="140" y="2" width="360" height="22" rx="3" fill="var(--slate)" opacity="0.18" stroke="var(--slate)" stroke-width="0.8" stroke-dasharray="3 3"/>
-      <text x="320" y="17" font-size="9" fill="var(--slate)" text-anchor="middle">passes through byte-identical</text>
-      <text x="389" y="-8" font-size="10" fill="var(--slate)" text-anchor="middle" font-weight="600">&#177;0%</text>
-      <text x="510" y="18" font-size="7.5" fill="var(--text-dim)" class="fine-only">never negative</text>
-    </g>
-  </g>
-
-  <g transform="translate(8 318)" font-size="8" fill="var(--text-dim)">
-    <rect x="0" y="-8" width="11" height="11" rx="2" fill="var(--green)" opacity="0.9"/><text x="16" y="1">kept (sent to agent)</text>
-    <rect x="150" y="-8" width="11" height="11" rx="2" fill="var(--rust)" opacity="0.12"/><text x="166" y="1">removed noise</text>
-    <rect x="280" y="-8" width="11" height="11" rx="2" fill="var(--slate)" opacity="0.18"/><text x="296" y="1">guard pass-through (&#177;0%)</text>
-  </g>
-</svg>
-    </div>
-    <figcaption><b>FIG.2</b> — token reduction, golden corpus · bars measured by cargo test · the adapter table above is the copy-paste twin</figcaption>
-  </figure>
 
   <p class="pull anim" style="--i:25">"Your agent reads a short summary — and the <span>receipt is always on disk</span>."</p>
 

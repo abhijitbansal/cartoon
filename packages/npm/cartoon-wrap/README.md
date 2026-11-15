@@ -28,7 +28,7 @@ cartoon stats --since 7d       # how many tokens you've saved
 cartoon logs --last --stdout   # full raw output of the newest run
 ```
 
-Failing test run, before (~4800 tokens) vs after (~300 tokens):
+Failing test run, after cartoon:
 
 ```
 runner: pytest
