@@ -26,6 +26,9 @@ pub struct StatRecord {
 /// Savings on input above this are not savings the agent would have felt.
 pub const VISIBLE_CAP_TOKENS: u64 = 7_500;
 
+/// Report label for the capped saving figure.
+const VISIBLE_SAVING_LABEL: &str = "saved vs what the agent would see";
+
 /// Size at which `stats.jsonl` is rotated to `stats.jsonl.1`.
 pub const LEDGER_MAX_BYTES: u64 = 5 * 1024 * 1024;
 
@@ -184,10 +187,38 @@ fn rotated_path(path: &std::path::Path) -> std::path::PathBuf {
 /// Move a full ledger to `<ledger>.1`, replacing any older one. Keeps the
 /// ledger bounded at about twice the cap; `read_ledger` reads both files.
 fn rotate_if_full(path: &std::path::Path) {
-    let full = std::fs::metadata(path).is_ok_and(|m| m.len() >= LEDGER_MAX_BYTES);
-    if full {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let Ok(opened) = file.metadata() else {
+        return;
+    };
+    if opened.len() >= LEDGER_MAX_BYTES {
+        rotate_if_unchanged(path, &opened);
+    }
+}
+
+/// Rotate only if `path` is still the file this process saw full. Another
+/// cartoon process may have rotated it first and started a fresh live file;
+/// renaming that over `.1` would destroy the history it just preserved.
+/// A few-instruction window remains between the identity check and the
+/// rename; closing it fully would need a lock file, which a best-effort
+/// stats ledger does not warrant.
+fn rotate_if_unchanged(path: &std::path::Path, opened: &std::fs::Metadata) {
+    if is_same_file(path, opened) {
         let _ = std::fs::rename(path, rotated_path(path));
     }
+}
+
+#[cfg(unix)]
+fn is_same_file(path: &std::path::Path, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).is_ok_and(|now| now.dev() == opened.dev() && now.ino() == opened.ino())
+}
+
+#[cfg(not(unix))]
+fn is_same_file(path: &std::path::Path, _opened: &std::fs::Metadata) -> bool {
+    std::fs::metadata(path).is_ok_and(|now| now.len() >= LEDGER_MAX_BYTES)
 }
 
 pub fn build_record(
@@ -323,15 +354,29 @@ pub fn report(since: Option<&str>) -> Result<String> {
     Ok(render_report(&recs, malformed))
 }
 
+/// Show the capped figure under its plain-words label, in the same position
+/// (right after the raw `tokens_saved`). Rebuilds the map: with serde_json's
+/// `preserve_order`, `Map::remove` is a swap-remove and would move the label
+/// to the end.
+fn relabel_visible_saving(agg: Value) -> Value {
+    let Value::Object(map) = agg else {
+        return agg;
+    };
+    Value::Object(
+        map.into_iter()
+            .map(|(k, v)| {
+                if k == "saved_vs_visible" {
+                    (VISIBLE_SAVING_LABEL.to_string(), v)
+                } else {
+                    (k, v)
+                }
+            })
+            .collect(),
+    )
+}
+
 fn render_report(recs: &[StatRecord], malformed: usize) -> String {
-    let mut agg = aggregate(recs);
-    // Show the capped figure under its plain-words label, next to the raw one.
-    if let Some(v) = agg
-        .as_object_mut()
-        .and_then(|o| o.remove("saved_vs_visible"))
-    {
-        agg["saved vs what the agent would see"] = v;
-    }
+    let mut agg = relabel_visible_saving(aggregate(recs));
     if malformed > 0 {
         agg["malformed_lines"] = json!(malformed);
     }
@@ -531,6 +576,42 @@ mod tests {
         assert_eq!(malformed, 0);
         assert_eq!(recs.len(), old_count + 1);
         assert_eq!(recs.last().unwrap().tokens_in, 200);
+    }
+
+    #[test]
+    fn visible_saving_is_listed_right_after_the_raw_figure() {
+        let out = render_report(&[rec(100_000, 500)], 0);
+        let lines: Vec<&str> = out.lines().collect();
+        let raw = lines
+            .iter()
+            .position(|l| l.contains("tokens_saved"))
+            .unwrap_or_else(|| panic!("no tokens_saved line:\n{out}"));
+        assert!(
+            lines[raw + 1].contains("saved vs what the agent would see"),
+            "label must directly follow tokens_saved:\n{out}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotation_skips_when_another_process_already_rotated() {
+        // Process B saw the full ledger, but A rotated it and started a fresh
+        // live file before B's rename. B must not rotate A's fresh file over
+        // the history A just preserved in `.1`.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("stats.jsonl");
+        let rotated = dir.path().join("stats.jsonl.1");
+        std::fs::write(&live, vec![b'x'; LEDGER_MAX_BYTES as usize]).unwrap();
+        let seen_by_b = std::fs::File::open(&live).unwrap().metadata().unwrap();
+
+        // A rotates and appends one record to a fresh live file.
+        std::fs::rename(&live, &rotated).unwrap();
+        append_record_at(&live, &rec(1, 1));
+
+        rotate_if_unchanged(&live, &seen_by_b);
+
+        assert!(std::fs::metadata(&rotated).unwrap().len() >= LEDGER_MAX_BYTES);
+        assert_eq!(std::fs::read_to_string(&live).unwrap().lines().count(), 1);
     }
 
     #[test]
