@@ -509,19 +509,50 @@ pub fn wrap_command_in(
     Some((wrapped, force_deny))
 }
 
-/// Already wrapped: the command word of the segment (after any
-/// `NAME=value` prefix and `xcrun`) is `cartoon`, by basename. A file or
-/// directory merely named `cartoon` doesn't count.
+/// Already wrapped: the tool the segment launches is `cartoon`, by basename.
+/// Looks past any `NAME=value` prefix and every launcher the allowlist
+/// accepts: `xcrun`, the `RUNNERS`, `uvx`, `uv run`, `uv tool run`,
+/// `python* -m`/`--module` and uv's own `-m`. Launcher flags (`-y`,
+/// `--frozen`, `--`) are skipped. A file or directory merely named
+/// `cartoon` doesn't count.
 fn invokes_cartoon(seg: &[Word]) -> bool {
-    let mut words = seg
+    let words: Vec<&str> = seg
         .iter()
         .map(|w| w.text.as_str())
-        .skip_while(|w| env_assignment_name(w).is_some());
-    let first = match words.next() {
-        Some(w) if basename(w) == "xcrun" => words.next(),
-        other => other,
-    };
-    first.is_some_and(|w| basename(w) == "cartoon")
+        .skip_while(|w| env_assignment_name(w).is_some())
+        .collect();
+    let mut rest = words.as_slice();
+    while let Some((&first, tail)) = rest.split_first() {
+        let base = basename(first);
+        if base == "cartoon" {
+            return true;
+        }
+        rest = match base {
+            "xcrun" | "uvx" => skip_launcher_flags(tail),
+            b if RUNNERS.contains(&b) => skip_launcher_flags(tail),
+            "uv" => match tail {
+                ["run", r @ ..] | ["tool", "run", r @ ..] => skip_launcher_flags(r),
+                _ => return false,
+            },
+            "-m" | "--module" => tail,
+            b if b.starts_with("python") => match tail {
+                [m, r @ ..] if matches!(*m, "-m" | "--module") => r,
+                _ => return false,
+            },
+            _ => return false,
+        };
+    }
+    false
+}
+
+/// `words` past any leading launcher flags, stopping at `-m`/`--module`
+/// (uv's module form names the tool next).
+fn skip_launcher_flags<'a, 'b>(words: &'a [&'b str]) -> &'a [&'b str] {
+    let at = words
+        .iter()
+        .position(|w| !w.starts_with('-') || matches!(*w, "-m" | "--module"))
+        .unwrap_or(words.len());
+    &words[at..]
 }
 
 /// How a segment qualified for wrapping.
@@ -1989,6 +2020,43 @@ mod tests {
         assert!(wrap("CI=1 cartoon pytest").is_none());
         let scripts = ["cartoon".to_string()];
         assert!(wrap_command_with_policy("pytest && cartoon", &scripts).is_none());
+        assert!(wrap("python -m cartoon").is_none());
+        // A launcher that would reach the script fallback still can't carry
+        // cartoon past the self-wrap check.
+        let python = ["python".to_string()];
+        assert!(wrap_command_with_policy("python -m cartoon", &python).is_none());
+    }
+
+    #[test]
+    fn invokes_cartoon_sees_through_launchers() {
+        let launched = |cmd: &str| invokes_cartoon(&lex(cmd).unwrap()[0]);
+        for cmd in [
+            "cartoon pytest",
+            "python -m cartoon",
+            "python3 -m cartoon -c x",
+            "python3.12 --module cartoon",
+            "npx cartoon",
+            "bunx -y cartoon",
+            "CI=1 npx cartoon",
+            "uvx cartoon",
+            "uv run cartoon",
+            "uv run --frozen cartoon",
+            "uv tool run cartoon",
+            "uv run python -m cartoon",
+            "uv run -m cartoon",
+            "xcrun cartoon",
+        ] {
+            assert!(launched(cmd), "{cmd}");
+        }
+        for cmd in [
+            "pytest tests/test_cartoon.py",
+            "python -m pytest tests/cartoon",
+            "npx jest cartoon",
+            "uv run pytest cartoon",
+            "uv pip install cartoon",
+        ] {
+            assert!(!launched(cmd), "{cmd}");
+        }
     }
 
     #[test]
