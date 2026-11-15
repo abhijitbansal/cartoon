@@ -431,3 +431,55 @@ fn merged_stderr_before_a_dropped_tail_keeps_the_tool_exit_code() {
     assert!(stdout.contains("boom on stderr"), "merged: {stdout}");
     assert!(!stdout.contains("out 10\n"), "{stdout}");
 }
+
+/// Residuals round: the native-stdout passthrough ignored --merge-streams,
+/// cutting only stdout and printing all of stderr. Measured: 302 lines for
+/// `| tail -2`. The pipe would print the merged tail: 2 lines.
+#[cfg(unix)]
+#[test]
+fn merged_native_passthrough_gets_the_merged_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = r#"for a in "$@"; do case "$a" in --junit-xml=*) f="${a#--junit-xml=}";; esac; done
+printf '<testsuite name="s" tests="1" failures="0" errors="0" skipped="0" time="0.1"><testcase classname="t" name="test_a" time="0.1"/></testsuite>' > "$f"
+printf 'a\nb\nc\n'
+i=1; while [ $i -le 300 ]; do echo "warn $i" >&2; i=$((i+1)); done"#;
+    let path = stub_tool(tmp.path(), "pytest", script);
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["--merge-streams", "-c", "pytest | tail -2"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "warn 299\nwarn 300\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("warn "), "{stderr}");
+    assert!(stderr.contains("tail -2"), "{stderr}");
+}
+
+/// Residuals round: with no raw log (archive cannot be written) the cut is
+/// not applied, and stderr says so.
+#[cfg(unix)]
+#[test]
+fn dropped_tail_without_a_raw_log_prints_everything_and_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = r#"for a in "$@"; do case "$a" in --junit-xml=*) f="${a#--junit-xml=}";; esac; done
+printf '<testsuite name="s" tests="1" failures="0" errors="0" skipped="0" time="0.1"><testcase classname="t" name="test_a" time="0.1"/></testsuite>' > "$f"
+printf 'a\nb\nc\n'"#;
+    let path = stub_tool(tmp.path(), "pytest", script);
+    // A regular file where the state directory should be: archiving fails.
+    let state = tmp.path().join("state-is-a-file");
+    std::fs::write(&state, "").unwrap();
+    let out = cartoon()
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest | tail -n 1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\nc\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("was not applied"), "{stderr}");
+}

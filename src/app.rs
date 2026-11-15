@@ -631,6 +631,14 @@ fn run_with_adapter(
         .and_then(|f| LineCut::parse(f).map(|c| (c, f)));
     let cut_is_noop = parsed_cut.is_some_and(|(c, _)| !run.line_cut_removes(c, opts.merge_streams));
     let cut = parsed_cut.filter(|_| !cut_is_noop && lossy_allowed(archived.as_ref(), cfg));
+    // A cut that would drop lines but has no raw log to keep them: the full
+    // output is printed, and the note says the filter was not applied.
+    let cut_blocked = parsed_cut.filter(|_| !cut_is_noop && cut.is_none());
+    let note_blocked = || {
+        if let Some((_, f)) = cut_blocked {
+            eprintln!("cartoon: pipe filter `{f}` was not applied (no raw log could be written)");
+        }
+    };
     let raw_log = archived.as_ref().map(|r| r.dir.as_path());
     match adapter.parse(captured, &prepared) {
         Ok(ParseOutcome {
@@ -651,7 +659,10 @@ fn run_with_adapter(
                     Some((c, f)) => {
                         cut_passthrough(argv, &run, code, (c, f, raw_log), opts, cfg, run_id, em)
                     }
-                    None => deliver(argv, &run, code, em, cfg, run_id),
+                    None => {
+                        note_blocked();
+                        deliver(argv, &run, code, em, cfg, run_id)
+                    }
                 }
             };
             if !lossy_allowed(archived.as_ref(), cfg) {
@@ -747,18 +758,41 @@ fn run_with_adapter(
             if let Some(native) = adapter.native_stdout(argv, captured) {
                 let native_n = counter.exact(&native);
                 if !pays_for_itself(out_n + err_n, native_n + in_err) {
-                    let native = match parsed_cut.filter(|_| lossy_allowed(archived.as_ref(), cfg))
-                    {
+                    let usable_cut = parsed_cut.filter(|_| lossy_allowed(archived.as_ref(), cfg));
+                    let (native, err_part) = match usable_cut {
+                        // `2>&1 | tail -N`: the cut applies to both streams.
+                        // The native stdout is reconstructed, so its arrival
+                        // order against stderr is lost: stdout, then stderr.
+                        Some((c, f)) if opts.merge_streams && !captured.stderr.is_empty() => {
+                            let sep = if native.is_empty() || native.ends_with('\n') {
+                                ""
+                            } else {
+                                "\n"
+                            };
+                            let merged = format!("{native}{sep}{}", captured.stderr);
+                            let kept = c.apply(merged.as_bytes());
+                            if kept.len() < merged.len() {
+                                disclose_cut(f, raw_log);
+                                let kept = String::from_utf8_lossy(kept).into_owned();
+                                (kept, Part::Text(Cow::Borrowed(""), 0))
+                            } else {
+                                (native, Part::Raw)
+                            }
+                        }
                         Some((c, f)) if c.apply(native.as_bytes()).len() < native.len() => {
                             disclose_cut(f, raw_log);
-                            String::from_utf8_lossy(c.apply(native.as_bytes())).into_owned()
+                            let kept = String::from_utf8_lossy(c.apply(native.as_bytes()));
+                            (kept.into_owned(), Part::Raw)
                         }
-                        _ => native,
+                        _ => {
+                            note_blocked();
+                            (native, Part::Raw)
+                        }
                     };
                     let native_n = counter.count(&native);
                     let em = Emission {
                         out: Part::Text(Cow::Owned(native), native_n),
-                        err: Part::Raw,
+                        err: err_part,
                         in_out: native_n,
                         in_err,
                         mode: "passthrough",

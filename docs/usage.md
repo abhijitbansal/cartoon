@@ -110,8 +110,12 @@ cartoon's whole job. When the string is `<adapter-detected command> |
 `pipe_filter_dropped: "tail -5"` in the report. When no report replaces the
 filter (the report would cost more than the raw output, or the adapter could
 not parse the run), a `head`/`tail` line count is applied to what cartoon
-prints, with a stderr line naming the filter and the raw log, so the output
-is never longer than the pipe would have given. One trailing `2>&1` before
+prints (with `--merge-streams`, to both streams together), with a stderr
+line naming the filter and the raw log. Two exceptions print more than the
+pipe would have: when the raw log cannot be written, the full output is
+printed with a `was not applied` note on stderr; and when a report is
+printed, any raw stream it keeps after the report (an unexplained failure)
+is not cut. One trailing `2>&1` before
 the pipe is stripped and turns `--merge-streams` on, so
 `cartoon -c 'xcodebuild test 2>&1 | tail -40'` still exits with
 xcodebuild's code. Anything else (`grep`, `wc`, `tee`, `xargs`, `sort`,
