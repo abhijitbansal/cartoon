@@ -5,14 +5,14 @@
 //! `AGENTS.md` is the cross-agent backup (see `resolve_agent_doc`).
 //!
 //! This is the instruction-layer companion to `cartoon hook`. The hook is
-//! deterministic but has a blind spot the model has to cover itself: it cannot
-//! rewrite a *piped* command. `pytest | tail` is split on `|` and the
-//! non-allowlisted `tail` segment makes the whole compound fail the auto-approve
-//! check, so it runs raw (by design — a rewrite auto-approves, and nothing may
-//! ride along an allowlisted segment). There the only thing that keeps cartoon
-//! in play is the agent *choosing* to wrap and not pipe, which is exactly what
-//! this directive tells it to do. Hook plus instructions cover far more together
-//! than either does alone.
+//! deterministic but has a blind spot the model has to cover itself: of all
+//! pipes it rewrites only a trailing `| head -n N`, `| tail -n N`,
+//! `| xcbeautify` or `| xcpretty`. Any other piped compound (`pytest | grep
+//! x`) runs raw, by design: a rewrite auto-approves, and nothing may ride
+//! along an allowlisted segment. There the only thing that keeps cartoon in
+//! play is the agent *choosing* to wrap and not pipe, which is exactly what
+//! this directive tells it to do. Agents without the hook rely on it
+//! entirely.
 //!
 //! The directive is wrapped in stable marker comments so install is
 //! idempotent (re-running updates in place) and uninstall removes exactly our
@@ -26,17 +26,18 @@ const MARKER_BEGIN: &str =
     "<!-- BEGIN cartoon instructions (managed by `cartoon instructions`; edit outside this block) -->";
 const MARKER_END: &str = "<!-- END cartoon instructions -->";
 
-/// The directive itself. States what the hook cannot do (rewrite a piped
-/// command), names the recovery commands, and makes no savings claim. Kept
-/// under 1,200 bytes with its markers — it lives in the agent's always-on
-/// context.
+/// The directive itself. States which pipes the hook skips, names the
+/// recovery commands, and makes no savings claim. Kept under 1,200 bytes
+/// with its markers — it lives in the agent's always-on context.
 const BODY: &str = r#"## Noisy dev commands: run them bare under `cartoon`
 
-Run tests, builds, linters and JSON CLIs as `cartoon <cmd>`; the Claude Code
-hook does this for you. Exit codes are mirrored and the raw output is archived.
+Prefix tests, builds, linters and JSON CLIs with `cartoon` (`cartoon <cmd>`;
+in Claude Code the hook adds it). Exit codes are mirrored and the raw output
+is archived.
 
-Never pipe them into `head`, `tail` or `grep`: the cut is lossy, and the hook
-cannot rewrite a piped command. Run them bare. `2>&1` is fine.
+Never pipe them into `head`, `tail` or `grep`: the cut is lossy. The hook
+only rewrites a trailing `| head -n N`, `| tail -n N`, `| xcbeautify` or
+`| xcpretty`; any other pipe skips cartoon. Run them bare. `2>&1` is fine.
 
 Need more than the report shows? Do not rerun. Read the archive:
 - `cartoon logs grep "<pattern>" --last` searches the newest raw output
@@ -286,7 +287,7 @@ fn install(doc: Doc) -> Result<i32> {
     println!(
         "{}\n\
          The agent is now told to wrap noisy commands (test/build/lint/JSON CLIs)\n\
-         and never pipe them — the case the auto-wrap hook can't catch.\n\
+         and never pipe them — the pipes the auto-wrap hook skips.\n\
          For deterministic wrapping too, pair it with: cartoon hook install\n\
          Remove with: cartoon instructions uninstall{}",
         describe(&path, outcome),

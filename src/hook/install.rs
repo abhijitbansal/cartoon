@@ -14,8 +14,8 @@ pub(super) struct Target {
     copilot: bool,
     /// Project scope vs user/home scope.
     project: bool,
-    /// Also write the matching `cartoon instructions` directive (the
-    /// piped-command case the hook can't catch). Opt-in on install.
+    /// Also write the matching `cartoon instructions` directive (the pipes
+    /// the hook skips). Opt-in on install.
     instructions: bool,
 }
 
@@ -85,8 +85,8 @@ fn hook_command() -> String {
 
 pub(super) fn install(t: Target) -> Result<i32> {
     let code = install_claude(t)?;
-    // The hook can't rewrite piped commands; the matching instruction closes
-    // that gap. Offer it (or write it with --instructions) after the hook
+    // The hook rewrites only a trailing `| head|tail -n N` (and the Xcode
+    // beautifiers); the matching instruction covers every other pipe. Offer it (or write it with --instructions) after the hook
     // itself is in place.
     offer_instructions(t)?;
     Ok(code)
@@ -132,7 +132,7 @@ fn uninstall_doc(t: Target) -> crate::instructions::Doc {
     }
 }
 
-/// After a hook install, surface the piped-command gap and the matching
+/// After a hook install, surface the pipes the hook skips and the matching
 /// directive. With `--instructions`, write it outright; otherwise print the
 /// hint and — only on an interactive terminal — offer to write it now.
 fn offer_instructions(t: Target) -> Result<()> {
@@ -152,9 +152,10 @@ fn offer_instructions(t: Target) -> Result<()> {
     // this hint names.
     let instr_flag = crate::instructions::doc_flag(doc);
     println!(
-        "\nHeads-up: the hook can't rewrite *piped* commands — `pytest | tail`\n\
-         slips past it. A matching instruction closes that gap by telling the\n\
-         agent to wrap and never pipe noisy commands:\n    \
+        "\nHeads-up: the hook only rewrites a trailing `| head -n N` or `| tail -n N`\n\
+         (and `| xcbeautify`, `| xcpretty`); any other pipe, such as `pytest | grep x`,\n\
+         skips cartoon. A matching instruction covers it by telling the agent\n\
+         to wrap and never pipe noisy commands:\n    \
          cartoon instructions install{instr_flag}        # writes the directive to {p}\n    \
          (or fold it into install next time: cartoon hook install --instructions)",
         p = path.display()

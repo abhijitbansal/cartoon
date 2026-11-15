@@ -20,12 +20,14 @@ use clap::Parser;
   last [--cmd <substring>]                   re-show the newest run's report
   diff [<id-a> <id-b>] [--cmd <substring>]   fixed / still failing / new
                                              failures vs the previous run
+  setup [--project] [--no-instructions]      hook + instructions block + doctor,
+                                             in one idempotent step
   hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
   instructions (install|uninstall|status|print)
                                              write the wrap/never-pipe directive
                                              (CLAUDE.md if present, else AGENTS.md;
                                              --copilot/--claude/--agents force one)
-                                             — covers the pipe case the hook can't
+                                             — covers the pipes the hook skips
   ingest (<file> | -)                        compress an existing log file
                                              (or stdin: some-cmd | cartoon -)
   mcp                                        MCP server on stdio (run, logs,
@@ -41,7 +43,8 @@ progress, duplicate and blank collapse — non-lossy in practice);
 
 `stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, \
 `instructions`, `setup`, `ingest`, and `mcp` are reserved words (each takes --help); to wrap a \
-binary literally named `stats`, use: cartoon env stats. `last` and `diff` are \
+binary literally named `stats`, use: cartoon env stats. `shim` (removed in 0.8.0) \
+is reserved too. `last` and `diff` are \
 reserved only in the forms above (`cartoon diff a.txt b.txt` wraps diff). A \
 command whose name starts with `-` goes after `--`: cartoon -- --weird-bin"
 )]
@@ -78,8 +81,10 @@ pub struct Cli {
 
     /// Wrap a shell command string (like sh -c). Simple commands are
     /// adapter-detected; strings with shell operators run via the shell
-    /// and compress through the generic ladder. `<adapter cmd> | head|tail|
-    /// grep …` runs the adapter and drops the filter (disclosed).
+    /// and compress through the generic ladder. `<adapter cmd> [2>&1] |
+    /// head|tail|xcbeautify|xcpretty …` runs the adapter and drops the
+    /// filter (disclosed; with no report, a `head`/`tail` line count is
+    /// applied in process). `grep` and `wc` pipes run natively.
     #[arg(short = 'c', long = "shell", value_name = "STRING")]
     pub shell: Option<String>,
 

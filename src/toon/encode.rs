@@ -11,8 +11,10 @@ use serde_json::{Map, Value};
 
 /// Encoder options (spec §13). `delimiter` is the document delimiter:
 /// `,` (default), `\t` or `|`. `list_scalar_arrays` emits a primitive array
-/// as a `key[N]:` list with one `- item` per line instead of one inline row
-/// (still valid TOON); used for tracebacks, where each line is a sentence.
+/// as a `key[N]:` list with one `- item` per line instead of one inline row;
+/// used for tracebacks, where each line is a sentence. Its item quoting
+/// (`list_scalar`) is looser than spec §7.2, so the output is meant for a
+/// model to read, not for a strict TOON decoder.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub delimiter: char,
@@ -310,10 +312,11 @@ fn scalar(v: &Value, delim: char) -> String {
     }
 }
 
-/// A primitive in a `- item` list line. Items are never split on the
-/// delimiter, so (unlike inline rows and tabular cells) a comma, bracket,
-/// brace, backslash or inner quote needs no quotes: only text a reader could
-/// take for structure does (see `list_item_needs_quotes`).
+/// A primitive in a `- item` list line. Deliberately looser than spec §7.2,
+/// which quotes a string holding the delimiter, a bracket, a brace, a
+/// backslash or a quote in any position: a reader never splits a list item
+/// on the delimiter, so only text it could take for structure is quoted here
+/// (see `list_item_needs_quotes`). Not conformant TOON for those items.
 fn list_scalar(v: &Value) -> String {
     match v {
         Value::String(s) if list_item_needs_quotes(s) => quote(s),
