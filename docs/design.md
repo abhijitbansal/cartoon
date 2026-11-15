@@ -220,6 +220,6 @@ not billing truth; good enough for the running score.
 - `uv tool install cartoon` / `npm i -g cartoon-wrap` / `cargo install
   cartoon` all yield a working `cartoon` binary.
 - `cartoon pytest` on a real failing suite: agent can fix the failure from
-  TOON output alone, with ≥70% token reduction vs raw output on typical suites.
+  TOON output alone, with a measurable token reduction vs raw output (see benchmarks/README.md).
 - `cartoon <unknown-cli>` never corrupts output or exit codes.
 - `cartoon stats` shows cumulative savings.

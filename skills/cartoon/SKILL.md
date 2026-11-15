@@ -10,7 +10,7 @@ license: MIT
 re-rendered as [TOON](https://github.com/toon-format/toon), a compact
 format built for LLM consumption: test passes collapse to counts, failures
 keep full actionable detail (location, message, user-code traceback).
-Verbose test runs shrink ~70% (an estimate; far less against already-quiet flags like `pytest -q`). Exit codes and behavior are unchanged.
+Verbose test runs shrink a lot (see benchmarks/README.md; far less against already-quiet flags like `pytest -q`). Exit codes and behavior are unchanged.
 
 ## Check it is installed (once per session)
 

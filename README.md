@@ -3,9 +3,9 @@
 **Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-far fewer tokens: 43–89% less than a verbose test run in the
-[benchmark](benchmarks/README.md) (~70% is the rough average; against
-already-quiet flags like `pytest -q` the gain is small).
+far fewer tokens on verbose runs. The [benchmark](benchmarks/README.md)
+names each baseline and shows the measured reduction; against
+already-quiet flags like `pytest -q` the gain is small.
 
 A cartoon is a compressed rendering of reality. So is this.
 
@@ -34,7 +34,7 @@ distro: old glibc, Alpine, `python:*` images. PyPI also ships an sdist, so
 `pip` builds from source (needs a Rust toolchain) where no wheel fits.
 
 `install.sh` puts the binary in `~/.local/bin` (override with
-`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.7.0`) after
+`CARTOON_INSTALL_DIR`; pin a release with `CARTOON_VERSION=0.8.0`) after
 checking it against the release's `SHA256SUMS`. Release tarballs also carry
 build provenance: `gh attestation verify cartoon-<target>.tar.gz -R
 abhijitbansal/cartoon`.
@@ -203,7 +203,7 @@ change shell state (`cd`, `export`, `source`) pass through untouched, and
 anything unrecognized is left alone (fail-open). The net-savings guard
 still applies — worst case the output is byte-identical.
 
-### What the hook will not auto-approve (0.7.0)
+### What the hook will not auto-approve (0.8.0)
 
 Because a rewrite is emitted with `permissionDecision: "allow"`, the
 allowlist is deliberately narrow; anything below reaches your normal

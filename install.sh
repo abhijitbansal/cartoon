@@ -7,7 +7,7 @@
 # The tarball is verified against the release's SHA256SUMS before install.
 #
 # Environment:
-#   CARTOON_VERSION      release to install, e.g. 0.7.0 (default: latest)
+#   CARTOON_VERSION      release to install, e.g. 0.8.0 (default: latest)
 #   CARTOON_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
 #   CARTOON_BASE_URL     release download base (default: GitHub releases;
 #                        tests point it at a local mirror)

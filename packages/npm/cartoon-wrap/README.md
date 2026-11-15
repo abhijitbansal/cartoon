@@ -3,7 +3,7 @@
 **Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-~70% fewer tokens on verbose test runs (an estimate; see the
+far fewer tokens on verbose test runs (see the
 [benchmark](https://github.com/abhijitbansal/cartoon/blob/main/benchmarks/README.md)).
 
 This package installs the `cartoon` binary (prebuilt per platform via the
