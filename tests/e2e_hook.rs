@@ -6,7 +6,9 @@ use predicates::str::contains;
 use std::fs;
 
 /// Every binary invocation in tests/ points XDG_STATE_HOME/XDG_CONFIG_HOME
-/// at temp dirs (enforced by tests/isolation_lint.rs).
+/// at temp dirs (enforced by tests/isolation_lint.rs). HOME and
+/// CLAUDE_CONFIG_DIR point at empty temp dirs too, so the hook never reads
+/// the developer's real Claude Code permission rules.
 fn isolated_state() -> &'static tempfile::TempDir {
     static STATE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     STATE.get_or_init(|| tempfile::tempdir().expect("temp state dir"))
@@ -16,6 +18,8 @@ fn cartoon() -> Command {
     let mut cmd = Command::cargo_bin("cartoon").unwrap();
     cmd.env("XDG_STATE_HOME", isolated_state().path().join("state"))
         .env("XDG_CONFIG_HOME", isolated_state().path().join("config"))
+        .env("HOME", isolated_state().path().join("home"))
+        .env("CLAUDE_CONFIG_DIR", isolated_state().path().join("claude"))
         .env_remove("CARTOON_NO_WRAP");
     cmd
 }
@@ -26,13 +30,93 @@ fn rewrite(cwd: &std::path::Path, command: &str) -> String {
         "cwd": cwd,
         "tool_input": { "command": command },
     });
-    let out = cartoon()
+    rewrite_event(cartoon(), cwd, &event)
+}
+
+fn rewrite_event(mut cmd: Command, cwd: &std::path::Path, event: &serde_json::Value) -> String {
+    let out = cmd
         .current_dir(cwd)
         .args(["hook", "rewrite"])
         .write_stdin(event.to_string())
         .assert()
         .success();
     String::from_utf8(out.get_output().stdout.clone()).unwrap()
+}
+
+fn write_settings(path: &std::path::Path, body: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, body).unwrap();
+}
+
+/// A temp HOME (with its own empty CLAUDE_CONFIG_DIR) and a temp project.
+fn home_and_project() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let proj = tmp.path().join("proj");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&proj).unwrap();
+    (tmp, home, proj)
+}
+
+fn cartoon_with_home(home: &std::path::Path) -> Command {
+    let mut cmd = cartoon();
+    cmd.env("HOME", home)
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude"));
+    cmd
+}
+
+fn bash_event(cwd: &std::path::Path, command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "tool_name": "Bash",
+        "cwd": cwd,
+        "tool_input": { "command": command },
+    })
+}
+
+#[test]
+fn deny_rule_in_project_settings_emits_nothing() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+    );
+    let event = bash_event(&proj, "make test && make deploy");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
+
+#[test]
+fn ask_rule_in_home_settings_emits_nothing() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &home.join(".claude/settings.json"),
+        r#"{"permissions":{"ask":["Bash(pytest:*)"]}}"#,
+    );
+    let event = bash_event(&proj, "pytest -q");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
+
+#[test]
+fn no_rules_still_rewrites() {
+    let (_tmp, home, proj) = home_and_project();
+    let event = bash_event(&proj, "pytest -q");
+    let out = rewrite_event(cartoon_with_home(&home), &proj, &event);
+    assert!(out.contains("updatedInput"), "{out}");
+}
+
+#[test]
+fn plan_mode_emits_nothing() {
+    let (_tmp, home, proj) = home_and_project();
+    let mut event = bash_event(&proj, "pytest");
+    event["permission_mode"] = serde_json::json!("plan");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
+
+#[test]
+fn malformed_settings_emit_nothing() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(&proj.join(".claude/settings.local.json"), "{oops");
+    let event = bash_event(&proj, "pytest -q");
+    assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
 }
 
 #[test]

@@ -22,6 +22,23 @@
 //! other subcommands mutate state. Infra CLIs (docker, kubectl, terraform,
 //! gh, aws) are deliberately excluded even though they are noisy.
 //!
+//! Permission rules: Claude Code evaluates the user's `permissions.ask` /
+//! `permissions.deny` rules against the command the hook *returns*.
+//! Measured 2026-11-15 on Claude Code 2.1.325 (headless `claude -p`): with a
+//! `deny` or `ask` rule `Bash(make deploy:*)`, `make deploy` is blocked
+//! without the hook but ran with it, because the rule never matches
+//! `cartoon --merge-streams -c 'make deploy'` and the hook said `allow`.
+//! So before any rewrite the hook loads every Bash `ask`/`deny` rule from
+//! the user, project (cwd and ancestors, `settings.json` and
+//! `settings.local.json`) and managed settings (`permissions.rs`) and emits
+//! nothing when one could match the original command, any segment of it
+//! (split on `&&`, `||`, `;`, `|`), or a segment without its `NAME=value`
+//! prefix. Matching errs towards guarding: an unreadable settings file, a
+//! bare `Bash` rule or rule syntax not understood guards every command. A
+//! session in `plan` permission mode (`permission_mode` in the event) never
+//! gets a rewrite either. Rules passed with `--settings` or delivered as
+//! remote managed policy are not visible to the hook.
+//!
 //! Allowlist decisions (2026-09-05, tightened 2026-10-02):
 //!   - `make` and `pre-commit` execute project-defined recipes yet stay
 //!     allowlisted: they are the canonical dev-loop entry points and the
@@ -74,9 +91,12 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod install;
+mod permissions;
+
+use permissions::UserRules;
 
 pub use install::status_rows;
 
@@ -639,10 +659,44 @@ fn rewrite_from_stdin(deny: bool) -> Result<i32> {
         .as_deref()
         .map(|cwd| crate::config::load_merged(cwd).wrap_scripts)
         .unwrap_or_default();
-    if let Some(out) = rewrite_decision_in(&input, deny, &wrap_scripts, cwd.as_deref()) {
+    // No directory to resolve project settings from → emit nothing.
+    let Some(rules) = user_rules_for(&input, cwd.as_deref()) else {
+        return Ok(0);
+    };
+    if let Some(out) = rewrite_decision_in(&input, deny, &wrap_scripts, cwd.as_deref(), &rules) {
         println!("{out}");
     }
     Ok(0)
+}
+
+/// The user's Bash `ask`/`deny` rules as seen from the directory the command
+/// runs in: the event's absolute `cwd`, else `fallback` (the hook's own cwd).
+/// None when neither is known, or the event is not JSON (no rewrite follows).
+fn user_rules_for(input: &str, fallback: Option<&Path>) -> Option<UserRules> {
+    let v: Value = serde_json::from_str(input).ok()?;
+    let dir = event_cwd(&v).or(fallback)?;
+    let env_path = |name: &str| {
+        std::env::var_os(name)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    };
+    let home = env_path("HOME");
+    let config_dir = env_path("CLAUDE_CONFIG_DIR");
+    let managed = permissions::managed_settings_path();
+    Some(permissions::load_user_rules(
+        dir,
+        home.as_deref(),
+        config_dir.as_deref(),
+        managed.as_deref(),
+    ))
+}
+
+/// The event's `cwd` when it is an absolute path.
+fn event_cwd(v: &Value) -> Option<&Path> {
+    v.get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_absolute())
 }
 
 /// Pull the shell command, the tool-input object to preserve, and the agent
@@ -694,27 +748,31 @@ pub fn rewrite_decision_with_scripts(
     deny: bool,
     wrap_scripts: &[String],
 ) -> Option<String> {
-    rewrite_decision_in(input, deny, wrap_scripts, None)
+    rewrite_decision_in(input, deny, wrap_scripts, None, &UserRules::default())
 }
 
 /// The project root absolute path arguments must stay under: the event's
 /// `cwd` (the directory the command will run in), else `fallback` (the
 /// hook's own cwd). Neither known → no absolute path is accepted.
+///
+/// Emits nothing — not even deny-with-suggestion, whose re-run hint would
+/// itself dodge the rule — when the session is in `plan` permission mode or
+/// one of the user's Bash `ask`/`deny` `rules` could match the command.
 fn rewrite_decision_in(
     input: &str,
     deny: bool,
     wrap_scripts: &[String],
     fallback: Option<&Path>,
+    rules: &UserRules,
 ) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
     let (cmd, tool_input, surface) = extract(&v)?;
-    let root = v
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(Path::new)
-        .filter(|p| p.is_absolute())
-        .or(fallback);
+    let root = event_cwd(&v).or(fallback);
     let (wrapped, force_deny) = wrap_command_in(&cmd, wrap_scripts, root)?;
+    let plan_mode = v.get("permission_mode").and_then(Value::as_str) == Some("plan");
+    if plan_mode || permissions::is_guarded(&cmd, rules) {
+        return None;
+    }
     let out = if deny || force_deny || !surface.supports_rewrite() {
         deny_output(&wrapped)
     } else {
@@ -1289,6 +1347,35 @@ fn uv_wraps_noisy(argv: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn guard(rules: &[&str]) -> UserRules {
+        UserRules {
+            guards: rules.iter().map(|s| s.to_string()).collect(),
+            unreadable: false,
+        }
+    }
+
+    #[test]
+    fn plan_mode_never_rewrites() {
+        let input =
+            r#"{"tool_name":"Bash","permission_mode":"plan","tool_input":{"command":"pytest"}}"#;
+        assert!(rewrite_decision(input, false).is_none());
+        assert!(rewrite_decision(input, true).is_none());
+        let other = r#"{"tool_name":"Bash","permission_mode":"acceptEdits","tool_input":{"command":"pytest"}}"#;
+        assert!(rewrite_decision(other, false).is_some());
+    }
+
+    #[test]
+    fn guarded_command_emits_neither_allow_nor_deny() {
+        let input = r#"{"tool_name":"Bash","tool_input":{"command":"pytest -q && ./build.sh"}}"#;
+        let scripts = ["./build.sh".to_string()];
+        // Unguarded, the script match forces deny-with-suggestion.
+        assert!(rewrite_decision_in(input, false, &scripts, None, &UserRules::default()).is_some());
+        // Guarded, nothing at all: the suggested re-run would dodge the rule.
+        let rules = guard(&["Bash(pytest:*)"]);
+        assert!(rewrite_decision_in(input, false, &scripts, None, &rules).is_none());
+        assert!(rewrite_decision_in(input, true, &scripts, None, &rules).is_none());
+    }
 
     #[test]
     fn package_test_script_forms_and_mvnw_wrap_but_other_scripts_do_not() {
