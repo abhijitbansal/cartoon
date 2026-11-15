@@ -354,6 +354,7 @@ const BLOCK_MARKER: &str = "BEGIN cartoon instructions";
 fn setup_in(home: &std::path::Path, project: &std::path::Path, args: &[&str]) -> Output {
     cartoon()
         .env("HOME", home)
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
         .current_dir(project)
         .arg("setup")
         .args(args)

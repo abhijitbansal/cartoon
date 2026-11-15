@@ -63,8 +63,8 @@ const PLUGIN_ID: &str = "cartoon@cartoon";
 /// and project-local.
 fn plugin_settings_paths() -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        paths.push(home.join(".claude/settings.json"));
+    if let Some(user) = crate::hook::user_settings_path() {
+        paths.push(user);
     }
     paths.push(".claude/settings.json".into());
     paths.push(".claude/settings.local.json".into());
@@ -100,6 +100,8 @@ fn plugin_rows() -> Vec<String> {
 #[derive(Clone, Copy, Default)]
 struct HookSummary {
     installed: bool,
+    /// An older entry of ours that still wraps (refresh advised).
+    outdated: bool,
     stale: bool,
     legacy: bool,
 }
@@ -109,6 +111,7 @@ fn summarize_hooks(rows: &[crate::hook::HookRow]) -> HookSummary {
     let any = |state| rows.iter().any(|r| r.state == state);
     HookSummary {
         installed: any(HookState::Installed),
+        outdated: any(HookState::Outdated),
         stale: any(HookState::Stale),
         legacy: any(HookState::Legacy),
     }
@@ -124,14 +127,21 @@ fn advice(plugin: bool, hook: HookSummary) -> String {
          cartoon hook install, that would add a duplicate hook"
     } else if hook.installed {
         "hook installed"
+    } else if hook.outdated {
+        "hook installed, older entry (still wraps) → cartoon hook install refreshes it"
     } else if hook.stale {
         "hook stale → cartoon hook install"
     } else {
         "hook not installed → cartoon hook install (or enable the cartoon Claude Code plugin)"
     };
     let mut notes = String::new();
-    if hook.stale && (plugin || hook.installed) {
+    if hook.stale && (plugin || hook.installed || hook.outdated) {
         notes.push_str(" · stale hook entry → cartoon hook install refreshes it");
+    }
+    if hook.outdated && plugin {
+        notes.push_str(
+            " · a settings.json hook entry also wraps (duplicate) → cartoon hook uninstall",
+        );
     }
     if hook.legacy {
         notes.push_str(" · legacy Copilot hook file → cartoon hook uninstall --copilot");
@@ -154,7 +164,10 @@ pub fn report() -> String {
             json!({
                 "path": r.path,
                 "surface": r.surface,
-                "installed": r.state == crate::hook::HookState::Installed,
+                "installed": matches!(
+                    r.state,
+                    crate::hook::HookState::Installed | crate::hook::HookState::Outdated
+                ),
                 "state": r.state.label(),
             })
         })

@@ -376,13 +376,96 @@ fn hook_install_copilot_rejected() {
 }
 
 #[test]
-fn hook_rewrite_rejects_flags() {
+fn hook_rewrite_rejects_unknown_flags() {
     cartoon()
-        .args(["hook", "rewrite", "--deny-mode"])
+        .args(["hook", "rewrite", "--nope"])
         .write_stdin("{}")
         .assert()
         .failure()
-        .stderr(contains("removed in 0.8.0"));
+        .stderr(contains("takes no flags"));
+}
+
+#[test]
+fn hook_rewrite_deny_mode_notes_and_exits_zero() {
+    // Final review M4: a hand-written entry without `|| exit 0` must not
+    // block every Bash call.
+    let tmp = tempfile::tempdir().unwrap();
+    let event = bash_event(tmp.path(), "pytest -q");
+    cartoon()
+        .args(["hook", "rewrite", "--deny-mode"])
+        .write_stdin(event.to_string())
+        .assert()
+        .code(0)
+        .stdout("")
+        .stderr(contains("removed in 0.8.0"))
+        .stderr(contains("cartoon hook install"));
+}
+
+#[test]
+fn install_honours_claude_config_dir() {
+    // Final review M12: install, status and the rule reader agree.
+    let (tmp, home, proj) = home_and_project();
+    let config = tmp.path().join("config-dir");
+    let mut cmd = cartoon();
+    cmd.env("HOME", &home)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .current_dir(&proj)
+        .args(["hook", "install"])
+        .assert()
+        .success();
+    assert!(config.join("settings.json").exists());
+    assert!(!home.join(".claude/settings.json").exists());
+    let mut cmd = cartoon();
+    let out = cmd
+        .env("HOME", &home)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .current_dir(&proj)
+        .args(["hook", "status"])
+        .assert()
+        .success();
+    let status = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        status.contains("config-dir/settings.json (Claude Code): installed"),
+        "{status}"
+    );
+}
+
+#[test]
+fn setup_keeps_a_guard_hook_that_shares_our_entry() {
+    // Final review I8, measured: `cartoon setup` deleted `my-guard.sh`.
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &home.join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_in_terminal","hooks":[{"type":"command","command":"my-guard.sh"},{"type":"command","command":"command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite || exit 0"}]}]}}"#,
+    );
+    run_in(&home, &proj, &["hook", "install"]);
+    let settings = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+    assert!(settings.contains("my-guard.sh"), "{settings}");
+    assert_eq!(
+        settings.matches("cartoon hook rewrite").count(),
+        1,
+        "{settings}"
+    );
+    run_in(&home, &proj, &["hook", "uninstall"]);
+    let settings = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+    assert!(settings.contains("my-guard.sh"), "{settings}");
+    assert!(!settings.contains("cartoon hook rewrite"), "{settings}");
+}
+
+#[test]
+fn status_calls_an_old_allow_mode_entry_outdated_not_dead() {
+    // Final review M2: the 0.7 matcher with the plain command still wraps.
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &home.join(".claude/settings.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_in_terminal","hooks":[{"type":"command","command":"command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite || exit 0"}]}]}}"#,
+    );
+    let status = run_in(&home, &proj, &["hook", "status"]);
+    assert!(status.contains("still wraps"), "{status}");
+    assert!(!status.contains("no longer wraps"), "{status}");
+    let out = run_in(&home, &proj, &["doctor"]);
+    assert!(out.contains("still wraps"), "{out}");
+    assert!(!out.contains("# hook not installed"), "{out}");
 }
 
 #[test]
@@ -444,8 +527,7 @@ fn install_migrates_a_pre_0_8_entry_in_place() {
 const PRE_0_8_ENTRY: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_in_terminal","hooks":[{"type":"command","command":"command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0"}]}]}}"#;
 
 fn run_in(home: &std::path::Path, proj: &std::path::Path, args: &[&str]) -> String {
-    let out = cartoon()
-        .env("HOME", home)
+    let out = cartoon_with_home(home)
         .current_dir(proj)
         .args(args)
         .assert()
@@ -474,6 +556,7 @@ fn status_and_doctor_flag_a_pre_0_8_entry_as_stale() {
     write_settings(&home.join(".claude/settings.json"), PRE_0_8_ENTRY);
     let status = run_in(&home, &proj, &["hook", "status"]);
     assert!(status.contains("stale"), "{status}");
+    assert!(status.contains("no longer wraps"), "{status}");
     assert!(!status.contains(": installed"), "{status}");
     let out = run_in(&home, &proj, &["doctor"]);
     assert!(out.contains("stale"), "{out}");

@@ -146,7 +146,7 @@ mod shapes;
 use permissions::UserRules;
 use policy::{args_ok, side_effect_free_target, tool_args_ok};
 
-pub use install::{install_claude_hook, status_rows, HookRow, HookState};
+pub use install::{install_claude_hook, status_rows, user_settings_path, HookRow, HookState};
 
 /// Wrap regardless of arguments.
 pub const ALWAYS: &[&str] = &[
@@ -286,6 +286,14 @@ const STATE_BUILTINS: &[&str] = &[
 pub fn run(args: &[String]) -> Result<i32> {
     match args.first().map(String::as_str) {
         Some("rewrite") => {
+            if args.get(1).map(String::as_str) == Some("--deny-mode") {
+                // A pre-0.8 entry. Exit 0 and emit nothing, so even a
+                // hand-written entry without `|| exit 0` never blocks a call.
+                eprintln!(
+                    "cartoon: --deny-mode was removed in 0.8.0, so this hook entry no longer wraps; run `cartoon hook install` to refresh it"
+                );
+                return Ok(0);
+            }
             reject_rewrite_flags(&args[1..])?;
             rewrite_from_stdin()
         }
@@ -298,15 +306,11 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
 }
 
-/// `hook rewrite` takes no flags. An error here is safe: the installed hook
-/// command ends in `|| exit 0`, so a stale entry (`--deny-mode`, written
-/// before 0.8.0) lets commands through unwrapped instead of blocking them.
+/// `hook rewrite` takes no flags (`--deny-mode` is handled before this).
+/// An error here is safe behind the installed command's `|| exit 0`.
 fn reject_rewrite_flags(flags: &[String]) -> Result<()> {
     match flags.first().map(String::as_str) {
         None => Ok(()),
-        Some("--deny-mode") => bail!(
-            "--deny-mode was removed in 0.8.0 (deny mode is gone); `cartoon hook rewrite` takes no flags. Re-run `cartoon hook install` to refresh the installed entry"
-        ),
         Some(other) => bail!("unknown argument {other}; `cartoon hook rewrite` takes no flags"),
     }
 }

@@ -195,10 +195,25 @@ fn claude_settings_path(project: bool) -> Result<PathBuf> {
     if project {
         Ok(PathBuf::from(".claude/settings.json"))
     } else {
-        dirs::home_dir()
-            .map(|h| h.join(".claude/settings.json"))
-            .ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))
+        user_settings_path().ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))
     }
+}
+
+/// The user-scope Claude Code settings file: `$CLAUDE_CONFIG_DIR/settings.json`
+/// when that is set, else `~/.claude/settings.json`, the same file the
+/// hook's rule reader loads. Shared by install, uninstall, status, doctor.
+pub fn user_settings_path() -> Option<PathBuf> {
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    user_settings_path_from(dirs::home_dir().as_deref(), config_dir.as_deref())
+}
+
+fn user_settings_path_from(home: Option<&Path>, config_dir: Option<&Path>) -> Option<PathBuf> {
+    config_dir
+        .map(Path::to_path_buf)
+        .or_else(|| home.map(|h| h.join(".claude")))
+        .map(|d| d.join("settings.json"))
 }
 
 /// The `PreToolUse` entry: Claude Code's `Bash` tool only.
@@ -209,23 +224,30 @@ fn claude_entry() -> Value {
     })
 }
 
+/// A hook object whose command carries `HOOK_MARKER`.
+fn is_our_hook(hook: &Value) -> bool {
+    hook["command"]
+        .as_str()
+        .is_some_and(|c| c.contains(HOOK_MARKER))
+}
+
 fn is_our_entry(entry: &Value) -> bool {
     entry["hooks"]
         .as_array()
-        .map(|hs| {
-            hs.iter().any(|h| {
-                h["command"]
-                    .as_str()
-                    .is_some_and(|c| c.contains(HOOK_MARKER))
-            })
-        })
-        .unwrap_or(false)
+        .is_some_and(|hs| hs.iter().any(is_our_hook))
+}
+
+/// How many of our hook objects the whole `PreToolUse` array holds.
+fn our_hook_count(arr: &[Value]) -> usize {
+    arr.iter()
+        .filter_map(|e| e["hooks"].as_array())
+        .flatten()
+        .filter(|h| is_our_hook(h))
+        .count()
 }
 
 /// Is our entry exactly what `claude_entry()` writes today (matcher and
-/// command)? A pre-0.8 entry (`Bash|run_in_terminal` matcher, or a
-/// `--deny-mode` command that `hook rewrite` now refuses) is ours but stale:
-/// it wraps nothing until `hook install` refreshes it.
+/// command)? Other hooks in the same entry don't matter.
 fn entry_is_current(entry: &Value) -> bool {
     let want = claude_entry();
     entry["matcher"] == want["matcher"]
@@ -235,29 +257,92 @@ fn entry_is_current(entry: &Value) -> bool {
         })
 }
 
+/// Does this entry of ours still wrap under 0.8? A pre-0.8 allow-mode entry
+/// (`Bash|run_in_terminal` matcher, plain command) does; a `--deny-mode`
+/// command (refused by `hook rewrite`) or a matcher that misses `Bash`
+/// does not.
+fn entry_still_wraps(entry: &Value) -> bool {
+    let matcher = entry["matcher"].as_str().unwrap_or("");
+    let matches_bash =
+        matches!(matcher, "" | "*" | ".*") || matcher.split('|').any(|m| m.trim() == "Bash");
+    matches_bash
+        && entry["hooks"].as_array().is_some_and(|hs| {
+            hs.iter().any(|h| {
+                is_our_hook(h)
+                    && h["command"]
+                        .as_str()
+                        .is_some_and(|c| !c.contains("--deny-mode"))
+            })
+        })
+}
+
 /// Outcome of inserting our entry into a settings `PreToolUse` array.
 #[derive(Debug, PartialEq, Eq)]
 enum Upsert {
     Added,
     Unchanged,
-    /// Our entry was present in an older shape (pre-0.8 matcher or
-    /// `--deny-mode`) and has been replaced in place.
+    /// Our hook was present in an older shape (pre-0.8 matcher,
+    /// `--deny-mode`) or more than once, and has been refreshed.
     Refreshed,
 }
 
+/// Insert or refresh our hook, touching nothing else. Only hook objects
+/// whose command carries `HOOK_MARKER` are ours: other hooks in the same
+/// entry keep their entry and matcher. Every entry of ours is refreshed or
+/// dropped, so exactly one of our hooks remains. An entry holding only our
+/// hook is rewritten in place (matcher `Bash`, current command, other keys
+/// kept); otherwise our hook moves into an entry of its own.
 fn upsert_claude_entry(arr: &mut Vec<Value>) -> Upsert {
-    let want = claude_entry();
-    match arr.iter_mut().find(|e| is_our_entry(e)) {
-        None => {
-            arr.push(want);
-            Upsert::Added
+    let ours: Vec<&Value> = arr.iter().filter(|e| is_our_entry(e)).collect();
+    if ours.is_empty() {
+        arr.push(claude_entry());
+        return Upsert::Added;
+    }
+    if ours.len() == 1 && entry_is_current(ours[0]) && our_hook_count(arr) == 1 {
+        return Upsert::Unchanged;
+    }
+    let mut placed = false;
+    let mut out = Vec::with_capacity(arr.len() + 1);
+    for entry in arr.drain(..) {
+        if !is_our_entry(&entry) {
+            out.push(entry);
+            continue;
         }
-        Some(existing) if entry_is_current(existing) => Upsert::Unchanged,
-        Some(existing) => {
-            *existing = want;
-            Upsert::Refreshed
+        let hooks = entry["hooks"].as_array().cloned().unwrap_or_default();
+        let (mine, others): (Vec<Value>, Vec<Value>) = hooks.into_iter().partition(is_our_hook);
+        if !others.is_empty() {
+            let mut kept = entry;
+            kept["hooks"] = Value::Array(others);
+            out.push(kept);
+        } else if !placed {
+            let mut hook = mine.into_iter().next().unwrap_or_else(|| json!({}));
+            hook["type"] = json!("command");
+            hook["command"] = json!(hook_command());
+            let mut refreshed = entry;
+            refreshed["matcher"] = json!("Bash");
+            refreshed["hooks"] = json!([hook]);
+            out.push(refreshed);
+            placed = true;
         }
     }
+    if !placed {
+        out.push(claude_entry());
+    }
+    *arr = out;
+    Upsert::Refreshed
+}
+
+/// Remove every hook object of ours, and an entry left with no hooks.
+/// Other hooks keep their entry. True when anything was removed.
+fn remove_claude_hooks(arr: &mut Vec<Value>) -> bool {
+    let before = our_hook_count(arr);
+    for entry in arr.iter_mut() {
+        if let Some(hooks) = entry["hooks"].as_array_mut() {
+            hooks.retain(|h| !is_our_hook(h));
+        }
+    }
+    arr.retain(|e| e["hooks"].as_array().is_none_or(|hs| !hs.is_empty()));
+    before > 0
 }
 
 fn install_claude(t: Target) -> Result<i32> {
@@ -318,9 +403,7 @@ fn uninstall_claude(t: Target) -> Result<i32> {
         .and_then(|h| h.get_mut("PreToolUse"))
         .and_then(Value::as_array_mut)
     {
-        let before = arr.len();
-        arr.retain(|e| !is_our_entry(e));
-        removed = arr.len() != before;
+        removed = remove_claude_hooks(arr);
     }
     if removed {
         write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
@@ -408,10 +491,15 @@ fn claude_entry_state(path: &Path) -> HookState {
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v["hooks"]["PreToolUse"].as_array().cloned())
         .unwrap_or_default();
-    match entries.iter().find(|e| is_our_entry(e)) {
-        None => HookState::Missing,
-        Some(e) if entry_is_current(e) => HookState::Installed,
-        Some(_) => HookState::Stale,
+    let ours: Vec<&Value> = entries.iter().filter(|e| is_our_entry(e)).collect();
+    if ours.is_empty() {
+        HookState::Missing
+    } else if ours.len() == 1 && entry_is_current(ours[0]) && our_hook_count(&entries) == 1 {
+        HookState::Installed
+    } else if ours.iter().any(|e| entry_still_wraps(e)) {
+        HookState::Outdated
+    } else {
+        HookState::Stale
     }
 }
 
@@ -422,7 +510,11 @@ fn claude_entry_state(path: &Path) -> HookState {
 pub enum HookState {
     /// Our entry is present and current.
     Installed,
-    /// Our entry is present in a pre-0.8 shape that no longer wraps.
+    /// Our hook is present in an older shape (the pre-0.8 matcher) or more
+    /// than once, and still wraps; `hook install` refreshes it.
+    Outdated,
+    /// Our hook is present only in a pre-0.8 `--deny-mode` shape (or under a
+    /// matcher that misses `Bash`), so it no longer wraps.
     Stale,
     Missing,
     /// A Copilot CLI hook file from before 0.8.0: dead weight, never a
@@ -434,7 +526,12 @@ impl HookState {
     pub fn label(self) -> &'static str {
         match self {
             Self::Installed => "installed",
-            Self::Stale => "stale (pre-0.8 entry, no longer wraps): re-run `cartoon hook install`",
+            Self::Outdated => {
+                "installed, older entry (still wraps): re-run `cartoon hook install` to refresh it"
+            }
+            Self::Stale => {
+                "stale (pre-0.8 `--deny-mode` entry, no longer wraps): re-run `cartoon hook install`"
+            }
             Self::Missing => "not installed",
             Self::Legacy => {
                 "legacy, unused since 0.8.0: remove with `cartoon hook uninstall --copilot`"
@@ -501,6 +598,104 @@ mod tests {
         assert_eq!(arr.len(), 1);
         let mut empty = Vec::new();
         assert_eq!(upsert_claude_entry(&mut empty), Upsert::Added);
+    }
+
+    fn guard_hook() -> Value {
+        json!({ "type": "command", "command": "~/bin/my-guard.sh" })
+    }
+
+    fn old_cartoon_hook(cmd: &str) -> Value {
+        json!({ "type": "command", "command": format!("command -v cartoon >/dev/null 2>&1 && {cmd} || exit 0") })
+    }
+
+    #[test]
+    fn refresh_keeps_other_hooks_that_share_our_entry() {
+        // Final review I8: refreshing used to replace the whole entry and
+        // delete the user's guard hook.
+        let shared = json!({
+            "matcher": "Bash|run_in_terminal",
+            "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")]
+        });
+        let mut arr = vec![shared];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        assert_eq!(
+            arr,
+            vec![
+                json!({ "matcher": "Bash|run_in_terminal", "hooks": [guard_hook()] }),
+                claude_entry(),
+            ]
+        );
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Unchanged);
+    }
+
+    #[test]
+    fn refresh_changes_the_matcher_only_when_ours_is_the_sole_hook() {
+        let mut hook = old_cartoon_hook("cartoon hook rewrite --deny-mode");
+        hook["timeout"] = json!(5);
+        let mut arr = vec![
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+            json!({ "matcher": "Bash|run_in_terminal", "hooks": [hook] }),
+        ];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(
+            arr[0],
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] })
+        );
+        assert_eq!(arr[1]["matcher"], "Bash");
+        assert_eq!(arr[1]["hooks"][0]["command"], hook_command());
+        assert_eq!(arr[1]["hooks"][0]["timeout"], 5, "extra keys kept");
+    }
+
+    #[test]
+    fn refresh_leaves_exactly_one_cartoon_hook() {
+        // Final review M3: a second (`--deny-mode`) entry survived.
+        let mut arr = vec![
+            claude_entry(),
+            json!({ "matcher": "Bash", "hooks": [old_cartoon_hook("cartoon hook rewrite --deny-mode")] }),
+            json!({ "matcher": "Bash", "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")] }),
+        ];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        let doc = Value::Array(arr.clone()).to_string();
+        assert_eq!(doc.matches(HOOK_MARKER).count(), 1, "{doc}");
+        assert_eq!(arr[0], claude_entry());
+        assert_eq!(
+            arr[1],
+            json!({ "matcher": "Bash", "hooks": [guard_hook()] })
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_only_our_hook_objects() {
+        let mut arr = vec![
+            claude_entry(),
+            json!({ "matcher": "Bash", "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")] }),
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+        ];
+        assert!(remove_claude_hooks(&mut arr));
+        assert_eq!(
+            arr,
+            vec![
+                json!({ "matcher": "Bash", "hooks": [guard_hook()] }),
+                json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+            ]
+        );
+        assert!(!remove_claude_hooks(&mut arr));
+    }
+
+    #[test]
+    fn user_settings_path_honours_claude_config_dir() {
+        // Final review M12: the rule reader honours it; install did not.
+        let home = Path::new("/h");
+        assert_eq!(
+            user_settings_path_from(Some(home), None),
+            Some(PathBuf::from("/h/.claude/settings.json"))
+        );
+        assert_eq!(
+            user_settings_path_from(Some(home), Some(Path::new("/c"))),
+            Some(PathBuf::from("/c/settings.json"))
+        );
+        assert_eq!(user_settings_path_from(None, None), None);
     }
 
     #[test]
@@ -614,12 +809,15 @@ mod tests {
         });
         std::fs::write(&path, doc(old_cmd)).unwrap();
         assert_eq!(claude_entry_state(&path), HookState::Stale);
+        // Final review M2: a 0.7 allow-mode entry still wraps under 0.8.
         let old_matcher = json!({
             "matcher": "Bash|run_in_terminal",
             "hooks": [{ "type": "command", "command": hook_command() }]
         });
         std::fs::write(&path, doc(old_matcher)).unwrap();
-        assert_eq!(claude_entry_state(&path), HookState::Stale);
+        assert_eq!(claude_entry_state(&path), HookState::Outdated);
+        assert!(HookState::Outdated.label().contains("still wraps"));
+        assert!(HookState::Stale.label().contains("no longer wraps"));
         let other = json!({"matcher":"Bash","hooks":[{"type":"command","command":"other"}]});
         std::fs::write(&path, doc(other)).unwrap();
         assert_eq!(claude_entry_state(&path), HookState::Missing);
