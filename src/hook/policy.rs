@@ -397,8 +397,10 @@ const XCODE_SAFE_SETTINGS: &[&str] = &[
 
 /// Gradle tasks (the last `:`-separated segment) that only compile, test or
 /// check. Any task starting with `test` or `compile`, or ending with `Test`,
-/// qualifies too. Gradle also accepts camel-case abbreviations (`tDUT`);
-/// those match none of this and are not wrapped.
+/// qualifies too. Gradle also expands camel-case abbreviations, and only
+/// the typed word is judged: `tDUT` matches nothing and is not wrapped, but
+/// `conAndTest` (`connectedAndroidTest`) ends in `Test`, names no
+/// side-effect word, and wraps. That residual is pinned by a test.
 const GRADLE_TASKS: &[&str] = &[
     "test",
     "build",
@@ -455,10 +457,12 @@ const MVN_PHASES: &[&str] = &[
     "verify",
 ];
 
-/// mvn options whose next token is a value (a module list, a thread count),
-/// not a phase. `-P <profile>` is deliberately absent: a profile can bind
-/// extra plugins to a phase, so its value is judged like a phase and fails.
+/// mvn options whose next token is a value (a module list, a thread count,
+/// a profile), not a phase. Profiles stay allowed in both spellings
+/// (`-P ci`, `-Pci`), as before 0.8; they are project configuration.
 const MVN_VALUE_FLAGS: &[&str] = &[
+    "-P",
+    "--activate-profiles",
     "-pl",
     "--projects",
     "-rf",
@@ -626,7 +630,14 @@ fn watch_mode(tool: &str, args: &[&str]) -> bool {
         "vitest" => {
             has_long(&["watch"]) || args.iter().any(|a| matches!(*a, "-w" | "watch" | "dev"))
         }
-        "tsc" => has_long(&["watch"]) || args.contains(&"-w"),
+        // tsc takes options with one or two dashes, in any case.
+        "tsc" => args.iter().any(|a| {
+            a.starts_with('-')
+                && matches!(
+                    a.trim_start_matches('-').to_ascii_lowercase().as_str(),
+                    "w" | "watch"
+                )
+        }),
         "pytest" => has_long(&["looponfail"]) || args.iter().any(|a| pytest_loop_on_fail(a)),
         "gradle" | "gradlew" => has_long(&["continuous"]) || args.contains(&"-t"),
         "cargo" => args.first() == Some(&"doc") && args.contains(&"--open"),
@@ -861,13 +872,26 @@ mod tests {
             "mvn clean test-compile",
             "mvn test -pl core -am",
             "mvn verify -T 4",
+            "mvn test -P ci",
+            "mvn test -Pci",
+            "mvn test --activate-profiles ci",
             "mvn package -B -ntp -fae",
         ] {
             assert!(wrap(c).is_some(), "{c}");
         }
-        for c in ["mvn test -P release", "mvn site", "mvn release:prepare"] {
+        for c in ["mvn site", "mvn release:prepare"] {
             assert!(wrap(c).is_none(), "{c}");
         }
+    }
+
+    #[test]
+    fn gradle_abbreviations_are_a_known_residual() {
+        // Gradle expands camel-case abbreviations (`conAndTest` resolves to
+        // `connectedAndroidTest`). The name rule only sees the typed word,
+        // so an abbreviation that ends in `Test` and spells no side-effect
+        // word still wraps. Pinned here so a fix shows up as a test change.
+        assert!(wrap("gradle conAndTest").is_some());
+        assert!(wrap("gradle tDUT").is_none());
     }
 
     #[test]
@@ -953,6 +977,9 @@ mod tests {
             "npx vitest --watch=true",
             "tsc --watch",
             "tsc -b --watch",
+            "tsc -watch",
+            "tsc -W",
+            "tsc --WATCH",
             "pnpm test -- --watchAll",
             "yarn test --watch",
             "npm run test -- --watch",
