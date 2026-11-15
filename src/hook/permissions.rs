@@ -21,6 +21,23 @@ pub struct UserRules {
     pub unreadable: bool,
 }
 
+impl UserRules {
+    /// Both rule sets together: guards unioned (first seen order kept),
+    /// unreadable if either was.
+    pub fn union(self, other: UserRules) -> UserRules {
+        let mut guards = self.guards;
+        for rule in other.guards {
+            if !guards.contains(&rule) {
+                guards.push(rule);
+            }
+        }
+        UserRules {
+            guards,
+            unreadable: self.unreadable || other.unreadable,
+        }
+    }
+}
+
 /// Where Claude Code reads enterprise-managed settings on this platform.
 pub fn managed_settings_path() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
@@ -310,6 +327,22 @@ mod tests {
     #[test]
     fn no_rules_guard_nothing() {
         assert!(!is_guarded("pytest", &UserRules::default()));
+    }
+
+    #[test]
+    fn union_merges_guards_and_unreadable() {
+        let a = rules(&["Bash(a)", "Bash(b)"]);
+        let b = UserRules {
+            guards: vec!["Bash(b)".into(), "Bash(c)".into()],
+            unreadable: true,
+        };
+        assert_eq!(
+            a.union(b),
+            UserRules {
+                guards: vec!["Bash(a)".into(), "Bash(b)".into(), "Bash(c)".into()],
+                unreadable: true,
+            }
+        );
     }
 
     #[test]

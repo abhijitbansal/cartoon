@@ -20,6 +20,7 @@ fn cartoon() -> Command {
         .env("XDG_CONFIG_HOME", isolated_state().path().join("config"))
         .env("HOME", isolated_state().path().join("home"))
         .env("CLAUDE_CONFIG_DIR", isolated_state().path().join("claude"))
+        .env_remove("CLAUDE_PROJECT_DIR")
         .env_remove("CARTOON_NO_WRAP");
     cmd
 }
@@ -93,6 +94,36 @@ fn ask_rule_in_home_settings_emits_nothing() {
     );
     let event = bash_event(&proj, "pytest -q");
     assert_eq!(rewrite_event(cartoon_with_home(&home), &proj, &event), "");
+}
+
+#[test]
+fn ask_rule_found_through_home_when_config_dir_unset() {
+    let (_tmp, home, proj) = home_and_project();
+    write_settings(
+        &home.join(".claude/settings.json"),
+        r#"{"permissions":{"ask":["Bash(pytest:*)"]}}"#,
+    );
+    let mut cmd = cartoon();
+    cmd.env("HOME", &home).env_remove("CLAUDE_CONFIG_DIR");
+    assert_eq!(
+        rewrite_event(cmd, &proj, &bash_event(&proj, "pytest -q")),
+        ""
+    );
+}
+
+#[test]
+fn project_dir_rules_apply_when_shell_cwd_is_elsewhere() {
+    let (tmp, home, proj) = home_and_project();
+    let other = tmp.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    write_settings(
+        &proj.join(".claude/settings.json"),
+        r#"{"permissions":{"deny":["Bash(make deploy:*)"]}}"#,
+    );
+    let mut cmd = cartoon_with_home(&home);
+    cmd.env("CLAUDE_PROJECT_DIR", &proj);
+    let event = bash_event(&other, "make deploy");
+    assert_eq!(rewrite_event(cmd, &other, &event), "");
 }
 
 #[test]

@@ -30,10 +30,10 @@
 //! `cartoon --merge-streams -c 'make deploy'` and the hook said `allow`.
 //! So before any rewrite the hook loads every Bash `ask`/`deny` rule from
 //! the user, project (cwd and ancestors, `settings.json` and
-//! `settings.local.json`) and managed settings (`permissions.rs`) and emits
-//! nothing when one could match the original command, any segment of it
-//! (split on `&&`, `||`, `;`, `|`), or a segment without its `NAME=value`
-//! prefix. Matching errs towards guarding: an unreadable settings file, a
+//! `settings.local.json`, also from `$CLAUDE_PROJECT_DIR` when set) and
+//! managed settings (`permissions.rs`) and emits nothing when one could
+//! match the original command, any segment of it (split on `&&`, `||`, `;`,
+//! `|`), or a segment without its `NAME=value` prefix. Matching errs towards guarding: an unreadable settings file, a
 //! bare `Bash` rule or rule syntax not understood guards every command. A
 //! session in `plan` permission mode (`permission_mode` in the event) never
 //! gets a rewrite either. Rules passed with `--settings` or delivered as
@@ -671,6 +671,8 @@ fn rewrite_from_stdin(deny: bool) -> Result<i32> {
 
 /// The user's Bash `ask`/`deny` rules as seen from the directory the command
 /// runs in: the event's absolute `cwd`, else `fallback` (the hook's own cwd).
+/// When Claude Code's `CLAUDE_PROJECT_DIR` is set and absolute, rules found
+/// from it are added too (the shell may have `cd`'d outside the project).
 /// None when neither is known, or the event is not JSON (no rewrite follows).
 fn user_rules_for(input: &str, fallback: Option<&Path>) -> Option<UserRules> {
     let v: Value = serde_json::from_str(input).ok()?;
@@ -683,12 +685,21 @@ fn user_rules_for(input: &str, fallback: Option<&Path>) -> Option<UserRules> {
     let home = env_path("HOME");
     let config_dir = env_path("CLAUDE_CONFIG_DIR");
     let managed = permissions::managed_settings_path();
-    Some(permissions::load_user_rules(
-        dir,
-        home.as_deref(),
-        config_dir.as_deref(),
-        managed.as_deref(),
-    ))
+    let load = |start: &Path| {
+        permissions::load_user_rules(
+            start,
+            home.as_deref(),
+            config_dir.as_deref(),
+            managed.as_deref(),
+        )
+    };
+    let rules = load(dir);
+    Some(
+        match env_path("CLAUDE_PROJECT_DIR").filter(|p| p.is_absolute()) {
+            Some(project) if project != dir => rules.union(load(&project)),
+            _ => rules,
+        },
+    )
 }
 
 /// The event's `cwd` when it is an absolute path.
