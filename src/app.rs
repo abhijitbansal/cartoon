@@ -1,5 +1,6 @@
 use crate::adapters::{self, AdapterReport, ParseOutcome};
 use crate::ladder::CompressLevel;
+use crate::linecut::LineCut;
 use crate::runner::{RunOpts, RunOutput};
 use crate::stats::Counter;
 use crate::{archive, budget, config::Config, fallback, runner, sniff, stats, toon};
@@ -619,6 +620,13 @@ fn run_with_adapter(
     let archived = archive_record(argv, adapter.name(), &run, code, cfg);
     let captured = &run.captured;
     let run_id = archived.as_ref().map(|r| r.id.as_str());
+    // A dropped `| head -n N` / `| tail -n N`: applied in process whenever no
+    // report replaces it, so the output never outgrows what was asked for.
+    let cut = opts
+        .dropped_filter
+        .as_deref()
+        .and_then(|f| LineCut::parse(f).map(|c| (c, f)));
+    let raw_log = archived.as_ref().map(|r| r.dir.as_path());
     match adapter.parse(captured, &prepared) {
         Ok(ParseOutcome {
             report,
@@ -632,10 +640,18 @@ fn run_with_adapter(
             );
             let in_out = counter.count(&captured.stdout);
             let in_err = counter.count(&captured.stderr);
+            let passthrough = |in_out, in_err, run_id| {
+                let em = passthrough_emission(in_out, in_err);
+                match cut {
+                    Some((c, f)) => {
+                        cut_passthrough(argv, &run, code, (c, f, raw_log), opts, cfg, run_id, em)
+                    }
+                    None => deliver(argv, &run, code, em, cfg, run_id),
+                }
+            };
             if !lossy_allowed(archived.as_ref(), cfg) {
                 // No raw log to point at: the report would be the only copy.
-                let em = passthrough_emission(in_out, in_err);
-                return Ok(deliver(argv, &run, code, em, cfg, None));
+                return Ok(passthrough(in_out, in_err, None));
             }
             // Central exit-code rule: a failed run whose report shows no
             // failure (pytest.exit, --cov-fail-under, a suite-level error,
@@ -726,6 +742,14 @@ fn run_with_adapter(
             if let Some(native) = adapter.native_stdout(argv, captured) {
                 let native_n = counter.exact(&native);
                 if !pays_for_itself(out_n + err_n, native_n + in_err) {
+                    let native = match cut {
+                        Some((c, f)) => {
+                            disclose_cut(f, raw_log);
+                            String::from_utf8_lossy(c.apply(native.as_bytes())).into_owned()
+                        }
+                        None => native,
+                    };
+                    let native_n = counter.count(&native);
                     let em = Emission {
                         out: Part::Text(Cow::Owned(native), native_n),
                         err: Part::Raw,
@@ -742,8 +766,7 @@ fn run_with_adapter(
             // costs more tokens than the raw output (tiny suites, `-q` runs)
             // is replaced by the original streams, byte-identical.
             if !pays_for_itself(out_n + err_n, in_out + in_err) {
-                let em = passthrough_emission(in_out, in_err);
-                return Ok(deliver(argv, &run, code, em, cfg, run_id));
+                return Ok(passthrough(in_out, in_err, run_id));
             }
             Ok(deliver(
                 argv,
@@ -773,14 +796,22 @@ fn run_with_adapter(
                     adapter.name()
                 );
             }
-            if let Some(f) = &opts.dropped_filter {
-                // The report would have replaced the filter; the generic
-                // output does not, so say it was not applied.
-                eprintln!("cartoon: pipe filter `{f}` was not applied (adapter output unparsed)");
+            // The report would have replaced the filter; the generic output
+            // does not, so apply a line cut here, or say it was not applied.
+            let cut_run = cut.map(|(c, f)| {
+                disclose_cut(f, raw_log);
+                run.with_line_cut(c, opts.merge_streams)
+            });
+            if cut.is_none() {
+                if let Some(f) = &opts.dropped_filter {
+                    eprintln!(
+                        "cartoon: pipe filter `{f}` was not applied (adapter output unparsed)"
+                    );
+                }
             }
             Ok(emit_generic(
                 argv,
-                &run,
+                cut_run.as_ref().unwrap_or(&run),
                 code,
                 None,
                 opts.level,
@@ -790,6 +821,45 @@ fn run_with_adapter(
             ))
         }
     }
+}
+
+/// Say on stderr that a dropped filter's line cut was applied in process,
+/// and where the full output is.
+fn disclose_cut(filter: &str, raw_log: Option<&Path>) {
+    match raw_log {
+        Some(dir) => eprintln!(
+            "cartoon: no report replaced `{filter}`, so it was applied to the output; raw_log: {}",
+            dir.display()
+        ),
+        None => {
+            eprintln!("cartoon: no report replaced `{filter}`, so it was applied to the output")
+        }
+    }
+}
+
+/// A passthrough `em` of `run` with the dropped filter's line cut applied
+/// and disclosed. The ledger still counts the full output as the input.
+#[allow(clippy::too_many_arguments)]
+fn cut_passthrough(
+    argv: &[String],
+    run: &RunOutput,
+    code: i32,
+    (cut, filter, raw_log): (LineCut, &str, Option<&Path>),
+    opts: &WrapOpts,
+    cfg: &Config,
+    run_id: Option<&str>,
+    em: Emission,
+) -> i32 {
+    disclose_cut(filter, raw_log);
+    let shown = run.with_line_cut(cut, opts.merge_streams);
+    let n = |t: &str| stats::estimate_tokens(t, &cfg.tokenizer);
+    let (o, e) = (&shown.captured.stdout, &shown.captured.stderr);
+    let em = Emission {
+        out: Part::Text(Cow::Borrowed(o), n(o)),
+        err: Part::Text(Cow::Borrowed(e), n(e)),
+        ..em
+    };
+    deliver(argv, &shown, code, em, cfg, run_id)
 }
 
 fn not_found_or_err(e: anyhow::Error, argv: &[String]) -> Result<i32> {

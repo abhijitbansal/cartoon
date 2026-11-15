@@ -123,6 +123,40 @@ impl RunOutput {
         split_utf8(bytes).0
     }
 
+    /// This run as a `| head -n N` / `| tail -n N` would have shown it. With
+    /// `merge` (the `2>&1 | tail` form) the cut applies to both streams in
+    /// arrival order and the result is all stdout; without it only stdout is
+    /// cut and stderr is kept whole. Exit status and interruption carry over.
+    pub fn with_line_cut(&self, cut: crate::linecut::LineCut, merge: bool) -> RunOutput {
+        let (out, err): (Vec<u8>, Vec<u8>) = if merge {
+            let merged: Vec<u8> = self
+                .segments()
+                .into_iter()
+                .flat_map(|(_, b)| b.to_vec())
+                .collect();
+            (cut.apply(&merged).to_vec(), Vec::new())
+        } else {
+            (
+                cut.apply(self.stdout_bytes()).to_vec(),
+                self.stderr_bytes().to_vec(),
+            )
+        };
+        let order = vec![(Stream::Stdout, out.len()), (Stream::Stderr, err.len())];
+        let (out_text, stdout_raw) = split_utf8(out);
+        let (err_text, stderr_raw) = split_utf8(err);
+        RunOutput {
+            captured: Captured {
+                stdout: out_text,
+                stderr: err_text,
+                status: self.captured.status,
+            },
+            stdout_raw,
+            stderr_raw,
+            order,
+            interrupted: self.interrupted,
+        }
+    }
+
     /// The original bytes as (stream, slice) runs in arrival order, then
     /// anything the order log does not cover (synthetic captures).
     fn segments(&self) -> Vec<(Stream, &[u8])> {

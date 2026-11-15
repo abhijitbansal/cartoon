@@ -289,3 +289,94 @@ fn adapter_pipe_into_grep_count_runs_natively() {
     assert_eq!(stdout.trim(), "3", "exact grep -c answer: {stdout}");
     assert!(!stdout.contains("pipe_filter_dropped"), "{stdout}");
 }
+
+/// A stand-in tool on PATH for the dropped-filter tests below.
+#[cfg(unix)]
+fn stub_tool(dir: &std::path::Path, name: &str, script: &str) -> std::ffi::OsString {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join(name);
+    std::fs::write(&fake, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap()
+}
+
+/// Final review I6: when no report replaces the dropped `| tail -N`, the
+/// cut is applied in process, so the hook never makes output larger than
+/// the agent asked for. The raw log stays archived.
+#[cfg(unix)]
+#[test]
+fn dropped_tail_is_applied_when_the_adapter_output_is_unparsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = stub_tool(
+        tmp.path(),
+        "xcodebuild",
+        "i=1; while [ $i -le 400 ]; do echo \"build line $i\"; i=$((i+1)); done; echo 'Testing failed: runner crashed' >&2; exit 65",
+    );
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args([
+            "--merge-streams",
+            "-c",
+            "xcodebuild test -scheme A | tail -40",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.lines().count() <= 45, "cut to the tail:\n{stdout}");
+    assert!(stdout.contains("runner crashed"), "{stdout}");
+    assert!(!stdout.contains("build line 300\n"), "{stdout}");
+    assert!(stderr.contains("tail -40"), "disclosed: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn dropped_head_is_applied_when_the_adapter_output_is_unparsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = stub_tool(
+        tmp.path(),
+        "pytest",
+        "i=1; while [ $i -le 400 ]; do echo \"collect line $i\"; i=$((i+1)); done; exit 1",
+    );
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest | head -n 3"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("collect line 1\n"), "{stdout}");
+    assert!(!stdout.contains("collect line 4\n"), "{stdout}");
+    assert!(stdout.lines().count() <= 8, "{stdout}");
+}
+
+/// The report would cost more than the raw output, so the raw output is
+/// emitted: with the dropped `| tail -n 1` applied to it.
+#[cfg(unix)]
+#[test]
+fn dropped_tail_is_applied_to_a_passthrough() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = r#"for a in "$@"; do case "$a" in --junit-xml=*) f="${a#--junit-xml=}";; esac; done
+printf '<testsuite name="s" tests="1" failures="0" errors="0" skipped="0" time="0.1"><testcase classname="t" name="test_a" time="0.1"/></testsuite>' > "$f"
+printf 'a\nb\nc\n'"#;
+    let path = stub_tool(tmp.path(), "pytest", script);
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest | tail -n 1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "c\n");
+}
