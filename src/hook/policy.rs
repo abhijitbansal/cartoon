@@ -330,6 +330,11 @@ const ARG_POLICIES: &[ArgPolicy] = &[
             "xctestrun",
             "skipmacrovalidation",
             "skippackagepluginvalidation",
+            // Package-trust policy (like `-skipPackageSignatureValidation`)
+            // and prebuilt test products (like `-xctestrun`).
+            "packagefingerprintpolicy",
+            "packagesigningentitypolicy",
+            "testproductspath",
         ],
         ..ArgPolicy::NONE
     },
@@ -677,13 +682,18 @@ fn watch_mode(tool: &str, args: &[&str]) -> bool {
     match tool {
         "jest" => has_long(&["watch", "watchall"]),
         // `npm|pnpm|yarn|bun test -- --watch` hands the flag to the runner;
-        // after `--`, `-w`, `watch` and `dev` reach vitest's watch modes too.
+        // `-w`, `watch` and `dev` reach vitest's watch modes too. yarn, pnpm
+        // and bun forward script args without `--`, so `-w` counts anywhere
+        // for them; npm's own `-w` is `--workspace`, so only after `--`. A
+        // positional `watch`/`dev` is refused for all four (doubt).
         "npm" | "pnpm" | "yarn" | "bun" => {
+            let w_anywhere = tool != "npm";
             has_long(&["watch", "watchall", "standalone"])
+                || args.iter().any(|a| matches!(*a, "watch" | "dev"))
                 || args
                     .iter()
-                    .skip_while(|a| **a != "--")
-                    .any(|a| matches!(*a, "-w" | "watch" | "dev"))
+                    .skip_while(|a| !w_anywhere && **a != "--")
+                    .any(|a| *a == "-w")
         }
         "vitest" => {
             has_long(&["watch", "standalone"])
@@ -836,7 +846,8 @@ const DOTNET_TARGETS: &[&str] = &["build", "rebuild", "clean", "test", "vstest"]
 
 /// dotnet: no MSBuild response files (`@x.rsp`), no inline runsettings
 /// after `--`, none of `DOTNET_DENY` in any `-x`/`--x`/`/x` spelling, and
-/// only `DOTNET_TARGETS` as targets (every one in a `;`/`,` list, every
+/// only `DOTNET_TARGETS` as targets (`-t`, `-target`, and the
+/// `-getTargetResult` / `-getTargetItem` switches that also run them) (every one in a `;`/`,` list, every
 /// repeat of the switch; the value glued after `:`/`=` or the next token).
 fn dotnet_args_ok(args: &[&str]) -> bool {
     let mut rest = args.iter();
@@ -859,7 +870,11 @@ fn dotnet_args_ok(args: &[&str]) -> bool {
         if DOTNET_DENY.contains(&name.as_str()) {
             return false;
         }
-        if name == "t" || name == "target" {
+        // `-getTargetResult:X` / `-getTargetItem:X` build target X too.
+        if matches!(
+            name.as_str(),
+            "t" | "target" | "gettargetresult" | "gettargetitem"
+        ) {
             let Some(value) = glued.or_else(|| rest.next().copied()) else {
                 return false;
             };
@@ -1308,6 +1323,10 @@ mod tests {
             "xcodebuild test -scheme A -defaultPackageRegistryURL https://r.example",
             "xcodebuild test -scheme A -only-testing:",
             "xcodebuild test -scheme",
+            // Residuals round: package-trust policy and prebuilt products.
+            "xcodebuild test -scheme A -packageFingerprintPolicy warn",
+            "xcodebuild test -scheme A -packageSigningEntityPolicy warn",
+            "xcodebuild test-without-building -scheme A -testProductsPath build/x.xctestproducts",
         ] {
             assert!(wrap(c).is_none(), "{c}");
         }
@@ -1393,6 +1412,14 @@ mod tests {
             "dotnet build -t:",
             "dotnet build --target",
             "dotnet build -t:Build=x",
+            // Residuals round: these run the named targets too.
+            "dotnet build -getTargetResult:Publish",
+            "dotnet build --getTargetResult:Publish",
+            "dotnet build -getTargetResult Publish",
+            "dotnet build -getTargetItem:Pack",
+            "dotnet build --getTargetItem Pack",
+            "dotnet build -getTargetResult:Build;Publish",
+            "dotnet build -getTargetResult",
         ] {
             assert!(wrap(c).is_none(), "{c}");
         }
@@ -1404,6 +1431,7 @@ mod tests {
             "dotnet build --target Test",
             // `/t:` forms are refused earlier as absolute paths.
             "dotnet build -t:Clean,Build",
+            "dotnet build -getTargetResult:Build",
         ] {
             assert!(wrap(c).is_some(), "{c}");
         }
@@ -1427,6 +1455,15 @@ mod tests {
             "gradle test -qt",
             "vitest --standalone",
             "npm test -- --standalone",
+            // Residuals round: yarn/pnpm/bun forward script args directly.
+            "yarn test watch",
+            "yarn test -w",
+            "yarn test dev",
+            "pnpm test watch",
+            "pnpm test dev",
+            "npm test watch",
+            "npm test dev",
+            "bun test -w",
         ] {
             assert!(wrap(c).is_none(), "{c}");
         }
