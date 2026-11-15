@@ -120,9 +120,11 @@
 //!     `pytest --junitxml=/tmp/r.xml` go through the normal prompt. A path
 //!     glued to a short flag (`-I/tmp`) is not seen as a path; every such
 //!     flag that loads code is in the deny-list instead.
-//!   - Tools with a mutating *mode* (`ruff format`, `--fix`, `swiftlint
-//!     autocorrect`) are gated per token in `MUTATING_TOKENS`; such a command
-//!     is left alone entirely (no rewrite, no deny).
+//!   - Tools with a mutating *mode* (`ruff format`, `--fix`, `cargo clippy
+//!     --fix`, `swiftlint autocorrect|--autocorrect`, `jest|vitest -u`,
+//!     `--updateSnapshot`, `--init`, `tsc --clean`) are gated per token in
+//!     `MUTATING_TOKENS`, also when `npm|pnpm|yarn|bun test --` hands them on;
+//!     such a command is left alone entirely (no rewrite, no deny).
 //!   - A leading `NAME=value` prefix rides along only for the benign names in
 //!     `SAFE_ENV_PREFIXES`; PATH, LD_PRELOAD, RUSTC_WRAPPER, NODE_OPTIONS,
 //!     PYTEST_ADDOPTS (injects arbitrary flags, e.g. `-p evil`), DEVELOPER_DIR,
@@ -219,8 +221,33 @@ pub const MUTATING_TOKENS: &[(&str, &[&str])] = &[
             "format",
         ],
     ),
-    ("eslint", &["--fix", "--fix-dry-run", "--fix-type"]),
-    ("swiftlint", &["--fix", "autocorrect"]),
+    (
+        "eslint",
+        &["--fix", "--fix-dry-run", "--fix-type", "--init", "init"],
+    ),
+    ("swiftlint", &["--fix", "autocorrect", "--autocorrect"]),
+    ("cargo", &["--fix"]),
+    ("tsc", &["--init", "--clean", "init"]),
+    ("rspec", &["--init", "init"]),
+    ("jest", JS_MUTATING),
+    ("vitest", JS_MUTATING),
+    // `npm test -- -u` hands the flag to the runner.
+    ("npm", JS_MUTATING),
+    ("pnpm", JS_MUTATING),
+    ("yarn", JS_MUTATING),
+    ("bun", JS_MUTATING),
+];
+
+/// jest/vitest/bun snapshot updates and config scaffolding. Long names are
+/// compared through `policy::norm`, so `--update-snapshot` is caught too;
+/// `-u` also inside a short-flag cluster (`-ub`), see `policy::mutating_mode`.
+const JS_MUTATING: &[&str] = &[
+    "-u",
+    "--updateSnapshot",
+    "--updateSnapshots",
+    "--update",
+    "--init",
+    "init",
 ];
 
 /// Runner prefixes: wrap when the NEXT word is itself an ALWAYS tool.
@@ -752,15 +779,35 @@ fn env_assignment_name(word: &str) -> Option<&str> {
 
 /// True when `rest` carries a token that makes `tool` mutate files (see
 /// `MUTATING_TOKENS`). `--flag=value` forms match on the flag name.
+/// Long options (`--x`) compare by `policy::norm`ed name, so case, `-` and
+/// `_` don't hide one (`--update-snapshot`, tsc's `--Init`); tsc also takes
+/// single-dash long options (`-init`). See `policy::mutating_mode` for the
+/// rest.
 fn has_mutating_token<S: AsRef<str>>(tool: &str, rest: &[S]) -> bool {
+    let rest: Vec<&str> = rest.iter().map(AsRef::as_ref).collect();
+    if policy::mutating_mode(tool, &rest) {
+        return true;
+    }
     let Some((_, toks)) = MUTATING_TOKENS.iter().find(|(t, _)| *t == tool) else {
         return false;
     };
     rest.iter().any(|w| {
-        let w = w.as_ref();
-        toks.iter()
-            .any(|t| w == *t || w.strip_prefix(t).is_some_and(|r| r.starts_with('=')))
+        toks.iter().any(|t| {
+            w == t
+                || w.strip_prefix(t).is_some_and(|r| r.starts_with('='))
+                || long_name_eq(w, t)
+                || (tool == "tsc" && long_name_eq(&format!("-{w}"), t))
+        })
     })
+}
+
+/// Both are `--name[=v]` options with the same `norm`ed name.
+fn long_name_eq(word: &str, token: &str) -> bool {
+    let name = |s: &str| {
+        s.strip_prefix("--")
+            .map(|b| policy::norm(b.split('=').next().unwrap_or(b)))
+    };
+    matches!((name(word), name(token)), (Some(a), Some(b)) if !a.is_empty() && a == b)
 }
 
 /// No token may climb out of the project (`..` path component) or name an
@@ -961,6 +1008,54 @@ mod tests {
         assert!(wrap_command("swiftlint").is_some());
         assert!(wrap_command("swiftlint --fix").is_none());
         assert!(wrap_command("swiftlint autocorrect").is_none());
+    }
+
+    #[test]
+    fn file_rewriting_modes_are_never_auto_approved() {
+        // Final review I3: each of these edits project files.
+        for c in [
+            "cargo clippy --fix",
+            "cargo clippy --fix --allow-dirty --allow-staged",
+            "cargo clippy --fix=x",
+            "swiftlint --autocorrect",
+            "swiftlint lint --autocorrect",
+            "jest -u",
+            "jest --updateSnapshot",
+            "jest --update-snapshot",
+            "jest -ub",
+            "npx jest -u",
+            "vitest -u",
+            "vitest run --update",
+            "npm test -- -u",
+            "npm test -- --updateSnapshot",
+            "pnpm test -- -u",
+            "yarn test -u",
+            "bun test --update-snapshots",
+            "eslint --init",
+            "jest --init",
+            "rspec --init",
+            "tsc --init",
+            "tsc -init",
+            "tsc --Init",
+            "tsc -b --clean",
+            "tsc --build --clean",
+            "vitest init browser",
+            "npm test -- --init",
+        ] {
+            assert!(wrap_command(c).is_none(), "{c}");
+        }
+        for c in [
+            "cargo clippy",
+            "jest -w 4",
+            "jest -i",
+            "vitest run",
+            "tsc --noEmit",
+            "tsc -b",
+            "npm test -- --runInBand",
+            "uv run python -m pytest -q",
+        ] {
+            assert!(wrap_command(c).is_some(), "{c}");
+        }
     }
 
     #[test]
@@ -1634,7 +1729,7 @@ mod tests {
             "vitest run --pool=forks",
             "npx vitest run -t foo",
             "npm test",
-            "npm test -- -u",
+            "npm test -- --runInBand",
             "npm ci --ignore-scripts",
             "npm ci --ignore-scripts --no-audit --no-fund",
             "pnpm test",

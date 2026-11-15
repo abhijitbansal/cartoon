@@ -680,6 +680,21 @@ fn watch_mode(tool: &str, args: &[&str]) -> bool {
     }
 }
 
+/// File-rewriting modes a token table can't express: jest/vitest's `-u`
+/// inside a short-flag cluster (`-ub`; yargs and cac both bundle), also when
+/// a package manager hands it on (`npm test -- -ub`). Fails closed on a
+/// value glued to another short flag that contains a `u` (`-tuser`).
+pub(super) fn mutating_mode(tool: &str, args: &[&str]) -> bool {
+    match tool {
+        "jest" | "vitest" | "npm" | "pnpm" | "yarn" | "bun" => args.iter().any(|a| {
+            a.strip_prefix('-').is_some_and(|b| {
+                !b.starts_with('-') && b.chars().all(|c| c.is_ascii_alphabetic()) && b.contains('u')
+            })
+        }),
+        _ => false,
+    }
+}
+
 /// `a` is `--name` or `--name=v` with a `norm`ed name in `names`, unless the
 /// value is `false` (`--watchAll=false` turns watching off).
 fn long_named(a: &str, names: &[&str]) -> bool {
@@ -780,7 +795,7 @@ impl ArgPolicy {
 
 /// Option-name normalization: case and `-`/`_` don't distinguish options
 /// for any tool here (yargs/cac accept both camel and kebab case).
-fn norm(name: &str) -> String {
+pub(super) fn norm(name: &str) -> String {
     name.chars()
         .filter(|c| *c != '-' && *c != '_')
         .map(|c| c.to_ascii_lowercase())
