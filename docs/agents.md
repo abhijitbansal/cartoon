@@ -65,18 +65,31 @@ Notes and knobs:
 - **Narrow on purpose.** A rewrite is emitted as `permissionDecision:
   "allow"`, which skips the permission prompt for that call. Only test
   runners, linters, typecheckers and builds wrap. Infra CLIs (docker,
-  kubectl, terraform, gh, aws), mutating subcommands (`cargo publish`,
-  `npm install`), deploy and publish targets, and watch modes never do. The
-  net-savings guard means worst case is byte-identical output.
-- **Your permission rules still win.** Claude Code checks `ask` and `deny`
-  rules against the command a hook returns, so a hook that rewrote
+  kubectl, terraform, gh, aws), mutating subcommands and modes
+  (`cargo publish`, `npm install`, `--fix`, `jest -u`, `--init`), xcodebuild
+  modes other than build, test and clean, and the deploy, publish, sign and
+  watch forms the hook recognises never do. A task name that avoids every
+  word the hook knows is a residual (see
+  [usage.md](usage.md#what-the-hook-will-not-auto-approve)). Output is never
+  larger than the raw run: byte-identical at worst, and a dropped
+  `| head -n N` / `| tail -n N` is applied when no report replaces it.
+- **Which permission rules the hook honours.** Claude Code checks `ask` and
+  `deny` rules against the command a hook returns, so a hook that rewrote
   `make deploy` into `cartoon -c 'make deploy'` would sidestep a
   `Bash(make deploy:*)` rule. cartoon's hook reads your Bash `ask` / `deny`
-  rules (user, project and managed settings) and stays silent when one could
-  match the command or any `&&` segment of it, or when it cannot tell. It
-  also stays silent in `plan` permission mode. Rules passed with `--settings`
-  or delivered as remote managed policy are not visible to it, so keep those
-  as `deny` rules in a settings file the hook can read.
+  rules from settings files (user: `$CLAUDE_CONFIG_DIR` or `~/.claude`;
+  project; the managed-settings file) and stays silent when one could match
+  the command, any segment of it, or the tool behind a launcher or path
+  (`uv run pytest`, `xcrun xcodebuild`, `./gradlew`), or when it cannot
+  tell. It also stays silent in `plan` permission mode. Measured 2026-11-15
+  on Claude Code 2.1.325 (headless `claude -p`, hook installed): settings-file
+  `deny` / `ask` rules, `--disallowedTools` and `dontAsk` mode all stopped
+  the command. Not measured, and not readable by the hook: rules passed with
+  `--settings`, remote managed policy, session rules added with
+  `/permissions`, Agent SDK permission options, managed-settings locations
+  other than the one file per OS (drop-in directory, MDM profile), and
+  Windows. Keep a rule that must hold as a `deny` in a settings file the hook
+  can read.
 - **Disable without uninstalling:** set `CARTOON_NO_WRAP=1` in the
   environment your agent runs in (any non-empty value; unset to re-enable).
   Permanent: `cartoon hook uninstall`. One command raw: `cartoon --raw <cmd>`.
@@ -157,10 +170,11 @@ stdout carries JSON-RPC only, diagnostics go to stderr.
 
 A directive in your instruction file (`CLAUDE.md` / `AGENTS.md`) is the
 fallback for agents without the hook, and it also covers the case the hook
-leaves alone: a piped compound such as `pytest | grep FAIL`, which the hook
-will not rewrite because an allowlisted segment must never auto-approve the
-rest of a compound. So even with the hook installed, the directive earns its
-place.
+leaves alone: a piped compound such as `pytest | grep FAIL`. Of all pipes
+the hook rewrites only a trailing `| head -n N`, `| tail -n N`,
+`| xcbeautify` or `| xcpretty`, because an allowlisted segment must never
+auto-approve the rest of a compound. So even with the hook installed, the
+directive earns its place.
 
 `cartoon setup` writes it for you. `cartoon instructions` manages the block
 on its own (install, update, remove), wrapped in marker comments so it never
@@ -180,11 +194,13 @@ instruction file or system prompt. As of 0.8.0 it reads:
 ```markdown
 ## Noisy dev commands: run them bare under `cartoon`
 
-Run tests, builds, linters and JSON CLIs as `cartoon <cmd>`; the Claude Code
-hook does this for you. Exit codes are mirrored and the raw output is archived.
+Prefix tests, builds, linters and JSON CLIs with `cartoon` (`cartoon <cmd>`;
+in Claude Code the hook adds it). Exit codes are mirrored and the raw output
+is archived.
 
-Never pipe them into `head`, `tail` or `grep`: the cut is lossy, and the hook
-cannot rewrite a piped command. Run them bare. `2>&1` is fine.
+Never pipe them into `head`, `tail` or `grep`: the cut is lossy. The hook
+only rewrites a trailing `| head -n N`, `| tail -n N`, `| xcbeautify` or
+`| xcpretty`; any other pipe skips cartoon. Run them bare. `2>&1` is fine.
 
 Need more than the report shows? Do not rerun. Read the archive:
 - `cartoon logs grep "<pattern>" --last` searches the newest raw output

@@ -51,8 +51,9 @@ When a command is noisy (a test run, a build, a JSON CLI), do NOT pipe it to
 keeps an arbitrary slice (often the wrong one — a build's real error sits
 mid-log while `tail` shows only `BUILD FAILED`), and the pipe's exit status
 is the filter's, not the command's. The hook rewrites a trailing
-`| tail -n N` or `| head -n N` on a command with an adapter, but it will not
-wrap any other piped command, so you lose cartoon there.
+`| tail -n N`, `| head -n N`, `| xcbeautify` or `| xcpretty` on a command
+with an adapter, but it will not wrap any other piped command, so you lose
+cartoon there.
 
 ```bash
 xcodebuild build … | grep error   # WRONG: dumb cut, wrapping is skipped
@@ -65,10 +66,10 @@ unittest, jest, vitest, ruff, eslint, tsc, mypy, pre-commit, cargo
 test/nextest, cargo build/check/clippy, go test, golangci-lint, phpunit,
 rspec, swiftlint, gradle, maven, dotnet test, `npm`/`pnpm`/`yarn test` and
 `bun run test` when the script is plain jest/vitest, swift test/build,
-`xcodebuild test`/`build`/`archive`) should be run bare so
+`xcodebuild test`/`build`) should be run bare so
 the auto-wrap hook catches it — never behind a pipe. If you must pipe, use
 `cartoon -c '<cmd> | tail -5'`: the adapter still fires and the dropped
-filter is disclosed. Any other runner that writes JUnit XML gets the same
+filter is disclosed (when no report replaces it, the tail is applied). Any other runner that writes JUnit XML gets the same
 report via `cartoon --junit <file-or-dir> <cmd>`, and
 `cartoon --max-tokens 1500 <cmd>` guarantees a hard ceiling on what you read.
 

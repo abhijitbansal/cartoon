@@ -24,14 +24,14 @@ Test Case '-[AppTests.GreeterXCTests testGreetingExact]' failed (0.002 seconds).
 $ xcodebuild test -scheme App ...      # run through cartoon
 runner: xcodebuild-test
 summary:
-  total: 212
-  passed: 210
-  failed: 2
-  skipped: 0
-  duration_s: 41.7
+ total: 212
+ passed: 210
+ failed: 2
+ skipped: 0
+ duration_s: 41.7
 failures[2]{id,loc,msg}:
-  "AppTests.GreeterXCTests/testGreetingExact()","","XCTAssertEqual failed: (\"hello, world!\") is not equal to (\"hello, worldz!\")"
-  "AppTests.greetingMatches()","","Expectation failed: (greeting(for: \"world\") == \"hello, worldz!\")"
+ "AppTests.GreeterXCTests/testGreetingExact()","AppTests/GreeterTests.swift:14","XCTAssertEqual failed: (\"hello, world!\") is not equal to (\"hello, worldz!\")"
+ "AppTests.greetingMatches()","","Expectation failed: (greeting(for: \"world\") == \"hello, worldz!\")"
 raw_log: ~/.local/state/cartoon/runs/20261115-104713-736d
 ```
 
@@ -59,13 +59,13 @@ npm, `cargo binstall`, the shell installer and the plugin:
 
 | | keeps failing test id | keeps file:line | exit code honest | auto-wraps bare command |
 |---|---|---|---|---|
-| Claude Code native preview¹ | no (head of the log only) | only if in the head | yes | built in |
+| Claude Code native preview¹ | yes below the persistence threshold; above it, only if in a ~2 KB head | same as the test id | yes | built in |
 | `xcodebuild ... \| tail -40` | only if in the last 40 lines | only if in the last 40 lines | no, returns `tail`'s status unless `set -o pipefail` | you type it |
 | [rtk](https://github.com/rtk-ai/rtk) | cargo/pytest/go/npm: yes; Xcode: not stated² | location for `cargo test`; others not stated² | yes³ | yes, hook rewrites |
-| [xcsift](https://github.com/ldomaradzki/xcsift) | not stated² | yes⁴ | `--exit-on-failure` flag⁴ | no, you pipe `... 2>&1 \| xcsift`⁴ |
-| cartoon | yes (from the xcresult bundle, or xunit for `swift test`) | compile errors yes; a failed assertion carries its message, not a line | yes | yes, incl. `2>&1`, `\| tail`, `cd App &&` forms |
+| [xcsift](https://github.com/ldomaradzki/xcsift) | test failures reported⁴ | yes⁴ | `--exit-on-failure` flag⁴ | no, you pipe `... 2>&1 \| xcsift`⁴ |
+| cartoon | yes (from the xcresult bundle, or xunit for `swift test`) | compile errors and XCTest failures yes; a Swift Testing failure carries its message, not a line | yes | yes, incl. `2>&1`, `\| tail -N`, `cd App &&` forms |
 
-¹ Observed on Claude Code 2.1.325, one measurement; not a documented guarantee.
+¹ Observed on Claude Code 2.1.325, one measurement each way: a 20.5 KB output was shown whole, a 102.6 KB one was replaced by a ~2 KB head, so the threshold lies between 20 KB and 100 KB. Not a documented guarantee.
 ² The project's README does not claim it; absence is not a claim that it cannot.
 ³ rtk README: "the command's exit code is passed through unchanged".
 ⁴ xcsift README: "test failures with file/line locations", the quick start pipes through `xcsift`,
@@ -83,11 +83,20 @@ The hook rewrites a command with `permissionDecision: "allow"`, which skips
 Claude Code's permission prompt for that call, so it is deliberately narrow.
 
 - It auto-approves only read-mostly dev-loop commands: test runners, linters,
-  typecheckers and builds. No deploy, publish, push, sign or
-  watch mode. Infra CLIs (docker, kubectl, terraform, gh, aws) are never wrapped.
-- It reads your Bash `ask` and `deny` rules (user, project and managed
-  settings) and stays silent when one could match the command or any `&&`
-  segment of it. When it cannot tell, it stays silent.
+  typecheckers and builds. It refuses the deploy, publish, sign and watch
+  forms it recognises, xcodebuild modes other than build, test and clean, and
+  modes that rewrite files (`--fix`, `-u`). A task or target name that avoids
+  every word it knows (a custom gradle task, a make target) can still slip
+  through. Infra CLIs (docker, kubectl, terraform, gh, aws) are never wrapped.
+- It reads your Bash `ask` and `deny` rules from settings files (user,
+  project and managed settings) and stays silent when one could match the
+  command, any `&&` segment of it, or the tool behind a launcher
+  (`uv run pytest`, `xcrun xcodebuild`). When it cannot tell, it stays
+  silent. Measured on Claude Code 2.1.325: `--disallowedTools` and `dontAsk`
+  mode are honoured with the hook installed. Rules the hook cannot read and
+  that were not measured (`--settings`, session `/permissions` rules, Agent
+  SDK options, other managed-settings locations, Windows) may not stop an
+  auto-approved command.
 - It never rewrites in `plan` permission mode.
 - Silent means the command goes through Claude Code's normal permission flow,
   exactly as without cartoon. A project script you declare in `.cartoon.toml`

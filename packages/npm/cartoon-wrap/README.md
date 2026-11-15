@@ -57,7 +57,7 @@ failures[2]{id,loc,msg}:
 
 Teach Claude Code, Codex, Cursor & co. to wrap commands automatically —
 skills and a Claude Code plugin ship in the repo:
-[github.com/abhijitbansal/cartoon](https://github.com/abhijitbansal/cartoon#for-agents-claude-code-codex-copilot-cursor-).
+[docs/agents.md](https://github.com/abhijitbansal/cartoon/blob/main/docs/agents.md).
 
 Full documentation: [github.com/abhijitbansal/cartoon](https://github.com/abhijitbansal/cartoon)
 

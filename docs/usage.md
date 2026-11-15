@@ -9,7 +9,7 @@ upgrade notes from 0.7.
 - [Pipes inside `-c`](#pipes-inside--c)
 - [`--junit`](#--junit-any-runner-that-writes-junit-xml)
 - [`--max-tokens`](#--max-tokens-a-hard-ceiling)
-- [`cartoon last` and `cartoon diff`](#cartoon-last-and-cartoon-diff-the-edit--run--fix-loop)
+- [`cartoon last` and `cartoon diff`](#cartoon-last-and-cartoon-diff-the-edit-run-fix-loop)
 - [`--merge-streams`](#--merge-streams-keep-stdoutstderr-interleaving)
 - [Content sniffing](#content-sniffing)
 - [`cartoon doctor`](#cartoon-doctor)
@@ -94,7 +94,7 @@ cartoon diff                   # fixed / still failing / new vs the previous run
 cartoon --junit build/test-results/test gradle test   # any runner that writes JUnit XML
 cartoon --max-tokens 1500 make       # hard ceiling: head + tail kept, middle disclosed
 cartoon --merge-streams make         # stdout+stderr compressed in arrival order, on stdout
-cartoon -c 'pytest -v | tail -5'     # head/tail filters are dropped; the report replaces them
+cartoon -c 'pytest -v | tail -5'     # the filter is dropped; the report replaces it
 cartoon doctor                 # health report: hook, config, allowlist gaps, ledger damage
 ```
 
@@ -107,10 +107,17 @@ Agents write `pytest -v | tail -5` because they want less output, which is
 cartoon's whole job. When the string is `<adapter-detected command> |
 <display filter>` (`head`, `tail`, `cat`, `less`, `more`, `xcbeautify`,
 `xcpretty`), cartoon runs the adapter and drops the filter, disclosing it as
-`pipe_filter_dropped: "tail -5"` in the report. Anything else (`grep`, `wc`,
-`tee`, `xargs`, `sort`, redirections, two pipes, a non-adapter command)
-keeps the plain `sh -c` behavior, so `pytest | grep -c PASSED` returns the
-real count and exit status.
+`pipe_filter_dropped: "tail -5"` in the report. When no report replaces the
+filter (the report would cost more than the raw output, or the adapter could
+not parse the run), a `head`/`tail` line count is applied to what cartoon
+prints, with a stderr line naming the filter and the raw log, so the output
+is never longer than the pipe would have given. One trailing `2>&1` before
+the pipe is stripped and turns `--merge-streams` on, so
+`cartoon -c 'xcodebuild test 2>&1 | tail -40'` still exits with
+xcodebuild's code. Anything else (`grep`, `wc`, `tee`, `xargs`, `sort`,
+redirections, two pipes, a non-adapter command) keeps the plain `sh -c`
+behavior, so `pytest | grep -c PASSED` returns the real count and exit
+status.
 
 The hook applies this itself to the narrow shapes in
 [What the hook will not auto-approve](#what-the-hook-will-not-auto-approve):
@@ -271,7 +278,9 @@ finds no saving.
   the command would have printed *without* that flag (reconstructed from
   the machine stream), and emits that native output when the report would
   not beat it, so savings are never negative relative to the command as
-  you typed it ([benchmarks](../benchmarks/README.md)).
+  you typed it ([benchmarks](../benchmarks/README.md)). A dropped
+  `| head -n N` / `| tail -n N` that no report replaces is applied to the
+  emitted output (see [Pipes inside `-c`](#pipes-inside--c)).
 
 ## Raw log archive
 
@@ -311,9 +320,14 @@ Compression precedence: `--compress` flag > `[command.<name>]` >
 `wrap_scripts` member (aggressive) > `[compress]` > legacy `heuristic = true`
 key > safe.
 
-`cartoon stats` reports tokens saved against what the agent would otherwise
-have seen, and `malformed_lines` when the ledger holds lines it could not
-parse. The ledger (`~/.local/state/cartoon/stats.jsonl`) is rotated at 5 MiB.
+`cartoon stats` reports tokens saved against the raw output, `saved vs what
+the agent would see` (the same sum with each run's input capped at 7,500
+tokens, about what Claude Code shows whole), and `malformed_lines` when the
+ledger holds lines it could not parse. The capped figure is an upper bound:
+a run where cartoon added tokens counts as 0, and above the cap the agent
+would have seen only a ~2 KB preview, not 7,500 tokens. The ledger
+(`~/.local/state/cartoon/stats.jsonl`) is rotated to `stats.jsonl.1` at
+5 MiB.
 `cartoon learn` sees through `sh -c` runs and explains why a piped command
 missed its adapter instead of suggesting a `[command.sh]` pin.
 
@@ -362,7 +376,8 @@ decision, not cartoon's.
 A rewrite is emitted with `permissionDecision: "allow"`, so it skips
 Claude Code's permission prompt for that call. The hook is therefore narrow,
 and anything it declines reaches your normal permission flow unchanged. In
-every case below the hook prints nothing.
+every case below the hook prints nothing, except a declared `wrap_scripts`
+match, which gets a deny with a re-run suggestion.
 
 **It respects your permission rules.** Claude Code evaluates `ask` and
 `deny` rules against the command a hook returns, not the one the agent wrote
@@ -372,11 +387,23 @@ hook reads every Bash `ask` and `deny` rule itself, from user settings
 (`$CLAUDE_CONFIG_DIR` or `~/.claude`), the project's `.claude/settings.json`
 and `settings.local.json` (in the working directory and every ancestor), and
 managed settings, and declines when a rule could match the command, any `&&`
-segment of it, or a segment without its leading `NAME=value` words. `:*`
-prefixes and `*` globs both count. When it cannot tell, it declines: an
-unreadable settings file, a bare `Bash` rule or a rule syntax it does not
-understand guards every command. Rules passed with `--settings` or delivered
-as remote managed policy are not visible to the hook.
+segment of it, a segment without its leading `NAME=value` words, or the tool
+behind a launcher or path (`xcrun`, `npx`/`bunx`/`pnpx`, `pnpm dlx`,
+`yarn dlx`, `uv run`, `uvx`, `python -m`, `poetry run`, `pipenv run`;
+`./gradlew` is matched as `gradlew`). `:*` prefixes and `*` globs both
+count. When it cannot tell, it declines: an unreadable settings file, a bare
+`Bash` rule or a rule syntax it does not understand guards every command,
+and with neither `HOME` nor `CLAUDE_CONFIG_DIR` set it never rewrites.
+
+Measured 2026-11-15 on Claude Code 2.1.325 (headless `claude -p`, hook
+installed): settings-file `deny` / `ask` rules, `--disallowedTools` and
+`dontAsk` permission mode all stopped the command. Residual, not measured
+and not readable by the hook: rules passed with `--settings`, remote managed
+policy, session rules added with `/permissions`, Agent SDK permission
+options, managed-settings locations other than the one file per OS
+(drop-in directory, MDM profile), and Windows. Claude Code might not
+re-check those against the rewritten command; keep a rule that must hold as
+a `deny` in a settings file the hook can read.
 
 **It respects plan mode.** A session in `plan` permission mode never gets a
 rewrite.
@@ -384,6 +411,8 @@ rewrite.
 **It only wraps read-mostly dev-loop commands.** Test runners, linters,
 typecheckers and builds. Infra CLIs (docker, kubectl, terraform, gh, aws)
 and mutating subcommands (`cargo publish`, `npm install`) are never wrapped.
+It refuses the deploy, publish, sign and watch forms it recognises; a name
+it does not recognise as one is the residual (see the targets item below).
 
 Further limits, per tool:
 
@@ -391,7 +420,10 @@ Further limits, per tool:
   `RUST_LOG`, `NO_COLOR`, ...). `PATH=... pytest`, `LD_PRELOAD=... cargo
   test`, `NODE_OPTIONS=... jest`, `PYTEST_ADDOPTS=...` are left alone.
 - `ruff` is gated to `ruff check`; `ruff format`, `--fix`, `eslint --fix`,
-  `eslint -c <path>`, `swiftlint --fix` / `autocorrect` are never wrapped.
+  `eslint -c <path>`, `swiftlint --fix` / `autocorrect` / `--autocorrect`,
+  `cargo clippy --fix`, `jest|vitest -u` / `--updateSnapshot` / `--update`
+  (also after `npm|pnpm|yarn|bun test --`), `--init` for jest, vitest,
+  eslint, tsc and rspec, and `tsc --clean` are never wrapped.
   `pre-commit` is wrapped for `run` only. `npx`/`bunx`/`pnpx` launch only
   `jest`, `vitest`, `tsc`, `eslint`.
 - Flags that load or run code from outside the project are refused per tool:
@@ -399,20 +431,40 @@ Further limits, per tool:
   `make -f/-C/NAME=value`, `jest|vitest --config/--setupFiles`,
   `pytest -p <plugin>/-c/--rootdir`, `mypy --config-file`,
   `gradle -I/-D/-P`, `mvn -s/-f`, `dotnet -p:` and the like.
+- xcodebuild is an allowlist: only the actions `test`,
+  `test-without-building`, `build`, `build-for-testing` and `clean`, known
+  build and test flags, and simulator or macOS destinations. Any mode switch
+  (`-exportArchive`, `-exportNotarizedApp`, `-importLocalizations`,
+  `-downloadPlatform`, `-resolvePackageDependencies`, ...), any other action
+  (`archive`, `install`, `analyze`, ...), developer-account flags
+  (`-allowProvisioningUpdates`, `-authenticationKey*`), `-Name=value` user
+  defaults and a physical-device destination are refused. A run with no
+  `-destination` lets xcodebuild choose one (not checked).
+- dotnet MSBuild targets (`-t:`, `-target:`, `--target`) must be `Build`,
+  `Rebuild`, `Clean`, `Test` or `VSTest`.
 - Targets with a side effect are refused. A gradle task is judged by its last
   `:` segment, so `:app:publish` is a publish; it must be a build, test or
   check task with no `publish`, `deploy`, `upload`, `install`, `release`,
-  `push`, `connected`, `docker` or `sign` in it, and no instrumented device
-  test. A maven goal must be a lifecycle phase from `clean` to `verify`, and
-  a profile naming a side effect is refused. A named `make` target must look
-  like build, test or check. `npm ci` needs `--ignore-scripts`.
-- Watch modes are refused: `jest --watch`, `vitest --watch`, `tsc --watch`,
-  `pytest -f`, `gradle --continuous`, `cargo doc --open`.
+  `push`, `connected`, `docker`, `sign`, `notarize`, `ship`, `flight`,
+  `distribute` or `submit` in it, and no instrumented device test. A maven
+  goal must be a lifecycle phase from `clean` to `verify`, and a profile
+  naming a side effect is refused. A named `make` target must look like
+  build, test or check and name no side effect. `npm ci` needs
+  `--ignore-scripts`. Residual: the names are judged by these words only, so
+  a gradle task or make target that ships something under another name (or
+  a gradle abbreviation such as `deviceandTest`) still wraps.
+- Watch and hang modes are refused: `jest --watch`, `vitest --watch` /
+  `watch` / `dev` / `--standalone`, `-w` / `watch` / `dev` after
+  `npm|pnpm|yarn|bun test --`, `tsc --watch`, `ruff --watch`, `pytest -f`,
+  `gradle --continuous` / `-t` (also bundled, `-qt`) / `--debug-jvm`,
+  `cargo doc --open`.
 - Only these wrappers around a command are accepted: a trailing `2>&1`, one
   trailing `| head -n N` / `| tail -n N` / `| xcbeautify` / `| xcpretty`,
   and a leading `cd <dir> &&` into a plain relative directory that resolves
-  (symlinks followed) inside the project. `..`, absolute paths outside the
-  project, `;`, `||`, any other pipe or redirection, and anything with `$`,
+  (symlinks followed) inside the project; the rewrite emits it as
+  `cd ./<dir>`, so a `CDPATH` can't redirect it. `..`, an absolute `cd`
+  target, absolute paths outside the project, `;`, `||`, any other pipe or
+  redirection, and anything with `$`,
   backticks, backslashes or globs are never rewritten. Only `&&` compounds
   of eligible commands are.
 - `make` and `pre-commit run` stay allowlisted by explicit decision: they
@@ -488,7 +540,7 @@ names what to use instead.
 | 0.7 | 0.8 |
 |---|---|
 | `cartoon hook install --copilot`, `--vscode`, and the Copilot CLI / VS Code Copilot Chat hook | Removed. `cartoon hook uninstall --copilot` still deletes a Copilot hook file written before 0.8. Use the instructions block or the MCP server (see [agents.md](agents.md)) in other agents. |
-| `cartoon hook install --deny`, `cartoon hook rewrite --deny-mode` | Removed. The hook rewrites (allow) or stays silent. A `wrap_scripts` match still denies with a re-run suggestion. Re-run `cartoon hook install` to refresh an old entry. |
+| `cartoon hook install --deny`, `cartoon hook rewrite --deny-mode` | Removed. The hook rewrites (allow) or stays silent. A `wrap_scripts` match still denies with a re-run suggestion. An old `--deny-mode` entry prints a note and exits 0 (it no longer wraps); `cartoon hook status` calls it stale. An old allow-mode entry (`Bash\|run_in_terminal` matcher) still wraps and is reported as an older entry. Re-run `cartoon hook install` to refresh either; it touches only cartoon's own hook object. |
 | `cartoon shim ...`, `CARTOON_NO_SHIM` | Removed. Use the hook; `cartoon setup` installs it. |
 | `cartoon --fast pytest` | Removed. Pass the flag yourself: `cartoon pytest -n auto`. |
 | `cartoon --heuristic` | Removed. Use `--compress=aggressive`. The `heuristic = true` config key still works. |

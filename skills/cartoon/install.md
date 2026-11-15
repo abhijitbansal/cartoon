@@ -54,8 +54,9 @@ The hook is Claude Code only. For other agents install the skill
 
 ### Cover piped commands — the instructions directive
 
-The hook rewrites a trailing `| head -n N` / `| tail -n N` on a command with
-an adapter, but not any other pipe (`pytest | grep FAIL`). The thing that
+The hook rewrites a trailing `| head -n N`, `| tail -n N`, `| xcbeautify` or
+`| xcpretty` on a command with an adapter, but not any other pipe
+(`pytest | grep FAIL`). The thing that
 closes that gap is an instruction telling the agent to wrap and not pipe.
 `cartoon setup` writes it; on its own:
 
