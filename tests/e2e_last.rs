@@ -158,6 +158,48 @@ fn e2e_last_and_diff_follow_an_edit_run_fix_loop() {
     assert!(new.contains("test_alpha"), "{rev}");
 }
 
+/// A small failing run whose traceback is short: the list-form report
+/// (one hyphenated line per trace line) costs a little more than pytest's own
+/// output, so the net-savings guard emits pytest's output untouched. That is
+/// the intended boundary since traces render one line each: a small failure
+/// may pass through, but it never costs more than the raw run.
+#[test]
+fn small_failure_passes_through_when_the_report_costs_more() {
+    if !have("pytest") {
+        eprintln!("SKIP: pytest not installed");
+        return;
+    }
+    let state = tempfile::tempdir().unwrap();
+    let proj = tempfile::tempdir().unwrap();
+    let src = "def test_alpha():\n    data = {'k%d' % i: i for i in range(40)}\n    assert data == {'k0': 1}, 'alpha is broken'\n\n\
+               def test_beta():\n    data = {'k%d' % i: i for i in range(40)}\n    assert data == {'k0': 1}, 'beta is broken'\n\n\
+               def test_gamma():\n    assert True\n";
+    std::fs::write(proj.path().join("test_loop.py"), src).unwrap();
+
+    let raw = std::process::Command::new("pytest")
+        .args(["-p", "no:cacheprovider", "test_loop.py"])
+        .current_dir(proj.path())
+        .output()
+        .unwrap();
+    let raw = String::from_utf8(raw.stdout).unwrap();
+
+    let out = pytest(state.path(), proj.path());
+    assert!(
+        out.contains("short test summary info") && !out.contains("runner: pytest"),
+        "a small failure that the report would not shrink passes through: {out}"
+    );
+    let tok = |s: &str| cartoon::stats::estimate_tokens(s, "o200k");
+    // Both runs print their own timing, hence the slack of a few tokens.
+    assert!(tok(&out) <= tok(&raw) + 3, "{out}");
+
+    // The archive still holds the report, so `last` shows it on request.
+    let a = cartoon(state.path(), proj.path())
+        .arg("last")
+        .assert()
+        .code(0);
+    assert!(stdout(&a).starts_with("runner: pytest"), "{}", stdout(&a));
+}
+
 #[test]
 fn e2e_last_summarizes_a_run_without_a_report() {
     let state = tempfile::tempdir().unwrap();

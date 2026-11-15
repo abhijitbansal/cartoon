@@ -157,7 +157,15 @@ impl Encoder {
     fn array_lines(&mut self, key: Option<&str>, arr: &[Value], depth: usize, tabular_ok: bool) {
         let prefix = format!("{}{}", self.indent(depth), key.unwrap_or(""));
         let bracket = self.bracket(arr.len(), false);
-        if arr.iter().all(is_scalar) && !self.opts.list_scalar_arrays {
+        if arr.iter().all(is_scalar) && self.opts.list_scalar_arrays {
+            self.lines.push(format!("{prefix}{bracket}:"));
+            let ind = self.indent(depth + 1);
+            for v in arr {
+                self.lines.push(format!("{ind}- {}", list_scalar(v)));
+            }
+            return;
+        }
+        if arr.iter().all(is_scalar) {
             let d = self.opts.delimiter;
             let row = arr
                 .iter()
@@ -300,6 +308,33 @@ fn scalar(v: &Value, delim: char) -> String {
         }
         _ => unreachable!("scalar() called on container"),
     }
+}
+
+/// A primitive in a `- item` list line. Items are never split on the
+/// delimiter, so (unlike inline rows and tabular cells) a comma, bracket,
+/// brace, backslash or inner quote needs no quotes: only text a reader could
+/// take for structure does (see `list_item_needs_quotes`).
+fn list_scalar(v: &Value) -> String {
+    match v {
+        Value::String(s) if list_item_needs_quotes(s) => quote(s),
+        Value::String(s) => s.to_string(),
+        other => scalar(other, ','),
+    }
+}
+
+/// Quote a list-item string when it is empty, has edge whitespace, reads as
+/// a literal (`true`, `42`), contains a `:` (a `key: value` pair, or an
+/// array header such as `[2]: a`), a control character, or starts like
+/// structure (`"`, `-`, `#`). A leading `[` or `{` is plain: with no `:`
+/// it cannot open a header or a pair.
+fn list_item_needs_quotes(s: &str) -> bool {
+    s.is_empty()
+        || s.starts_with([' ', '\t'])
+        || s.ends_with([' ', '\t'])
+        || matches!(s, "true" | "false" | "null")
+        || is_numeric_like(s)
+        || s.starts_with(['"', '-', '#'])
+        || s.chars().any(|c| c == ':' || (c as u32) < 0x20)
 }
 
 /// Canonical number form (spec §2), computed from the number's exact JSON
@@ -499,6 +534,9 @@ mod tests {
         };
         let v = json!({"k": ["a", "b: c"]});
         assert_eq!(encode_with(&v, &opts), "k[2]:\n  - a\n  - \"b: c\"");
+        // Not split on the delimiter: commas and brackets stay plain.
+        let w = json!({"k": ["x, y", "f(a[0])"]});
+        assert_eq!(encode_with(&w, &opts), "k[2]:\n  - x, y\n  - f(a[0])");
         assert_eq!(encode(&v), "k[2]: a,\"b: c\"");
     }
 

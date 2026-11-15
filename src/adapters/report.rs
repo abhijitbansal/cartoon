@@ -37,12 +37,18 @@ pub fn merge(reports: Vec<TestReport>) -> Option<TestReport> {
     Some(acc)
 }
 
+/// One space per nesting level: the report is read by a model, not decoded,
+/// and each trace line sits two levels deep, so a wider indent costs tokens
+/// on every line of a traceback.
+const REPORT_INDENT: usize = 1;
+
 /// Asymmetric rendering: passes cost one summary block; failures keep
 /// id/loc/msg rows plus budgeted traces. Paths under the working directory
 /// are printed relative to it.
 pub fn render(report: &TestReport, trace_lines: usize) -> String {
     let opts = crate::toon::Options {
         list_scalar_arrays: true,
+        indent_size: REPORT_INDENT,
         ..Default::default()
     };
     crate::toon::encode_with(&report_value(report, trace_lines), &opts)
@@ -375,13 +381,63 @@ mod tests {
         assert!(out.contains("- \" leading space\""), "got:\n{out}");
     }
 
-    /// List form costs a few tokens per line (hyphen + indent vs a comma).
-    /// Measured on the pytest fixtures with traces: +8..12% of the whole
-    /// report (o200k). The bound keeps that cost from drifting upward.
+    #[test]
+    fn trace_lines_keep_commas_brackets_and_inner_quotes_plain() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "assert x == y, 'msg'".into(),
+            "print(\"a\", file=sys.stderr)".into(),
+            "items[0] = {1, 2}".into(),
+            "[stdout] hello".into(),
+            "a\\b".into(),
+        ];
+        let out = render(&r, 20);
+        assert!(out.contains("- assert x == y, 'msg'\n"), "got:\n{out}");
+        assert!(
+            out.contains("- print(\"a\", file=sys.stderr)\n"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("- items[0] = {1, 2}\n"), "got:\n{out}");
+        assert!(out.contains("- [stdout] hello\n"), "got:\n{out}");
+        assert!(out.contains("- a\\b"), "got:\n{out}");
+    }
+
+    #[test]
+    fn trace_lines_that_could_parse_as_structure_stay_quoted() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "def f():".into(),
+            "a.py:42: in f".into(),
+            "- not a marker".into(),
+            "\"already quoted\" text".into(),
+            "true".into(),
+            "42".into(),
+            "".into(),
+        ];
+        let out = render(&r, 20);
+        for want in [
+            "- \"def f():\"",
+            "- \"a.py:42: in f\"",
+            "- \"- not a marker\"",
+            "- \"\\\"already quoted\\\" text\"",
+            "- \"true\"",
+            "- \"42\"",
+            "- \"\"",
+        ] {
+            assert!(out.contains(want), "missing {want}; got:\n{out}");
+        }
+    }
+
+    /// One trace line per output line costs a hyphen where the old inline row
+    /// had a comma. Items need no delimiter quoting and the report indents one
+    /// space per level, so the whole report (o200k tokens) stays within 5% of
+    /// the old inline row across the pytest fixtures that carry a traceback.
+    /// Measured: mixed 137/132, captured-output 172/163, collect-syntax-error
+    /// 152/150 (new/old).
     #[test]
     fn trace_rendering_cost_stays_flat() {
         let tok = |s: &str| crate::stats::estimate_tokens(s, "o200k");
-        let mut checked = 0;
+        let (mut new_total, mut old_total) = (0, 0);
         for name in ["mixed", "captured-output", "collect-syntax-error"] {
             let xml = std::fs::read_to_string(format!("tests/fixtures/pytest/{name}.xml")).unwrap();
             let report = crate::adapters::pytest::parse_junit(&xml).unwrap();
@@ -391,15 +447,20 @@ mod tests {
             );
             let new = render(&report, 20);
             let old = crate::toon::encode(&report_value(&report, 20));
+            // No single fixture may drift far past the aggregate bound.
             assert!(
-                tok(&new) * 100 <= tok(&old) * 115,
+                tok(&new) * 100 <= tok(&old) * 107,
                 "{name}: new {} vs old {} tokens\nnew:\n{new}\nold:\n{old}",
                 tok(&new),
                 tok(&old)
             );
-            checked += 1;
+            new_total += tok(&new);
+            old_total += tok(&old);
         }
-        assert_eq!(checked, 3);
+        assert!(
+            new_total * 100 <= old_total * 105,
+            "new {new_total} vs old {old_total} tokens over the trace fixtures"
+        );
     }
 
     #[test]
@@ -562,7 +623,7 @@ mod tests {
         let out = render(&r, 20);
         assert!(!out.contains(&cwd), "got:\n{out}");
         assert!(
-            out.contains("File \\\"tests/test_auth.py\\\", line 42"),
+            out.contains("- File \"tests/test_auth.py\", line 42"),
             "got:\n{out}"
         );
     }
