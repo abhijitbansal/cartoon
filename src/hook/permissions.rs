@@ -138,11 +138,15 @@ pub fn is_guarded(cmd: &str, rules: &UserRules) -> bool {
     let Some(candidates) = candidates(cmd) else {
         return true;
     };
-    rules.guards.iter().any(|rule| match parse_rule(rule) {
-        Pattern::All => true,
-        Pattern::Exact(p) => candidates.contains(&p),
-        Pattern::Glob(p) => candidates.iter().any(|c| glob_matches(&p, c)),
-    })
+    rules
+        .guards
+        .iter()
+        .flat_map(|rule| parse_rule(rule))
+        .any(|pattern| match pattern {
+            Pattern::All => true,
+            Pattern::Exact(p) => candidates.contains(&p),
+            Pattern::Glob(p) => candidates.iter().any(|c| glob_matches(&p, c)),
+        })
 }
 
 enum Pattern {
@@ -151,16 +155,30 @@ enum Pattern {
     Glob(String),
 }
 
-fn parse_rule(rule: &str) -> Pattern {
+/// The patterns one rule stands for: as written, plus with shell quoting
+/// removed when it has any (`Bash(make "deploy":*)` also matches
+/// `make deploy`). Quoting that can't be removed guards everything.
+fn parse_rule(rule: &str) -> Vec<Pattern> {
     let Some(inner) = rule
         .trim()
         .strip_prefix("Bash(")
         .and_then(|s| s.strip_suffix(')'))
     else {
         // `Bash` itself, or a shape we don't understand: guard everything.
-        return Pattern::All;
+        return vec![Pattern::All];
     };
-    let inner = normalise(inner);
+    let mut patterns = vec![pattern_of(normalise(inner))];
+    if inner.contains(['\'', '"', '\\']) {
+        match unquote(inner) {
+            Some(unquoted) => patterns.push(pattern_of(unquoted)),
+            None => return vec![Pattern::All],
+        }
+    }
+    patterns
+}
+
+/// One normalised rule pattern: everything, a `:*` prefix, a glob or exact.
+fn pattern_of(inner: String) -> Pattern {
     if inner.is_empty() || inner == "*" {
         return Pattern::All;
     }
@@ -234,9 +252,12 @@ fn candidates(cmd: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// The words the shell would see, quotes removed, joined by one space.
+/// The words the shell would see, quotes removed, normalised like raw text
+/// (so an empty quoted word such as `''` leaves no double space).
 fn unquote(s: &str) -> Option<String> {
-    shell_words::split(s).ok().map(|words| words.join(" "))
+    shell_words::split(s)
+        .ok()
+        .map(|words| normalise(&words.join(" ")))
 }
 
 /// Split on `&&`, `||`, `;` and `|` only where they sit outside quotes. A
@@ -359,6 +380,28 @@ mod tests {
         }
         assert!(is_guarded("npm 'ci'", &rules(&["Bash(npm ci)"])));
         assert!(is_guarded("pytest '-q'", &rules(&["Bash(pytest -q)"])));
+        assert!(is_guarded("make '' deploy", &deploy));
+    }
+
+    #[test]
+    fn quoted_rule_patterns_are_unquoted() {
+        let deploy = rules(&[r#"Bash(make "deploy":*)"#]);
+        for cmd in ["make deploy", "make 'deploy'", "make dep'loy'"] {
+            assert!(is_guarded(cmd, &deploy), "{cmd}");
+        }
+        assert!(!is_guarded("make test", &deploy));
+        let ci = rules(&[r#"Bash(npm "ci")"#]);
+        assert!(is_guarded("npm ci", &ci));
+        assert!(is_guarded("npm 'ci'", &ci));
+        assert!(is_guarded(
+            r#"git commit -m "x""#,
+            &rules(&[r#"Bash(git commit -m "x")"#])
+        ));
+    }
+
+    #[test]
+    fn rule_with_unbalanced_quote_guards_everything() {
+        assert!(is_guarded("pytest", &rules(&[r#"Bash(make "deploy)"#])));
     }
 
     #[test]
