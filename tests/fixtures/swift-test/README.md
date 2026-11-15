@@ -1,0 +1,1 @@
+`compile-failure.log` is a hand-authored log (not captured from a real run), modelled on `swift build` failure output, for the build-diagnostics fallback test in `src/adapters/swift_test.rs`. The `.xml` files are xunit output.

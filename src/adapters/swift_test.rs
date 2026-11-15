@@ -57,21 +57,47 @@ impl Adapter for SwiftTest {
             artifact: artifact.map(super::Artifact::File),
         }
     }
-    fn parse(&self, _captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
+    fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome> {
         let path = prepared
             .artifact_path()
             .context("swift-test adapter has no xunit artifact")?;
-        let report = parse_xunit_pair(&path)?;
+        let report = match parse_xunit_pair(&path) {
+            Ok(report) => report,
+            // No usable xunit on a failed run: the package most likely did
+            // not compile. Report its diagnostics if the log has any.
+            Err(e) if !captured.status.success() => {
+                return build_fallback("swift-test", captured).map_err(|_| e);
+            }
+            Err(e) => return Err(e),
+        };
         Ok(ParseOutcome {
             report: super::AdapterReport::Tests(report),
             // stdout was build progress + test log, stderr the XCTest run
             // narration — both are the human report the TOON output replaces.
-            // (Build failures never reach here: no xml -> parse error -> the
-            // app's passthrough fallback shows the raw streams.)
+            // (Build failures take the `build_fallback` path above; a failure
+            // with no diagnostics falls to the app's raw passthrough.)
             passthrough_stdout: None,
             passthrough_stderr: None,
         })
     }
+}
+
+/// Build-diagnostics report for a `swift test` run that failed before any
+/// test ran. `Err` when the streams hold no located error, so the run passes
+/// through raw.
+fn build_fallback(runner: &str, captured: &Captured) -> Result<ParseOutcome> {
+    let text = format!("{}\n{}", captured.stdout, captured.stderr);
+    let (mut value, _) = super::swift_build::parse_text(&text);
+    anyhow::ensure!(
+        value["summary"]["errors"].as_u64().unwrap_or(0) > 0,
+        "no build errors found in the swift test log"
+    );
+    value["runner"] = runner.into();
+    Ok(ParseOutcome {
+        report: super::AdapterReport::Value(value),
+        passthrough_stdout: None,
+        passthrough_stderr: None,
+    })
 }
 
 /// Swift 6 writes XCTest results to the given path and Swift Testing results
@@ -262,5 +288,35 @@ mod tests {
     fn missing_files_are_parse_error() {
         let dir = tempfile::tempdir().unwrap();
         assert!(parse_xunit_pair(&dir.path().join("out.xml")).is_err());
+    }
+
+    #[test]
+    fn swift_test_compile_failure_reports_diagnostics() {
+        use std::os::unix::process::ExitStatusExt;
+        let cap = Captured {
+            stdout: String::new(),
+            stderr: fixture("compile-failure.log"),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+        };
+        let prepared = SwiftTest.prepare(argv(&["swift", "test"]));
+        let out = SwiftTest.parse(&cap, &prepared).unwrap();
+        let rendered = out.report.render(5);
+        assert!(rendered.contains("Sources/Lib/A.swift"), "got: {rendered}");
+        assert!(
+            rendered.contains("cannot find 'bar' in scope"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn swift_test_failure_without_diagnostics_passes_through() {
+        use std::os::unix::process::ExitStatusExt;
+        let cap = Captured {
+            stdout: String::new(),
+            stderr: "error: no tests found\n".into(),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+        };
+        let prepared = SwiftTest.prepare(argv(&["swift", "test"]));
+        assert!(SwiftTest.parse(&cap, &prepared).is_err());
     }
 }
