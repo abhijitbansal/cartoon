@@ -255,3 +255,37 @@ fn shell_grep_count_pipe_runs_natively() {
         .success()
         .stdout(contains("1"));
 }
+
+/// The left side is adapter-detected (a stand-in `pytest` on PATH), so only
+/// the right-hand filter decides whether the pipe is split. `grep -c` must
+/// keep its answer: the pipe runs whole under `sh -c`, nothing is dropped.
+#[cfg(unix)]
+#[test]
+fn adapter_pipe_into_grep_count_runs_natively() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("pytest");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nprintf 'X one\\nY two\\nX three\\nX four\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest | grep -c X"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.trim(), "3", "exact grep -c answer: {stdout}");
+    assert!(!stdout.contains("pipe_filter_dropped"), "{stdout}");
+}
