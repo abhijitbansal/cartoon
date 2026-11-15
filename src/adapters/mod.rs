@@ -26,6 +26,7 @@ pub mod vitest;
 pub mod xcodebuild;
 pub mod xcodebuild_build;
 pub mod xcodebuild_test;
+pub mod xctest_log;
 
 use crate::runner::Captured;
 use anyhow::Result;

@@ -80,7 +80,7 @@ impl Adapter for XcodebuildTest {
         }
         match read_summary(&bundle, !failed) {
             Ok(report) => Ok(ParseOutcome {
-                report: super::AdapterReport::Tests(report),
+                report: super::AdapterReport::Tests(with_log_locations(report, captured)),
                 // xcodebuild's human log was stdout/stderr — replaced by the summary.
                 passthrough_stdout: None,
                 passthrough_stderr: None,
@@ -88,6 +88,15 @@ impl Adapter for XcodebuildTest {
             Err(e) => fall_back_or_bail(failed, captured, &e.to_string()),
         }
     }
+}
+
+/// The xcresult summary carries no `file:line`; XCTest failures get theirs
+/// (and a message, if the summary had none) from the log's
+/// `path:line: error: -[Class test] : message` lines.
+fn with_log_locations(mut report: TestReport, captured: &Captured) -> TestReport {
+    super::xctest_log::fill_from_log(&mut report.failures, &captured.stdout);
+    super::xctest_log::fill_from_log(&mut report.failures, &captured.stderr);
+    report
 }
 
 /// The bundle's summary as a report, or why it may not stand in for the log.
@@ -364,6 +373,23 @@ mod tests {
             r.failures[1].id,
             "SwiftDemoTests.GreeterXCTests/testGreetingExact()"
         );
+    }
+
+    #[test]
+    fn xctest_failures_get_their_location_from_the_log() {
+        // Final review I12: the summary path drops the location the log has.
+        use std::os::unix::process::ExitStatusExt;
+        let r = parse_summary_json(&fixture("summary-mixed.json")).unwrap();
+        let cap = Captured {
+            stdout: "/p/SwiftDemoTests.swift:6: error: -[SwiftDemoTests.GreeterXCTests testGreetingExact] : XCTAssertEqual failed\n".into(),
+            stderr: String::new(),
+            status: std::process::ExitStatus::from_raw(65 << 8),
+        };
+        let r = with_log_locations(r, &cap);
+        assert_eq!(r.failures[1].loc, "/p/SwiftDemoTests.swift:6");
+        assert!(!r.failures[1].msg.is_empty());
+        // A Swift Testing failure has no such line: left as it was.
+        assert!(r.failures[0].loc.is_empty());
     }
 
     #[test]

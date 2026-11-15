@@ -62,7 +62,13 @@ impl Adapter for SwiftTest {
             .artifact_path()
             .context("swift-test adapter has no xunit artifact")?;
         let report = match parse_xunit_pair(&path) {
-            Ok(report) => report,
+            Ok(mut report) => {
+                // SwiftPM's xunit drops an XCTest failure's location and
+                // message; the log's `path:line: error: -[...]` lines have them.
+                super::xctest_log::fill_from_log(&mut report.failures, &captured.stdout);
+                super::xctest_log::fill_from_log(&mut report.failures, &captured.stderr);
+                report
+            }
             // No usable xunit on a failed run: the package most likely did
             // not compile. Report its diagnostics if the log has any.
             Err(e) if !captured.status.success() => {
@@ -304,6 +310,28 @@ mod tests {
         assert!(rendered.contains("Sources/Lib/A.swift"), "got: {rendered}");
         assert!(
             rendered.contains("cannot find 'bar' in scope"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn xctest_failure_gets_its_message_and_location_from_the_log() {
+        // Final review I12, measured: a failing XCTAssertEqual under
+        // `swift test` rendered with no location and no message.
+        use std::os::unix::process::ExitStatusExt;
+        let prepared = SwiftTest.prepare(argv(&["swift", "test"]));
+        let xml = r#"<testsuites><testsuite name="T" tests="1" failures="1" time="0.1"><testcase classname="DemoTests.GreeterXCTests" name="testGreetingExact" time="0.001"><failure message="failed"></failure></testcase></testsuite></testsuites>"#;
+        std::fs::write(prepared.artifact_path().unwrap(), xml).unwrap();
+        let cap = Captured {
+            stdout: String::new(),
+            stderr: "/Users/dev/Demo/Tests/DemoTests/DemoTests.swift:6: error: -[DemoTests.GreeterXCTests testGreetingExact] : XCTAssertEqual failed: (\"Hello\") is not equal to (\"Hi\")\n".into(),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+        };
+        let out = SwiftTest.parse(&cap, &prepared).unwrap();
+        let rendered = out.report.render(5);
+        assert!(rendered.contains("DemoTests.swift:6"), "got: {rendered}");
+        assert!(
+            rendered.contains("XCTAssertEqual failed"),
             "got: {rendered}"
         );
     }
