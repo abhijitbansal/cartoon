@@ -1,6 +1,6 @@
 # cartoon
 
-Your coding agent gets the failing test and file:line from xcodebuild, swift test, pytest or cargo test — not a wall of log. Exit code and full log kept.
+Your coding agent gets the failing test, plus file:line where the tool reports one, from xcodebuild, swift test, pytest or cargo test — not a wall of log. Exit code and full log kept.
 
 ## Before and after
 

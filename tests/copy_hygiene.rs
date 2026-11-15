@@ -23,7 +23,10 @@ const BANNED: &[&str] = &[
 ];
 /// Matched case-insensitively. The spec drops the "any CLI" pitch: cartoon is
 /// pitched at Xcode/Swift runs for coding agents, not every command.
-const BANNED_PHRASES: &[&str] = &["any cli"];
+/// "and file:line" is also banned: assertion failures from xcodebuild/swift
+/// test carry the test id and message with an empty location (only compile
+/// errors carry file:line:col), so the pitch must qualify the promise.
+const BANNED_PHRASES: &[&str] = &["any cli", "and file:line"];
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".scratch",

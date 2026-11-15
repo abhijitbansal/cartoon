@@ -1,6 +1,6 @@
 ---
 name: cartoon
-description: Keep the failing test and file:line, drop the wall of log, by wrapping noisy dev commands in `cartoon`. Use whenever running xcodebuild, swift test/build, pytest, cargo test, jest, unittest, other test runners, builds and linters, or a JSON-emitting CLI. Also covers installing and setting up cartoon when it is not present.
+description: Keep the failing test, plus file:line where the tool reports one, drop the wall of log, by wrapping noisy dev commands in `cartoon`. Use whenever running xcodebuild, swift test/build, pytest, cargo test, jest, unittest, other test runners, builds and linters, or a JSON-emitting CLI. Also covers installing and setting up cartoon when it is not present.
 license: MIT
 ---
 
