@@ -76,8 +76,8 @@
 //!          with no `..` that resolves (symlinks followed) to a directory
 //!          inside the project root. The `cd` stays outside the wrapped
 //!          string, so the Bash tool's cwd tracking still sees it; paths in
-//!          the rest are still judged against the root. Residual: a `CDPATH`
-//!          in the user's shell can send a bare `cd App` elsewhere.
+//!          the rest are still judged against the root. It is emitted as
+//!          `cd ./<dir>`, so a `CDPATH` in the user's shell can't redirect it.
 //!   - A command is already wrapped when the tool a segment launches has
 //!     basename `cartoon`, looking past `NAME=value`, `xcrun`, the JS
 //!     runners, `uv run`/`uvx` and `python -m` (a file named
@@ -348,7 +348,9 @@ fn rewrite_from_stdin() -> Result<i32> {
 /// runs in: the event's absolute `cwd`, else `fallback` (the hook's own cwd).
 /// When Claude Code's `CLAUDE_PROJECT_DIR` is set and absolute, rules found
 /// from it are added too (the shell may have `cd`'d outside the project).
-/// None when neither is known, or the event is not JSON (no rewrite follows).
+/// None when neither is known, when neither `HOME` nor `CLAUDE_CONFIG_DIR`
+/// is set (the user settings can't be found), or the event is not JSON (no
+/// rewrite follows).
 fn user_rules_for(input: &str, fallback: Option<&Path>) -> Option<UserRules> {
     let v: Value = serde_json::from_str(input).ok()?;
     let dir = event_cwd(&v).or(fallback)?;
@@ -359,6 +361,11 @@ fn user_rules_for(input: &str, fallback: Option<&Path>) -> Option<UserRules> {
     };
     let home = env_path("HOME");
     let config_dir = env_path("CLAUDE_CONFIG_DIR");
+    // No user settings location known: the user's own rules can't be read,
+    // so nothing may be approved.
+    if home.is_none() && config_dir.is_none() {
+        return None;
+    }
     let managed = permissions::managed_settings_path();
     let load = |start: &Path| {
         permissions::load_user_rules(
@@ -538,7 +545,7 @@ pub fn wrap_command_in(
     // The `cd` stays outside: the Bash tool tracks cwd across calls, and a
     // cd inside cartoon's subshell would be lost.
     let wrapped = match &shape.cd {
-        Some(dir) => format!("cd {dir} && {run}"),
+        Some(dir) => format!("cd {} && {run}", shapes::cdpath_proof(dir)),
         None => run,
     };
     Some((wrapped, force_deny))
@@ -2083,12 +2090,29 @@ mod tests {
         let root = project_with_app();
         assert_eq!(
             wrap_in("cd App && xcodebuild test -scheme App", root.path()).unwrap(),
-            "cd App && cartoon --merge-streams -c 'xcodebuild test -scheme App'"
+            "cd ./App && cartoon --merge-streams -c 'xcodebuild test -scheme App'"
         );
         assert_eq!(
             wrap_in("cd App && swift test 2>&1 | tail -30", root.path()).unwrap(),
-            "cd App && cartoon --merge-streams -c 'swift test | tail -30'"
+            "cd ./App && cartoon --merge-streams -c 'swift test | tail -30'"
         );
+    }
+
+    #[test]
+    fn cd_is_emitted_with_a_leading_dot_slash_so_cdpath_cannot_redirect_it() {
+        // Final review M1: bash searches CDPATH for `cd App` (and for
+        // `cd .build`), never for `cd ./App`.
+        let root = project_with_app();
+        std::fs::create_dir(root.path().join(".build")).unwrap();
+        for (typed, emitted) in [
+            ("cd ./App && pytest", "cd ./App && "),
+            ("cd .build && pytest", "cd ./.build && "),
+            ("cd App/ && pytest", "cd ./App/ && "),
+            ("cd . && pytest", "cd . && "),
+        ] {
+            let out = wrap_in(typed, root.path()).unwrap();
+            assert!(out.starts_with(emitted), "{typed}: {out}");
+        }
     }
 
     #[cfg(unix)]

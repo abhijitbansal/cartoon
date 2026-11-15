@@ -175,6 +175,24 @@ fn no_rules_still_rewrites() {
 }
 
 #[test]
+fn no_home_and_no_config_dir_emits_nothing() {
+    // Final review M5: user rules can't be found, so nothing is approved.
+    let (_tmp, _home, proj) = home_and_project();
+    let mut cmd = cartoon();
+    cmd.env_remove("HOME").env_remove("CLAUDE_CONFIG_DIR");
+    assert_eq!(
+        rewrite_event(cmd, &proj, &bash_event(&proj, "pytest -q")),
+        ""
+    );
+    let mut cmd = cartoon();
+    cmd.env("HOME", "").env("CLAUDE_CONFIG_DIR", "");
+    assert_eq!(
+        rewrite_event(cmd, &proj, &bash_event(&proj, "pytest -q")),
+        ""
+    );
+}
+
+#[test]
 fn plan_mode_emits_nothing() {
     let (_tmp, home, proj) = home_and_project();
     let mut event = bash_event(&proj, "pytest");
@@ -492,7 +510,7 @@ fn rewrite_covers_the_agent_shapes_around_xcodebuild() {
         ),
         (
             "cd App && xcodebuild test -scheme App",
-            "cd App && cartoon --merge-streams -c 'xcodebuild test -scheme App'",
+            "cd ./App && cartoon --merge-streams -c 'xcodebuild test -scheme App'",
         ),
     ] {
         let out = rewrite_event(cartoon_with_home(&home), &proj, &bash_event(&proj, cmd));

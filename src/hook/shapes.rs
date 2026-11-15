@@ -42,11 +42,28 @@ impl Shape {
         let inner = self.inner();
         match &self.cd {
             Some(dir) => {
-                let full = format!("cd {dir} && {inner}");
-                vec![inner, full]
+                let typed = format!("cd {dir} && {inner}");
+                let emitted = format!("cd {} && {inner}", cdpath_proof(dir));
+                let mut forms = vec![inner, typed];
+                if !forms.contains(&emitted) {
+                    forms.push(emitted);
+                }
+                forms
             }
             None => vec![inner],
         }
+    }
+}
+
+/// `dir` as the rewrite emits it: with a leading `./`, so a `CDPATH` in the
+/// user's shell can't send it elsewhere. bash searches `CDPATH` for every
+/// relative name whose first component is not `.` or `..` (`App`,
+/// `.build`), never for `./App`. Exactly `.` and `./...` stay as typed.
+pub(super) fn cdpath_proof(dir: &str) -> String {
+    if dir == "." || dir.starts_with("./") {
+        dir.to_string()
+    } else {
+        format!("./{dir}")
     }
 }
 
@@ -113,8 +130,8 @@ fn peel_cd<'a>(cmd: &'a str, root: Option<&Path>) -> Option<(Option<String>, &'a
 
 /// `dir` is one plain word (no quote, space, `$`, `~`, glob, ...), relative,
 /// not an option, free of `..`, and resolves (symlinks followed) to an
-/// existing directory under `root`. `CDPATH` can still redirect a bare name
-/// in the user's shell; that residual is accepted (see `mod.rs`).
+/// existing directory under `root`. The rewrite emits it through
+/// `cdpath_proof`, so `CDPATH` can't redirect it.
 fn dir_in_project(dir: &str, root: &Path) -> bool {
     let plain = !dir.is_empty() && dir.chars().all(|c| c != ' ' && super::is_plain(c));
     if !plain || dir.starts_with(['-', '/']) || dir.split('/').any(|p| p == "..") {
@@ -202,7 +219,15 @@ mod tests {
         );
         assert_eq!(
             shape(Some("App"), "swift build", Some("tail -5")).rule_forms(),
-            ["swift build | tail -5", "cd App && swift build | tail -5"]
+            [
+                "swift build | tail -5",
+                "cd App && swift build | tail -5",
+                "cd ./App && swift build | tail -5"
+            ]
+        );
+        assert_eq!(
+            shape(Some("./App"), "pytest", None).rule_forms(),
+            ["pytest", "cd ./App && pytest"]
         );
     }
 
