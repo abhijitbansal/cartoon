@@ -1961,6 +1961,111 @@ mod tests {
         assert!(wrapped > 1_000, "only {wrapped} accepted");
     }
 
+    /// The accepted shapes (`2>&1`, one display pipe, a leading `cd`) under
+    /// the same fuzzing: every accepted rewrite is `[cd ./<dir in root> && ]
+    /// cartoon --merge-streams -c '<inner>'`, and `<inner>` minus its
+    /// display filter lexes and every segment passes `judge_segment` (final
+    /// review M22).
+    #[test]
+    fn property_shape_rewrites_stay_judged() {
+        const HEADS: &[&str] = &[
+            "pytest",
+            "xcodebuild test -scheme A",
+            "swift build",
+            "cargo test",
+            "cd App && pytest",
+            "cd App && xcodebuild test -scheme A",
+            "cd /etc && pytest",
+            "cd App/.. && pytest",
+            "",
+        ];
+        const PIECES: &[&str] = &[
+            " ",
+            " -q",
+            " tests/",
+            " 2>&1",
+            " 2>&1",
+            " | tail -5",
+            " | head -n 3",
+            " | xcbeautify",
+            " | tail",
+            " | grep x",
+            " && pytest",
+            " && make deploy",
+            "cd App && ",
+            "cd /etc && ",
+            " > f",
+            " |",
+            ";",
+            "'",
+            "$(",
+            " -exportArchive",
+            " archive",
+        ];
+        let root = project_with_app();
+        let canonical_root = root.path().canonicalize().unwrap();
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut wrapped, mut with_cd, mut with_filter) = (0, 0, 0);
+        for _ in 0..50_000 {
+            let mut cmd = HEADS[(next() % HEADS.len() as u64) as usize].to_string();
+            for _ in 0..next() % 5 {
+                cmd.push_str(PIECES[(next() % PIECES.len() as u64) as usize]);
+            }
+            let Some((w, _)) = wrap_command_in(&cmd, &[], Some(root.path())) else {
+                continue;
+            };
+            wrapped += 1;
+            let run = match w.strip_prefix("cd ") {
+                Some(rest) => {
+                    with_cd += 1;
+                    let (dir, run) = rest.split_once(" && ").expect("cd form");
+                    assert!(dir.starts_with("./"), "{cmd:?} -> {w}");
+                    let target = root.path().join(dir).canonicalize().unwrap();
+                    assert!(target.starts_with(&canonical_root), "{cmd:?} -> {w}");
+                    run
+                }
+                None => w.as_str(),
+            };
+            let words = shell_words::split(run).unwrap();
+            assert_eq!(words[..3], ["cartoon", "--merge-streams", "-c"], "{cmd:?}");
+            assert_eq!(words.len(), 4, "{cmd:?} -> {w}");
+            let inner = &words[3];
+            let body = match crate::cli::split_single_pipe(inner) {
+                Some((body, filter)) => {
+                    with_filter += 1;
+                    let name = filter.split_whitespace().next().unwrap_or("");
+                    assert!(
+                        ["head", "tail", "xcbeautify", "xcpretty"].contains(&name),
+                        "{cmd:?} -> {w}"
+                    );
+                    body.trim_end().to_string()
+                }
+                None => inner.clone(),
+            };
+            let segments = lex(&body).unwrap_or_else(|| panic!("{cmd:?} -> {w}"));
+            for seg in &segments {
+                assert!(
+                    matches!(
+                        judge_segment(seg, &[], Some(root.path())),
+                        Some(Match::Builtin)
+                    ),
+                    "{cmd:?} -> {w}"
+                );
+            }
+        }
+        assert!(wrapped > 1_000, "only {wrapped} accepted");
+        assert!(
+            with_cd > 100 && with_filter > 100,
+            "{with_cd} cd, {with_filter} filter"
+        );
+    }
+
     fn wrap(cmd: &str) -> Option<String> {
         wrap_command(cmd)
     }
