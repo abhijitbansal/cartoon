@@ -1,8 +1,8 @@
 //! `cartoon setup [--project] [--no-instructions]` — one idempotent,
 //! non-interactive command that does what a new user needs: install the
-//! Claude Code hook, write the instructions block, then print the doctor
-//! report so the result is visible. Never prompts; safe to run unattended
-//! and to re-run.
+//! Claude Code hook (unless the cartoon plugin already provides it), write
+//! the instructions block, then print the doctor report so the result is
+//! visible. Never prompts; safe to run unattended and to re-run.
 use anyhow::Result;
 
 /// Accepted flags, named in the error for an unknown one.
@@ -35,7 +35,13 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
 }
 
 pub fn run(opts: Options) -> Result<i32> {
-    crate::hook::install_claude_hook(opts.project)?;
+    if crate::doctor::plugin_enabled() {
+        println!(
+            "cartoon plugin (cartoon@cartoon) is enabled: it already provides the PreToolUse hook, so setup skipped the settings.json hook."
+        );
+    } else {
+        crate::hook::install_claude_hook(opts.project)?;
+    }
     if opts.instructions {
         let path = crate::instructions::doc_path(crate::instructions::default_agent_doc());
         let outcome = crate::instructions::install_doc(&path)?;

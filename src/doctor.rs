@@ -81,6 +81,12 @@ pub fn plugin_enabled_in(settings: &str) -> bool {
     })
 }
 
+/// Is the cartoon plugin (and so its PreToolUse hook) enabled in any
+/// settings file? `setup` uses this to avoid adding a duplicate hook.
+pub fn plugin_enabled() -> bool {
+    !plugin_rows().is_empty()
+}
+
 /// Settings files that enable the plugin hook.
 fn plugin_rows() -> Vec<String> {
     plugin_settings_paths()

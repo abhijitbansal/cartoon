@@ -415,6 +415,26 @@ fn setup_project_writes_the_hook_into_the_project() {
 }
 
 #[test]
+fn setup_skips_the_settings_hook_when_the_plugin_is_enabled() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let settings_path = home.path().join(".claude/settings.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    let original = r#"{"enabledPlugins": {"cartoon@cartoon": true}}"#;
+    std::fs::write(&settings_path, original).unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--no-instructions"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+
+    // No duplicate PreToolUse hook: the plugin already provides it.
+    let settings = std::fs::read_to_string(&settings_path).unwrap();
+    assert!(!settings.contains("cartoon hook rewrite"), "{settings}");
+    assert!(!settings.contains("PreToolUse"), "{settings}");
+    assert!(stdout.contains("plugin"), "{stdout}");
+}
+
+#[test]
 fn setup_unknown_flag_errors_and_names_the_accepted_ones() {
     let home = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
