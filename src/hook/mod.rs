@@ -52,15 +52,18 @@
 //!     every gradle task (judged by the last `:` segment, so `:app:publish`
 //!     is a publish) must be a build/test/check task with no side-effect
 //!     word (`publish`, `deploy`, `upload`, `install`, `release`, `push`,
-//!     `connected`, `docker`, `sign`, ...) and must not be an instrumented
+//!     `connected`, `docker`, `sign`, `ship`, `flight`, `distribute`,
+//!     `submit`, ...) and must not be an instrumented
 //!     device test (`...AndroidTest`, or a camel-case abbreviation of it);
 //!     every mvn goal must be a phase from `clean` to `verify`, and an mvn
 //!     profile (`-P x`, `-Px`, `--activate-profiles[=]x`) must name no
 //!     side-effect word; `npm ci` needs `--ignore-scripts` (else
 //!     every dependency's install script runs). Watch modes are refused:
 //!     `jest --watch[All]`, `vitest --watch|-w|watch|dev`, `tsc --watch|-w`,
-//!     `npm|pnpm|yarn|bun test -- --watch[All]`, `pytest -f|--looponfail`,
-//!     `gradle --continuous|-t`, `cargo doc --open`.
+//!     `npm|pnpm|yarn|bun test -- --watch[All]|-w|watch|dev`,
+//!     `vitest --standalone`, `ruff --watch|-w`, `pytest -f|--looponfail`,
+//!     `gradle --continuous|-t` (also bundled, `-qt`), `gradle --debug-jvm`,
+//!     `cargo doc --open`.
 //!   - Accepted shapes (`shapes::normalise`, before lexing). Three wrappers
 //!     agents put around a noisy tool are peeled off; anything that looks
 //!     like one but is not exactly it means "no rewrite":

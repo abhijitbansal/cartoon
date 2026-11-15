@@ -440,6 +440,10 @@ const SIDE_EFFECT_WORDS: &[&str] = &[
     "bintray",
     "sonatype",
     "notarize",
+    "ship",
+    "flight",
+    "distribute",
+    "submit",
 ];
 
 /// gradle options whose next token is a value (a test filter, an excluded
@@ -466,7 +470,8 @@ const MVN_PHASES: &[&str] = &[
 ];
 
 /// mvn options whose next token is a value (a module list, a thread count,
-/// a profile), not a phase. A profile value is judged by `mvn_safe_profile`
+/// a profile, a `-D` property), not a phase. A spaced `-D name=v` property
+/// is still judged by `mvn_safe_property`. A profile value is judged by `mvn_safe_profile`
 /// instead (in the mvn `ArgPolicy`, every spelling): `-P ci` wraps,
 /// `-P release` does not.
 const MVN_VALUE_FLAGS: &[&str] = &[
@@ -478,6 +483,8 @@ const MVN_VALUE_FLAGS: &[&str] = &[
     "--resume-from",
     "-T",
     "--threads",
+    "-D",
+    "--define",
 ];
 
 /// make targets that build, test or check. `test-*`/`test_*` (and the same
@@ -659,12 +666,30 @@ fn mvn_safe_profile(v: &str) -> bool {
 /// are not a one-shot dev-loop run.
 fn watch_mode(tool: &str, args: &[&str]) -> bool {
     let has_long = |names: &[&str]| args.iter().any(|a| long_named(a, names));
+    // An all-letter short-flag cluster holding `c` (`-qt`, `-tq`, `-qw`).
+    let cluster_has = |c: char| {
+        args.iter().any(|a| {
+            a.strip_prefix('-').is_some_and(|b| {
+                !b.is_empty() && b.chars().all(|x| x.is_ascii_alphabetic()) && b.contains(c)
+            })
+        })
+    };
     match tool {
-        // `npm|pnpm|yarn|bun test -- --watch` hands the flag to the runner.
-        "jest" | "npm" | "pnpm" | "yarn" | "bun" => has_long(&["watch", "watchall"]),
-        "vitest" => {
-            has_long(&["watch"]) || args.iter().any(|a| matches!(*a, "-w" | "watch" | "dev"))
+        "jest" => has_long(&["watch", "watchall"]),
+        // `npm|pnpm|yarn|bun test -- --watch` hands the flag to the runner;
+        // after `--`, `-w`, `watch` and `dev` reach vitest's watch modes too.
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            has_long(&["watch", "watchall", "standalone"])
+                || args
+                    .iter()
+                    .skip_while(|a| **a != "--")
+                    .any(|a| matches!(*a, "-w" | "watch" | "dev"))
         }
+        "vitest" => {
+            has_long(&["watch", "standalone"])
+                || args.iter().any(|a| matches!(*a, "-w" | "watch" | "dev"))
+        }
+        "ruff" => has_long(&["watch"]) || cluster_has('w'),
         // tsc takes options with one or two dashes, in any case.
         "tsc" => args.iter().any(|a| {
             a.starts_with('-')
@@ -674,7 +699,8 @@ fn watch_mode(tool: &str, args: &[&str]) -> bool {
                 )
         }),
         "pytest" => has_long(&["looponfail"]) || args.iter().any(|a| pytest_loop_on_fail(a)),
-        "gradle" | "gradlew" => has_long(&["continuous"]) || args.contains(&"-t"),
+        // `--debug-jvm` waits for a debugger to attach; `-t` may be bundled.
+        "gradle" | "gradlew" => has_long(&["continuous", "debugjvm"]) || cluster_has('t'),
         "cargo" => args.first() == Some(&"doc") && args.contains(&"--open"),
         _ => false,
     }
@@ -1380,6 +1406,61 @@ mod tests {
             "dotnet build -t:Clean,Build",
         ] {
             assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn more_watch_and_hang_modes_not_wrapped() {
+        // Final review M6: each of these never returns or waits for a
+        // debugger, so the run buffers until the Bash timeout.
+        for c in [
+            "ruff check --watch",
+            "ruff check -w",
+            "ruff check -qw",
+            "npm test -- -w",
+            "npm test -- --watch",
+            "pnpm test -- watch",
+            "yarn test -- dev",
+            "bun test -- -w",
+            "gradle test --debug-jvm",
+            "gradle test -tq",
+            "gradle test -qt",
+            "vitest --standalone",
+            "npm test -- --standalone",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in ["ruff check -q", "gradle test -q", "npm test -- --ci"] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn more_side_effect_words_not_wrapped() {
+        // Final review M7: names that ship a build without a listed word.
+        for c in [
+            "gradle testflight",
+            "gradle compileAndShip",
+            "gradle testDistribute",
+            "make submit-build",
+            "make test-flight",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn mvn_spaced_define_is_a_value_not_a_phase() {
+        // Final review M24: `-D test=Foo` is a property, judged by its name.
+        for c in [
+            "mvn test -D test=Foo",
+            "mvn test --define skipITs",
+            "mvn verify -D skipTests",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in ["mvn test -D evil=x", "mvn test --define maven.repo.local=x"] {
+            assert!(wrap(c).is_none(), "{c}");
         }
     }
 
