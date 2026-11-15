@@ -309,6 +309,30 @@ mod tests {
     }
 
     #[test]
+    fn coloured_compile_failure_still_reports_diagnostics() {
+        // Final review I7: Swift 6.4.2 colours diagnostics on a pipe.
+        use std::os::unix::process::ExitStatusExt;
+        let cap = Captured {
+            stdout: fixture("compile-failure-color.log"),
+            stderr: String::new(),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+        };
+        let prepared = SwiftTest.prepare(argv(&["swift", "test"]));
+        let out = SwiftTest.parse(&cap, &prepared).unwrap();
+        let rendered = out.report.render(5);
+        assert!(rendered.contains("errors: 2"), "got: {rendered}");
+        assert!(
+            rendered.contains("Sources/Lib/A.swift:2:18"),
+            "got: {rendered}"
+        );
+        assert!(
+            rendered.contains("Sources/Lib/B.swift:9:3"),
+            "got: {rendered}"
+        );
+        assert!(!rendered.contains('\x1b'), "escapes stripped: {rendered}");
+    }
+
+    #[test]
     fn swift_test_failure_without_diagnostics_passes_through() {
         use std::os::unix::process::ExitStatusExt;
         let cap = Captured {

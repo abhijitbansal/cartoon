@@ -1,0 +1,8 @@
+Building for debugging...
+/Users/dev/proj/Sources/Lib/A.swift:2:18: [1;31merror: [1;39mcannot find 'bar' in scope[0m
+ 1 | import Foundation
+ 2 | let x = Greeter().bar()
+   |                  `- error: cannot find 'bar' in scope
+/Users/dev/proj/Sources/Lib/B.swift:7:5: [1;35mwarning: [1;39mvariable 'y' was never used[0m
+/Users/dev/proj/Sources/Lib/B.swift:9:3: [1;31merror: [1;39mmissing return in global function[0m
+[1;31merror: [1;39mfatalError[0m
