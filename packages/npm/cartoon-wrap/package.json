@@ -1,7 +1,7 @@
 {
   "name": "cartoon-wrap",
   "version": "0.0.0",
-  "description": "Token-optimized TOON output wrapper for any CLI (installs the `cartoon` binary)",
+  "description": "Compact dev-tool output for coding agents (installs the `cartoon` binary)",
   "license": "MIT",
   "repository": {
     "type": "git",

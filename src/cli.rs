@@ -4,7 +4,7 @@ use clap::Parser;
 #[command(
     name = "cartoon",
     version,
-    about = "Token-optimized TOON output wrapper for any CLI",
+    about = "Compact dev-tool output for coding agents",
     after_help = "Subcommands:
   stats [--since <7d|24h|30m>]               tokens saved, per adapter
   adapters                                   list built-in adapters

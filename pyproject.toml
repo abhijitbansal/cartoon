@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cartoon"
-description = "Token-optimized TOON output wrapper for any CLI"
+description = "Compact dev-tool output for coding agents"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }

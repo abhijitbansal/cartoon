@@ -1,4 +1,4 @@
-# cartoon — TOON wrapper for any CLI (design)
+# cartoon — TOON wrapper for CLI output (design)
 
 > **Frozen v0.1 draft (2026-06-09).** Several items below marked out of scope
 > have since shipped (compression ladder, auto-wrap hook, ingest, learn,
@@ -20,7 +20,7 @@ needs. TOON (Token-Oriented Object Notation) is a compact structured format
 designed for LLM consumption.
 
 Goal: a plug-and-play wrapper any developer can install (`pip`/`uv`/`npm`/
-`cargo`) and prefix onto any CLI command so its output becomes token-optimized
+`cargo`) and prefix onto a CLI command so its output becomes token-optimized
 TOON where possible — first-class support for test runners.
 
 ## Decisions (made during brainstorming)

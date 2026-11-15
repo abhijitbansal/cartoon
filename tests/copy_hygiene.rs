@@ -21,6 +21,9 @@ const BANNED: &[&str] = &[
     "92.5",
     "61.5",
 ];
+/// Matched case-insensitively. The spec drops the "any CLI" pitch: cartoon is
+/// pitched at Xcode/Swift runs for coding agents, not every command.
+const BANNED_PHRASES: &[&str] = &["any cli"];
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".scratch",
@@ -53,15 +56,25 @@ fn scan(dir: &Path, hits: &mut Vec<String>) {
                 hits.push(format!("{} contains {banned:?}", path.display()));
             }
         }
+        let lower = text.to_lowercase();
+        for phrase in BANNED_PHRASES {
+            if lower.contains(phrase) {
+                hits.push(format!("{} contains {phrase:?}", path.display()));
+            }
+        }
     }
 }
 
 #[test]
-fn no_unbacked_savings_figures_in_copy() {
+fn no_unbacked_savings_figures_or_banned_pitch_in_copy() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut hits = Vec::new();
     scan(root, &mut hits);
-    assert!(hits.is_empty(), "unbacked figures:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "unbacked figures or banned pitch:\n{}",
+        hits.join("\n")
+    );
 }
 
 /// `hook install --deny` was removed in 0.8; marketplace text must not tell

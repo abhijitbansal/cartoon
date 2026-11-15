@@ -1,6 +1,6 @@
 # cartoon
 
-**Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
+**Compact dev-tool output for coding agents.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
 far fewer tokens on verbose runs. The [benchmark](benchmarks/README.md)
