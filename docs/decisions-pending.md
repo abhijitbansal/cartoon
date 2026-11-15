@@ -14,6 +14,10 @@ Parked during the 0.8 focus-and-hardening branch (`feat/0.8-focus-and-hardening`
 8. **`npm test -- -w 4`** (jest maxWorkers) is now refused because `-w` after `--` counts as watch mode. Safe direction. Options: special-case jest / leave. Default: leave.
 9. **Windows.** No managed-settings path; with neither `HOME` nor `CLAUDE_CONFIG_DIR` set the hook never wraps. Default: leave until a Windows user reports it.
 
+9a. **Smaller hook residuals from the fix-wave re-review** (low confidence or predating 0.8): `-only-testing @/abs/ids.txt` is accepted; `gradle test --cont` (abbreviated long option) is accepted; `xcodebuild test -sdk iphoneos` with no `-destination` is accepted; `CODE_SIGN_IDENTITY=…` is in the safe build-settings list; dotnet `-getItem`/`-getProperty` are not gated. Default: leave.
+9b. **Merge-mode report path.** When a report is produced, raw stderr that explains an unexplained failure is still printed whole under `--merge-streams` even if a `| tail -N` was dropped (documented exception in docs/usage.md). Default: leave.
+9c. **Stats count `tail`'s own cut as cartoon savings** on the passthrough-with-cut path. Default: leave; label already says upper bound.
+
 ## Product and surface
 
 10. **The Copilot flag on `cartoon instructions install`** is the last Copilot surface (it writes `.github/copilot-instructions.md`). Options: remove / keep undocumented. Default: keep undocumented.
