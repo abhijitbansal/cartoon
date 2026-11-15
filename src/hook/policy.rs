@@ -288,10 +288,16 @@ const ARG_POLICIES: &[ArgPolicy] = &[
             "globaltoolchains",
             "file",
             "define",
+            "activateprofiles",
         ],
-        short: &["s", "gs", "t", "gt", "f", "D"],
+        short: &["s", "gs", "t", "gt", "f", "D", "P"],
         allow: &["-fae", "-ff", "-fn"],
-        exempt: &[("D", mvn_safe_property), ("define", mvn_safe_property)],
+        exempt: &[
+            ("D", mvn_safe_property),
+            ("define", mvn_safe_property),
+            ("P", mvn_safe_profile),
+            ("activateprofiles", mvn_safe_profile),
+        ],
         ..ArgPolicy::NONE
     },
     ArgPolicy {
@@ -397,10 +403,12 @@ const XCODE_SAFE_SETTINGS: &[&str] = &[
 
 /// Gradle tasks (the last `:`-separated segment) that only compile, test or
 /// check. Any task starting with `test` or `compile`, or ending with `Test`,
-/// qualifies too. Gradle also expands camel-case abbreviations, and only
-/// the typed word is judged: `tDUT` matches nothing and is not wrapped, but
-/// `conAndTest` (`connectedAndroidTest`) ends in `Test`, names no
-/// side-effect word, and wraps. That residual is pinned by a test.
+/// qualifies too, unless it is an instrumented device test
+/// (`android_device_test`). Gradle also expands abbreviations and matches
+/// case-insensitively, and only the typed word is judged: `tDUT` and
+/// `conAndTest` are not wrapped, but an all-lowercase abbreviation such as
+/// `deviceandTest` ends in `Test`, names no side-effect word, and wraps.
+/// That residual is pinned by a test.
 const GRADLE_TASKS: &[&str] = &[
     "test",
     "build",
@@ -458,8 +466,9 @@ const MVN_PHASES: &[&str] = &[
 ];
 
 /// mvn options whose next token is a value (a module list, a thread count,
-/// a profile), not a phase. Profiles stay allowed in both spellings
-/// (`-P ci`, `-Pci`), as before 0.8; they are project configuration.
+/// a profile), not a phase. A profile value is judged by `mvn_safe_profile`
+/// instead (in the mvn `ArgPolicy`, every spelling): `-P ci` wraps,
+/// `-P release` does not.
 const MVN_VALUE_FLAGS: &[&str] = &[
     "-P",
     "--activate-profiles",
@@ -591,10 +600,6 @@ fn targets_ok(tool: &str, args: &[&str]) -> bool {
 /// builds, tests or checks, with no outbound side effect such as publishing,
 /// deploying, installing or pushing. Other tools have no target concept.
 pub(super) fn side_effect_free_target(tool: &str, target: &str) -> bool {
-    let names_side_effect = |t: &str| {
-        let lower = t.to_ascii_lowercase();
-        SIDE_EFFECT_WORDS.iter().any(|w| lower.contains(w))
-    };
     match tool {
         "gradle" | "gradlew" => {
             // `:app:testDebugUnitTest` is judged by its task, not its module.
@@ -604,7 +609,7 @@ pub(super) fn side_effect_free_target(tool: &str, target: &str) -> bool {
                 || task.starts_with("test")
                 || task.starts_with("compile")
                 || task.ends_with("Test");
-            known && !names_side_effect(task)
+            known && !names_side_effect(task) && !android_device_test(task)
         }
         "mvn" | "mvnw" => MVN_PHASES.contains(&target),
         "make" => {
@@ -618,6 +623,36 @@ pub(super) fn side_effect_free_target(tool: &str, target: &str) -> bool {
         }
         _ => true,
     }
+}
+
+/// `t` contains a `SIDE_EFFECT_WORDS` entry, in any case.
+fn names_side_effect(t: &str) -> bool {
+    let lower = t.to_ascii_lowercase();
+    SIDE_EFFECT_WORDS.iter().any(|w| lower.contains(w))
+}
+
+/// A gradle task that runs instrumented tests, which install APKs onto a
+/// device or boot an emulator: `connectedAndroidTest`, `deviceAndroidTest`,
+/// Gradle Managed Device tasks (`pixel2api30DebugAndroidTest`). Matches the
+/// `AndroidTest` suffix in any case, and a camel-case abbreviation of it
+/// (`conAndTest`, `fooDebugATest`). The suffix, not a substring:
+/// `compileDebugAndroidTestKotlin` only compiles.
+fn android_device_test(task: &str) -> bool {
+    if task.to_ascii_lowercase().ends_with("androidtest") {
+        return true;
+    }
+    let Some(stem) = task.strip_suffix("Test") else {
+        return false;
+    };
+    stem.rfind(|c: char| c.is_ascii_uppercase())
+        .is_some_and(|at| "Android".starts_with(&stem[at..]))
+}
+
+/// mvn `-P` values: a profile whose name spells a side effect (`release`,
+/// `deploy`, `sign`, ...) can bind a publishing, signing or deploy plugin
+/// to `package` or `verify`.
+fn mvn_safe_profile(v: &str) -> bool {
+    !names_side_effect(v)
 }
 
 /// Watch and interactive modes never return (or open a browser), so they
@@ -885,12 +920,68 @@ mod tests {
     }
 
     #[test]
+    fn mvn_side_effect_profiles_not_wrapped() {
+        // A profile can bind a publishing, signing or deploy plugin to
+        // `package` or `verify`; its name is judged in every spelling.
+        for c in [
+            "mvn package -P release",
+            "mvn test -P deploy",
+            "mvn test -Prelease",
+            "mvn test -P=release",
+            "mvn test --activate-profiles release",
+            "mvn test --activate-profiles=release",
+            "mvn test --activateProfiles=sign-artifacts",
+            "mvn test -P ci,release",
+            "mvn verify -P Publish",
+            "mvn test -P",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "mvn test -P ci",
+            "mvn test -Pci",
+            "mvn test --activate-profiles=ci,fast",
+            "mvn test -pl core -P ci",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_android_device_tests_not_wrapped() {
+        // Instrumented tests install APKs onto a device or boot an emulator,
+        // like `connectedAndroidTest`, whatever the task's prefix.
+        for c in [
+            "gradle deviceAndroidTest",
+            "./gradlew pixel2api30DebugAndroidTest",
+            "gradle :app:allDevicesDebugAndroidTest",
+            "gradle deviceandroidtest",
+            "gradle deviceANDROIDTest",
+            "gradle conAndTest",
+            "gradle pixel2api30DebugATest",
+            "gradle deviceAnTest",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "gradle compileDebugAndroidTestKotlin",
+            "gradle testDebugUnitTest",
+            "gradle integrationTest",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
     fn gradle_abbreviations_are_a_known_residual() {
-        // Gradle expands camel-case abbreviations (`conAndTest` resolves to
-        // `connectedAndroidTest`). The name rule only sees the typed word,
-        // so an abbreviation that ends in `Test` and spells no side-effect
-        // word still wraps. Pinned here so a fix shows up as a test change.
-        assert!(wrap("gradle conAndTest").is_some());
+        // Gradle expands abbreviations (`tDUT`, `conAndTest`) and also
+        // matches case-insensitively. The name rule only sees the typed
+        // word: a camel-case abbreviation of `...AndroidTest` is refused,
+        // but an all-lowercase one that gradle may still resolve
+        // (`deviceandTest` for `deviceAndroidTest`) ends in `Test`, spells
+        // no side-effect word, and wraps. Pinned here so a fix shows up as
+        // a test change.
+        assert!(wrap("gradle deviceandTest").is_some());
         assert!(wrap("gradle tDUT").is_none());
     }
 

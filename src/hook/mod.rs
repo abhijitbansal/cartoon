@@ -56,8 +56,11 @@
 //!     every gradle task (judged by the last `:` segment, so `:app:publish`
 //!     is a publish) must be a build/test/check task with no side-effect
 //!     word (`publish`, `deploy`, `upload`, `install`, `release`, `push`,
-//!     `connected`, `docker`, `sign`, ...); every mvn goal must be a phase
-//!     from `clean` to `verify`; `npm ci` needs `--ignore-scripts` (else
+//!     `connected`, `docker`, `sign`, ...) and must not be an instrumented
+//!     device test (`...AndroidTest`, or a camel-case abbreviation of it);
+//!     every mvn goal must be a phase from `clean` to `verify`, and an mvn
+//!     profile (`-P x`, `-Px`, `--activate-profiles[=]x`) must name no
+//!     side-effect word; `npm ci` needs `--ignore-scripts` (else
 //!     every dependency's install script runs). Watch modes are refused:
 //!     `jest --watch[All]`, `vitest --watch|-w|watch|dev`, `tsc --watch|-w`,
 //!     `npm|pnpm|yarn|bun test -- --watch[All]`, `pytest -f|--looponfail`,
