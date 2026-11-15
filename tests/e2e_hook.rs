@@ -303,16 +303,82 @@ fn install_and_uninstall_keep_settings_permissions_and_other_keys() {
 }
 
 #[test]
-fn copilot_install_refuses_an_unreadable_foreign_file() {
+fn hook_install_copilot_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    for flag in ["--copilot", "--vscode", "--deny"] {
+        cartoon()
+            .current_dir(tmp.path())
+            .args(["hook", "install", flag, "--project"])
+            .assert()
+            .failure()
+            .stderr(contains("removed in 0.8.0"));
+    }
+    assert!(!tmp.path().join(".github").exists(), "nothing written");
+    assert!(!tmp.path().join(".claude").exists(), "nothing written");
+}
+
+#[test]
+fn hook_rewrite_rejects_flags() {
+    cartoon()
+        .args(["hook", "rewrite", "--deny-mode"])
+        .write_stdin("{}")
+        .assert()
+        .failure()
+        .stderr(contains("removed in 0.8.0"));
+}
+
+#[test]
+fn copilot_event_shape_emits_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let event = serde_json::json!({
+        "toolName": "bash",
+        "toolArgs": "{\"command\":\"pytest\"}",
+    });
+    assert_eq!(rewrite_event(cartoon(), tmp.path(), &event), "");
+    let vscode = serde_json::json!({
+        "tool_name": "run_in_terminal",
+        "cwd": tmp.path(),
+        "tool_input": { "command": "pytest" },
+    });
+    assert_eq!(rewrite_event(cartoon(), tmp.path(), &vscode), "");
+}
+
+#[test]
+fn uninstall_copilot_still_removes_a_legacy_hook_file() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join(".github/hooks/cartoon.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let original = b"\xff\xfe not ours".to_vec();
-    fs::write(&path, &original).unwrap();
+    fs::write(
+        &path,
+        r#"{"hooks":{"preToolUse":[{"command":"cartoon hook rewrite"}]}}"#,
+    )
+    .unwrap();
     cartoon()
         .current_dir(tmp.path())
-        .args(["hook", "install", "--copilot", "--project"])
+        .args(["hook", "uninstall", "--copilot", "--project"])
         .assert()
-        .failure();
-    assert_eq!(fs::read(&path).unwrap(), original);
+        .success();
+    assert!(!path.exists());
+}
+
+#[test]
+fn install_migrates_a_pre_0_8_entry_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let settings = tmp.path().join(".claude/settings.json");
+    write_settings(
+        &settings,
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_in_terminal","hooks":[{"type":"command","command":"command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0"}]}]}}"#,
+    );
+    cartoon()
+        .current_dir(tmp.path())
+        .args(["hook", "install", "--project"])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    let arr = v["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["matcher"], "Bash");
+    let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(!cmd.contains("--deny-mode"), "{cmd}");
 }

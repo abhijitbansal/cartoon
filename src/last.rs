@@ -119,7 +119,7 @@ fn display_command(argv: &[String]) -> String {
 /// second (their salt is per-process) are ordered by when their meta.json
 /// was written.
 fn ordered_runs(root: &Path) -> Vec<RunMeta> {
-    let mut runs: Vec<(RunMeta, Option<std::time::SystemTime>)> = archive::list_at(root, None)
+    let mut runs: Vec<(RunMeta, Option<std::time::SystemTime>)> = archive::list_at(root)
         .into_iter()
         .map(|m| {
             let t = std::fs::metadata(root.join(&m.id).join("meta.json"))

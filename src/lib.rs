@@ -16,7 +16,6 @@ pub mod logs_cmd;
 pub mod mcp;
 pub mod paths;
 pub mod runner;
-pub mod shim;
 pub mod sniff;
 pub mod stats;
 pub mod toon;

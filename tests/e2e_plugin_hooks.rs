@@ -176,8 +176,5 @@ fn hooks_json_registers_the_session_start_script() {
         "{cmd}"
     );
     // The PreToolUse rewrite hook is still there.
-    assert_eq!(
-        hooks["hooks"]["PreToolUse"][0]["matcher"],
-        "Bash|run_in_terminal"
-    );
+    assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "Bash");
 }

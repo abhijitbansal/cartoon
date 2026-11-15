@@ -6,8 +6,8 @@ use serde_json::json;
 /// Entry point for `cartoon logs ...`. Returns the process exit code.
 pub fn run(query: LogsQuery) -> Result<i32> {
     match query {
-        LogsQuery::List { tag } => {
-            println!("{}", render_list(&archive::list(tag.as_deref())));
+        LogsQuery::List => {
+            println!("{}", render_list(&archive::list()));
             Ok(0)
         }
         LogsQuery::Show { sel, stream } => {
@@ -110,7 +110,6 @@ pub fn render_list(metas: &[RunMeta]) -> String {
                 "cmd": display_cmd(&m.argv),
                 "mode": m.mode,
                 "exit": m.exit,
-                "tags": m.tags.join(","),
             })
         })
         .collect();
@@ -128,7 +127,6 @@ pub fn render_show(meta: &RunMeta, stdout: &str, stderr: &str, stream: &StreamSe
                 "cmd": meta.argv.join(" "),
                 "mode": meta.mode,
                 "exit": meta.exit,
-                "tags": meta.tags.join(","),
             }));
             format!("{head}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
         }
@@ -140,7 +138,7 @@ mod tests {
     use super::*;
     use crate::archive::RunMeta;
 
-    fn meta(id: &str, cmd: &str, tags: &[&str]) -> RunMeta {
+    fn meta(id: &str, cmd: &str) -> RunMeta {
         RunMeta {
             id: id.into(),
             ts: "2026-06-10T05:12:03Z".into(),
@@ -148,7 +146,6 @@ mod tests {
             mode: "pytest".into(),
             exit: 1,
             cwd: "/proj".into(),
-            tags: tags.iter().map(|s| s.to_string()).collect(),
             stdout_bytes: 10,
             stderr_bytes: 0,
         }
@@ -156,18 +153,14 @@ mod tests {
 
     #[test]
     fn list_renders_tabular_toon() {
-        let out = render_list(&[meta("20260610-051203-ab12", "pytest", &["api", "ci"])]);
-        assert!(
-            out.contains("runs[1]{id,ts,cmd,mode,exit,tags}:"),
-            "got:\n{out}"
-        );
+        let out = render_list(&[meta("20260610-051203-ab12", "pytest")]);
+        assert!(out.contains("runs[1]{id,ts,cmd,mode,exit}:"), "got:\n{out}");
         assert!(out.contains("20260610-051203-ab12"));
-        assert!(out.contains("\"api,ci\""));
     }
 
     #[test]
     fn list_shows_inner_command_for_shell_strings() {
-        let mut m = meta("id2", "sh", &[]);
+        let mut m = meta("id2", "sh");
         m.argv = vec!["sh".into(), "-c".into(), "xcodebuild test -scheme A".into()];
         let out = render_list(&[m]);
         assert!(out.contains("sh -c xcodebuild"), "got:\n{out}");
@@ -181,7 +174,7 @@ mod tests {
     #[test]
     fn show_both_streams_has_sections() {
         let out = render_show(
-            &meta("id1", "pytest", &[]),
+            &meta("id1", "pytest"),
             "RAW OUT",
             "RAW ERR",
             &crate::cli::StreamSel::Both,
@@ -194,7 +187,7 @@ mod tests {
     #[test]
     fn show_single_stream_is_raw_only() {
         let out = render_show(
-            &meta("id1", "pytest", &[]),
+            &meta("id1", "pytest"),
             "RAW OUT",
             "RAW ERR",
             &crate::cli::StreamSel::Stdout,

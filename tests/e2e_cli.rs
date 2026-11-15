@@ -91,7 +91,6 @@ fn every_reserved_subcommand_prints_its_own_help_and_exits_0() {
         ("adapters", "cartoon adapters"),
         ("hook", "cartoon hook"),
         ("instructions", "cartoon instructions"),
-        ("shim", "cartoon shim"),
     ] {
         for flag in ["--help", "-h"] {
             let out = cartoon()
@@ -125,7 +124,6 @@ fn top_level_help_lists_every_reserved_subcommand() {
         "logs",
         "learn",
         "hook",
-        "shim",
         "instructions",
         "ingest",
     ] {
@@ -291,5 +289,38 @@ fn ingest_honors_the_max_tokens_flag() {
         "ceiling ignored: {} vs {} bytes",
         capped.len(),
         full.len()
+    );
+}
+
+#[test]
+fn removed_flags_error_with_hint() {
+    for f in ["--fast", "--heuristic", "--tag"] {
+        let o = run(&[f, "true"]);
+        assert_ne!(o.status.code(), Some(0), "{f}");
+        let err = text(&o.stderr);
+        assert!(err.contains("removed in 0.8.0"), "{f}: {err}");
+        // The error names the flags that are still accepted.
+        assert!(err.contains("--compress"), "{f}: {err}");
+        assert!(!err.contains("command not found"), "{f}: {err}");
+    }
+}
+
+#[test]
+fn shim_subcommand_removed() {
+    let o = run(&["shim", "install"]);
+    assert_ne!(o.status.code(), Some(0));
+    let err = text(&o.stderr);
+    assert!(err.contains("removed in 0.8.0"), "{err}");
+    assert!(!err.contains("command not found"), "{err}");
+}
+
+#[test]
+fn logs_tag_filter_removed() {
+    let o = run(&["logs", "--tag", "api"]);
+    assert_ne!(o.status.code(), Some(0));
+    assert!(
+        text(&o.stderr).contains("cartoon logs"),
+        "{}",
+        text(&o.stderr)
     );
 }

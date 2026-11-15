@@ -95,7 +95,7 @@ pub fn load_for_cwd() -> Config {
     }
 }
 
-/// Level precedence: CLI --compress > CLI --heuristic > config
+/// Level precedence: CLI --compress > config
 /// [command.<argv0>] > `wrap_scripts` member (Aggressive) > config [compress]
 /// > legacy `heuristic = true` > Safe.
 ///
@@ -105,7 +105,6 @@ pub fn load_for_cwd() -> Config {
 /// slips through here resolves to Safe.
 pub fn resolve_level(
     flag: Option<&str>,
-    heuristic_flag: bool,
     argv0: &str,
     cfg: &Config,
 ) -> anyhow::Result<crate::ladder::CompressLevel> {
@@ -114,9 +113,6 @@ pub fn resolve_level(
         return s.parse::<CompressLevel>().map_err(|e| anyhow::anyhow!(e));
     }
     let parse = |s: &str| Ok(s.parse::<CompressLevel>().unwrap_or(CompressLevel::Safe));
-    if heuristic_flag {
-        return Ok(CompressLevel::Aggressive);
-    }
     if let Some(s) = cfg.command.get(argv0).and_then(|c| c.level.as_deref()) {
         return parse(s);
     }
@@ -305,11 +301,11 @@ mod tests {
         use crate::ladder::CompressLevel;
         let cfg: Config = toml::from_str(r#"wrap_scripts = ["./build.sh"]"#).unwrap();
         assert_eq!(
-            resolve_level(None, false, "./build.sh", &cfg).unwrap(),
+            resolve_level(None, "./build.sh", &cfg).unwrap(),
             CompressLevel::Aggressive
         );
         assert_eq!(
-            resolve_level(None, false, "pytest", &cfg).unwrap(),
+            resolve_level(None, "pytest", &cfg).unwrap(),
             CompressLevel::Safe
         );
         let pinned: Config = toml::from_str(
@@ -317,7 +313,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            resolve_level(None, false, "./build.sh", &pinned).unwrap(),
+            resolve_level(None, "./build.sh", &pinned).unwrap(),
             CompressLevel::Safe
         );
     }
@@ -524,47 +520,41 @@ mod tests {
 
         #[test]
         fn default_is_safe() {
-            let l = resolve_level(None, false, "make", &Config::default()).unwrap();
+            let l = resolve_level(None, "make", &Config::default()).unwrap();
             assert_eq!(l, CompressLevel::Safe);
         }
 
         #[test]
         fn flag_beats_per_command_config() {
             let c = cfg("[command.make]\nlevel = \"aggressive\"");
-            let l = resolve_level(Some("safe"), false, "make", &c).unwrap();
+            let l = resolve_level(Some("safe"), "make", &c).unwrap();
             assert_eq!(l, CompressLevel::Safe);
-        }
-
-        #[test]
-        fn heuristic_flag_maps_to_aggressive() {
-            let l = resolve_level(None, true, "make", &Config::default()).unwrap();
-            assert_eq!(l, CompressLevel::Aggressive);
         }
 
         #[test]
         fn per_command_beats_global() {
             let c = cfg("[compress]\nlevel = \"aggressive\"\n[command.make]\nlevel = \"safe\"");
-            let l = resolve_level(None, false, "make", &c).unwrap();
+            let l = resolve_level(None, "make", &c).unwrap();
             assert_eq!(l, CompressLevel::Safe);
         }
 
         #[test]
         fn global_beats_legacy() {
             let c = cfg("heuristic = true\n[compress]\nlevel = \"safe\"");
-            let l = resolve_level(None, false, "make", &c).unwrap();
+            let l = resolve_level(None, "make", &c).unwrap();
             assert_eq!(l, CompressLevel::Safe);
         }
 
         #[test]
         fn legacy_heuristic_maps_to_aggressive() {
             let c = cfg("heuristic = true");
-            let l = resolve_level(None, false, "make", &c).unwrap();
+            let l = resolve_level(None, "make", &c).unwrap();
             assert_eq!(l, CompressLevel::Aggressive);
         }
 
         #[test]
         fn invalid_level_errors() {
-            assert!(resolve_level(Some("turbo"), false, "make", &Config::default()).is_err());
+            assert!(resolve_level(Some("turbo"), "make", &Config::default()).is_err());
         }
 
         #[test]
@@ -575,7 +565,7 @@ mod tests {
             ] {
                 let c = cfg(src);
                 assert_eq!(
-                    resolve_level(None, false, "make", &c).unwrap(),
+                    resolve_level(None, "make", &c).unwrap(),
                     CompressLevel::Safe,
                     "{src}"
                 );

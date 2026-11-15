@@ -15,7 +15,7 @@ fn transformed_run_gets_footer_and_archive() {
     let tmp = tempfile::tempdir().unwrap();
     let assert = cartoon()
         .env("XDG_STATE_HOME", tmp.path())
-        .args(["--tag", "e2e", "sh", "-c", BIG_JSON_CMD])
+        .args(["sh", "-c", BIG_JSON_CMD])
         .assert()
         .success()
         .stdout(contains("raw_log:"));
@@ -32,7 +32,7 @@ fn transformed_run_gets_footer_and_archive() {
         "archived stdout is the ORIGINAL json, got: {raw}"
     );
     let meta = std::fs::read_to_string(format!("{path}/meta.json")).unwrap();
-    assert!(meta.contains("\"e2e\""), "tag recorded");
+    assert!(!meta.contains("tags"), "no tags field recorded: {meta}");
 }
 
 #[test]

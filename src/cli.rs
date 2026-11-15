@@ -13,18 +13,14 @@ use clap::Parser;
   init                                        scan for wrapper scripts (e.g.
                                              build.sh) and suggest a
                                              .cartoon.toml wrap_scripts pin
-  logs [--tag <t>]                           list archived raw runs
+  logs                                       list archived raw runs
   logs (<id> | --last) [--stdout|--stderr]   print a run's full raw output
   logs grep <pattern> [<id>|--last] [-C n]   search a run's raw output
   learn [--since <7d|24h|30m>]               config suggestions from your runs
   last [--cmd <substring>]                   re-show the newest run's report
   diff [<id-a> <id-b>] [--cmd <substring>]   fixed / still failing / new
                                              failures vs the previous run
-  hook (install|uninstall|status|rewrite)    agent auto-wrap hook
-                                             (Claude Code, Copilot CLI,
-                                             VS Code Copilot Chat)
-  shim (install|uninstall|status|print)      shell-function wrappers for
-                                             agents without a hook
+  hook (install|uninstall|status|rewrite)    Claude Code auto-wrap hook
   instructions (install|uninstall|status|print)
                                              write the wrap/never-pipe directive
                                              (CLAUDE.md if present, else AGENTS.md;
@@ -43,7 +39,7 @@ Non-adapter output compresses through the safe tier by default (ANSI,
 progress, duplicate and blank collapse — non-lossy in practice);
 --compress=aggressive adds lossy rules with the raw log as escape hatch.
 
-`stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, `shim`, \
+`stats`, `adapters`, `doctor`, `init`, `logs`, `learn`, `hook`, \
 `instructions`, `ingest`, and `mcp` are reserved words (each takes --help); to wrap a \
 binary literally named `stats`, use: cartoon env stats. `last` and `diff` are \
 reserved only in the forms above (`cartoon diff a.txt b.txt` wraps diff). A \
@@ -54,8 +50,8 @@ pub struct Cli {
     #[arg(long, value_name = "LEVEL")]
     pub compress: Option<String>,
 
-    /// Deprecated alias for --compress=aggressive
-    #[arg(long)]
+    /// Removed in 0.8.0 (hidden; parsing it only produces the error).
+    #[arg(long, hide = true)]
     pub heuristic: bool,
 
     /// Bypass cartoon entirely; run the command untouched.
@@ -64,13 +60,12 @@ pub struct Cli {
     #[arg(long)]
     pub raw: bool,
 
-    /// Tag this run in the raw-log archive (repeatable)
-    #[arg(long = "tag", value_name = "TAG")]
+    /// Removed in 0.8.0 (hidden; parsing it only produces the error).
+    #[arg(long = "tag", value_name = "TAG", hide = true)]
     pub tags: Vec<String>,
 
-    /// Opt-in acceleration: inject parallelization args for runners that
-    /// support it (pytest: -n auto via pytest-xdist). Disclosed in output.
-    #[arg(long)]
+    /// Removed in 0.8.0 (hidden; parsing it only produces the error).
+    #[arg(long, hide = true)]
     pub fast: bool,
 
     /// Wrap a shell command string (like sh -c). Simple commands are
@@ -98,7 +93,7 @@ pub struct Cli {
     pub merge_streams: bool,
 
     /// Command to wrap plus its args (or a reserved subcommand: stats |
-    /// adapters | doctor | init | logs | learn | hook | shim | instructions |
+    /// adapters | doctor | init | logs | learn | hook | instructions |
     /// ingest | mcp). Unknown `--flags` before the command are an error, not a
     /// command name; use `--` to run a binary whose name starts with `-`.
     #[arg(trailing_var_arg = true)]
@@ -110,10 +105,7 @@ pub enum Mode {
     Wrap {
         argv: Vec<String>,
         compress: Option<String>,
-        heuristic: bool,
         raw: bool,
-        tags: Vec<String>,
-        fast: bool,
         junit: Option<String>,
         max_tokens: Option<usize>,
         /// A pure output filter (`tail -5`) dropped from a `-c` pipeline
@@ -134,9 +126,6 @@ pub enum Mode {
     Hook {
         args: Vec<String>,
     },
-    Shim {
-        args: Vec<String>,
-    },
     Instructions {
         args: Vec<String>,
     },
@@ -144,7 +133,6 @@ pub enum Mode {
     Ingest {
         source: String,
         compress: Option<String>,
-        tags: Vec<String>,
         max_tokens: Option<usize>,
     },
     /// `cartoon last [--cmd <s>]`: re-show the newest archived run's report.
@@ -166,9 +154,7 @@ pub enum Mode {
 
 #[derive(Debug, PartialEq)]
 pub enum LogsQuery {
-    List {
-        tag: Option<String>,
-    },
+    List,
     Show {
         sel: RunSel,
         stream: StreamSel,
@@ -339,7 +325,43 @@ pub fn inner_command(argv: &[String]) -> Option<String> {
         .map(String::from)
 }
 
+/// Flags that exist only to be refused with a pointer: removed in 0.8.0.
+const REMOVED_FLAGS_HINT: &str = "removed in 0.8.0";
+
+/// Flags cartoon still accepts before the command, for error messages.
+const ACCEPTED_FLAGS: &str =
+    "--compress <level>, --raw, -c/--shell <string>, --junit <path>, --max-tokens <n>, --merge-streams";
+
+/// Error for a flag or subcommand removed in 0.8.0 (never silently ignored,
+/// never mistaken for a command to wrap).
+fn removed_error(what: &str, why: &str) -> anyhow::Error {
+    anyhow::anyhow!("{what} {REMOVED_FLAGS_HINT}: {why}. Accepted flags: {ACCEPTED_FLAGS}")
+}
+
+fn reject_removed_flags(cli: &Cli) -> anyhow::Result<()> {
+    if cli.fast {
+        return Err(removed_error(
+            "--fast was",
+            "wrapped runs no longer inject parallelization args; pass them to the command yourself (pytest -n auto)",
+        ));
+    }
+    if cli.heuristic {
+        return Err(removed_error(
+            "--heuristic was",
+            "use --compress aggressive",
+        ));
+    }
+    if !cli.tags.is_empty() {
+        return Err(removed_error(
+            "--tag was",
+            "runs are no longer tagged; find them with `cartoon logs` or `cartoon last --cmd <substring>`",
+        ));
+    }
+    Ok(())
+}
+
 pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
+    reject_removed_flags(&cli)?;
     if let Some(s) = cli.shell {
         if !cli.command.is_empty() {
             anyhow::bail!("-c/--shell takes the whole command as one string; drop the extra args");
@@ -351,10 +373,7 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         return Ok(Mode::Wrap {
             argv,
             compress: cli.compress,
-            heuristic: cli.heuristic,
             raw: cli.raw,
-            tags: cli.tags,
-            fast: cli.fast,
             junit: cli.junit,
             max_tokens: cli.max_tokens,
             dropped_filter,
@@ -384,9 +403,9 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "hook" => Ok(Mode::Hook {
             args: cli.command[1..].to_vec(),
         }),
-        "shim" => Ok(Mode::Shim {
-            args: cli.command[1..].to_vec(),
-        }),
+        "shim" => Err(anyhow::anyhow!(
+            "`cartoon shim` {REMOVED_FLAGS_HINT}: shell-function shims are gone; use `cartoon hook install` (Claude Code) or run `cartoon <cmd>` directly. To wrap a binary literally named shim: cartoon env shim"
+        )),
         "instructions" => Ok(Mode::Instructions {
             args: cli.command[1..].to_vec(),
         }),
@@ -397,7 +416,6 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
             [source] => Ok(Mode::Ingest {
                 source: source.clone(),
                 compress: cli.compress,
-                tags: cli.tags,
                 max_tokens: cli.max_tokens,
             }),
             _ => anyhow::bail!(INGEST_USAGE),
@@ -406,16 +424,12 @@ pub fn parse_mode(cli: Cli) -> anyhow::Result<Mode> {
         "-" if cli.command.len() == 1 => Ok(Mode::Ingest {
             source: "-".into(),
             compress: cli.compress,
-            tags: cli.tags,
             max_tokens: cli.max_tokens,
         }),
         _ => Ok(Mode::Wrap {
             argv: cli.command,
             compress: cli.compress,
-            heuristic: cli.heuristic,
             raw: cli.raw,
-            tags: cli.tags,
-            fast: cli.fast,
             junit: cli.junit,
             max_tokens: cli.max_tokens,
             dropped_filter: None,
@@ -459,7 +473,7 @@ fn parse_last_diff(command: &[String]) -> Option<Mode> {
 const STATS_USAGE: &str = "usage: cartoon stats [--since <e.g. 7d|24h|30m>]";
 const LEARN_USAGE: &str = "usage: cartoon learn [--since <e.g. 7d|24h|30m>]";
 const INGEST_USAGE: &str =
-    "usage: cartoon [--compress <level>] [--max-tokens <n>] [--tag <t>] ingest (<file> | -)";
+    "usage: cartoon [--compress <level>] [--max-tokens <n>] ingest (<file> | -)";
 
 /// Per-subcommand `--help` text. Each reserved word answers its own help
 /// instead of running (`doctor`, `init`), parsing `--help` as an argument
@@ -490,22 +504,18 @@ fn help_text(sub: &str) -> Option<&'static str> {
             "a noisy dev tool and suggest a .cartoon.toml wrap_scripts pin."
         ),
         "logs" => concat!(
-            "usage: cartoon logs [--tag <t>]                          list archived runs\n",
+            "usage: cartoon logs                                       list archived runs\n",
             "       cartoon logs (<id> | --last) [--stdout | --stderr]  print a run's raw output\n",
             "       cartoon logs grep <pattern> [<id> | --last] [-C <lines>]\n",
             "                                                         search a run's raw output"
         ),
         "hook" => concat!(
-            "usage: cartoon hook install [--copilot|--vscode] [--project] [--deny] [--instructions]\n",
-            "       cartoon hook uninstall [--copilot|--vscode] [--project] [--instructions]\n",
+            "usage: cartoon hook install [--project] [--instructions]\n",
+            "       cartoon hook uninstall [--project] [--copilot] [--instructions]\n",
             "       cartoon hook status\n",
-            "       cartoon hook rewrite [--deny-mode]   (reads the agent's hook JSON on stdin)\n\n",
-            "Agent auto-wrap hook for Claude Code, Copilot CLI and VS Code Copilot Chat."
-        ),
-        "shim" => concat!(
-            "usage: cartoon shim (print | install | uninstall | status | path)\n\n",
-            "Shell-function wrappers for agents without a hook. Disable per shell\n",
-            "with CARTOON_NO_SHIM=1."
+            "       cartoon hook rewrite   (reads Claude Code's hook JSON on stdin)\n\n",
+            "Claude Code auto-wrap hook. `uninstall --copilot` only removes a Copilot\n",
+            "CLI hook file written before 0.8.0."
         ),
         "instructions" => concat!(
             "usage: cartoon instructions (install | uninstall) [--agents|--copilot|--claude]\n",
@@ -529,7 +539,7 @@ fn help_text(sub: &str) -> Option<&'static str> {
             "1 when there is no comparable pair. Other args wrap the system diff."
         ),
         "ingest" => concat!(
-            "usage: cartoon [--compress <level>] [--max-tokens <n>] [--tag <t>] ingest (<file> | -)\n",
+            "usage: cartoon [--compress <level>] [--max-tokens <n>] ingest (<file> | -)\n",
             "       some-cmd | cartoon -\n\n",
             "Compress an existing log file (or stdin) through the same flow as a\n",
             "wrapped run, archiving the raw text."
@@ -559,31 +569,25 @@ fn subcommand_help(command: &[String]) -> Option<&'static str> {
 }
 
 fn parse_logs(args: &[String]) -> anyhow::Result<LogsQuery> {
-    const USAGE: &str = "usage: cartoon logs [--tag <t>] | cartoon logs (<id> | --last) [--stdout | --stderr] | cartoon logs grep <pattern> [<id> | --last] [-C <lines>]";
+    const USAGE: &str = "usage: cartoon logs | cartoon logs (<id> | --last) [--stdout | --stderr] | cartoon logs grep <pattern> [<id> | --last] [-C <lines>]";
     if args.first().map(String::as_str) == Some("grep") {
         return parse_logs_grep(&args[1..], USAGE);
     }
     let mut sel: Option<RunSel> = None;
     let mut stream = StreamSel::Both;
-    let mut tag: Option<String> = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
+    for a in args {
         match a.as_str() {
             "--last" if sel.is_none() => sel = Some(RunSel::Last),
             "--stdout" if stream == StreamSel::Both => stream = StreamSel::Stdout,
             "--stderr" if stream == StreamSel::Both => stream = StreamSel::Stderr,
-            "--tag" => {
-                let v = it.next().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-                tag = Some(v.clone());
-            }
             s if !s.starts_with('-') && sel.is_none() => sel = Some(RunSel::Id(s.to_string())),
             _ => anyhow::bail!(USAGE),
         }
     }
-    match (sel, tag) {
-        (None, t) if stream == StreamSel::Both => Ok(LogsQuery::List { tag: t }),
-        (Some(sel), None) => Ok(LogsQuery::Show { sel, stream }),
-        _ => anyhow::bail!(USAGE),
+    match sel {
+        None if stream == StreamSel::Both => Ok(LogsQuery::List),
+        Some(sel) => Ok(LogsQuery::Show { sel, stream }),
+        None => anyhow::bail!(USAGE),
     }
 }
 
@@ -808,28 +812,13 @@ mod tests {
             Mode::Wrap {
                 argv: vec!["pytest".into(), "-q".into(), "--maxfail=1".into()],
                 compress: None,
-                heuristic: false,
                 raw: false,
-                tags: vec![],
-                fast: false,
                 junit: None,
                 max_tokens: None,
                 dropped_filter: None,
                 merge_streams: false
             }
         );
-    }
-
-    #[test]
-    fn heuristic_flag_before_command() {
-        let m = mode(&["cartoon", "--heuristic", "ls", "-la"]);
-        assert!(matches!(
-            m,
-            Mode::Wrap {
-                heuristic: true,
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -870,41 +859,13 @@ mod tests {
     }
 
     #[test]
-    fn tag_flags_collect_into_wrap_mode() {
-        let m = mode(&["cartoon", "--tag", "api", "--tag", "ci", "pytest"]);
-        assert_eq!(
-            m,
-            Mode::Wrap {
-                argv: vec!["pytest".into()],
-                compress: None,
-                heuristic: false,
-                raw: false,
-                tags: vec!["api".into(), "ci".into()],
-                fast: false,
-                junit: None,
-                max_tokens: None,
-                dropped_filter: None,
-                merge_streams: false
-            }
-        );
-    }
-
-    #[test]
     fn logs_bare_lists() {
-        assert_eq!(
-            mode(&["cartoon", "logs"]),
-            Mode::Logs(LogsQuery::List { tag: None })
-        );
+        assert_eq!(mode(&["cartoon", "logs"]), Mode::Logs(LogsQuery::List));
     }
 
     #[test]
-    fn logs_tag_filter() {
-        assert_eq!(
-            mode(&["cartoon", "logs", "--tag", "api"]),
-            Mode::Logs(LogsQuery::List {
-                tag: Some("api".into())
-            })
-        );
+    fn logs_tag_filter_is_gone() {
+        assert!(parse_mode(Cli::parse_from(["cartoon", "logs", "--tag", "api"])).is_err());
     }
 
     #[test]
@@ -936,28 +897,37 @@ mod tests {
     }
 
     #[test]
-    fn fast_flag_before_command() {
-        let m = mode(&["cartoon", "--fast", "pytest", "-q"]);
-        assert!(matches!(m, Mode::Wrap { fast: true, .. }));
+    fn removed_flags_are_refused_with_a_hint_and_the_accepted_list() {
+        for args in [
+            &["cartoon", "--fast", "pytest", "-q"][..],
+            &["cartoon", "--heuristic", "ls"][..],
+            &["cartoon", "--tag", "ci", "pytest"][..],
+            &["cartoon", "--tag", "a", "--tag", "b", "ingest", "x.log"][..],
+            &["cartoon", "--fast", "-c", "make"][..],
+        ] {
+            let e = parse_mode(Cli::parse_from(args)).unwrap_err().to_string();
+            assert!(e.contains("removed in 0.8.0"), "{args:?}: {e}");
+            assert!(e.contains("--compress"), "{args:?}: {e}");
+        }
     }
 
     #[test]
-    fn fast_composes_with_tag_and_heuristic() {
-        let m = mode(&["cartoon", "--fast", "--tag", "ci", "--heuristic", "make"]);
-        assert!(matches!(
-            m,
-            Mode::Wrap {
-                fast: true,
-                heuristic: true,
-                ..
-            }
-        ));
+    fn removed_flags_after_the_command_still_belong_to_the_child() {
+        let m = mode(&["cartoon", "pytest", "--fast", "--tag", "x"]);
+        assert!(
+            matches!(m, Mode::Wrap { ref argv, .. } if *argv == sv(&["pytest", "--fast", "--tag", "x"]))
+        );
     }
 
     #[test]
-    fn fast_defaults_off() {
-        let m = mode(&["cartoon", "pytest"]);
-        assert!(matches!(m, Mode::Wrap { fast: false, .. }));
+    fn shim_subcommand_is_refused_not_wrapped() {
+        for args in [
+            &["cartoon", "shim", "install"][..],
+            &["cartoon", "shim"][..],
+        ] {
+            let e = parse_mode(Cli::parse_from(args)).unwrap_err().to_string();
+            assert!(e.contains("removed in 0.8.0"), "{args:?}: {e}");
+        }
     }
 
     #[test]
@@ -983,29 +953,19 @@ mod tests {
             Mode::Ingest {
                 source: "build.log".into(),
                 compress: None,
-                tags: vec![],
                 max_tokens: None
             }
         );
     }
 
     #[test]
-    fn ingest_with_compress_and_tag() {
-        let m = mode(&[
-            "cartoon",
-            "--compress",
-            "aggressive",
-            "--tag",
-            "ci",
-            "ingest",
-            "x.log",
-        ]);
+    fn ingest_with_compress() {
+        let m = mode(&["cartoon", "--compress", "aggressive", "ingest", "x.log"]);
         assert_eq!(
             m,
             Mode::Ingest {
                 source: "x.log".into(),
                 compress: Some("aggressive".into()),
-                tags: vec!["ci".into()],
                 max_tokens: None
             }
         );
@@ -1018,7 +978,6 @@ mod tests {
             Mode::Ingest {
                 source: "-".into(),
                 compress: None,
-                tags: vec![],
                 max_tokens: None
             }
         );
@@ -1083,7 +1042,6 @@ mod tests {
             ("init", "cartoon init"),
             ("logs", "cartoon logs"),
             ("hook", "cartoon hook"),
-            ("shim", "cartoon shim"),
             ("instructions", "cartoon instructions"),
             ("ingest", "ingest (<file> | -)"),
             ("mcp", "cartoon mcp"),
@@ -1187,7 +1145,6 @@ mod tests {
             "logs",
             "learn",
             "hook",
-            "shim",
             "instructions",
             "ingest",
             "mcp",

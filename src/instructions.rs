@@ -5,15 +5,14 @@
 //! `AGENTS.md` is the cross-agent backup (see `resolve_agent_doc`).
 //!
 //! This is the instruction-layer companion to `cartoon hook`. The hook is
-//! deterministic but has two blind spots the model has to cover itself. First,
-//! it cannot rewrite a *piped* command: `pytest | tail` is split on `|` and the
+//! deterministic but has a blind spot the model has to cover itself: it cannot
+//! rewrite a *piped* command. `pytest | tail` is split on `|` and the
 //! non-allowlisted `tail` segment makes the whole compound fail the auto-approve
 //! check, so it runs raw (by design — a rewrite auto-approves, and nothing may
-//! ride along an allowlisted segment). Second, VS Code Copilot Chat can only
-//! deny, not rewrite. In both cases the only thing that keeps cartoon in play is
-//! the agent *choosing* to wrap and not pipe, which is exactly what this
-//! directive tells it to do. Hook plus instructions cover far more together than
-//! either does alone.
+//! ride along an allowlisted segment). There the only thing that keeps cartoon
+//! in play is the agent *choosing* to wrap and not pipe, which is exactly what
+//! this directive tells it to do. Hook plus instructions cover far more together
+//! than either does alone.
 //!
 //! The directive is wrapped in stable marker comments so install is
 //! idempotent (re-running updates in place) and uninstall removes exactly our

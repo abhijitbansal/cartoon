@@ -260,38 +260,6 @@ fn hook_install_instructions_prefers_claude_md_when_present() {
 }
 
 #[test]
-fn hook_install_copilot_instructions_targets_copilot_file() {
-    let tmp = tempfile::tempdir().unwrap();
-    cartoon()
-        .current_dir(tmp.path())
-        .args([
-            "hook",
-            "install",
-            "--copilot",
-            "--project",
-            "--instructions",
-        ])
-        .assert()
-        .success();
-    assert!(tmp.path().join(".github/copilot-instructions.md").exists());
-}
-
-#[test]
-fn hook_install_copilot_hint_carries_the_copilot_flag() {
-    // Regression: the piped-gap hint for a Copilot install must suggest
-    // `cartoon instructions install --copilot` (not the bare command, which
-    // auto-detects to AGENTS.md — a file Copilot never reads).
-    let tmp = tempfile::tempdir().unwrap();
-    cartoon()
-        .current_dir(tmp.path())
-        .args(["hook", "install", "--copilot", "--project"])
-        .assert()
-        .success()
-        .stdout(contains("cartoon instructions install --copilot"))
-        .stdout(contains("cartoon hook install --copilot --instructions"));
-}
-
-#[test]
 fn hook_install_instructions_refreshes_a_stale_body() {
     // Regression: `hook install --instructions` must refresh a stale directive
     // body in place (like standalone `instructions install`), not short-circuit

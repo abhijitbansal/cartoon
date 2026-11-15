@@ -1,19 +1,16 @@
-//! `cartoon hook` — agent PreToolUse integration. `rewrite` reads the hook
-//! JSON on stdin and, when the shell command is a known noisy dev-loop
-//! tool, either rewrites it to run under `cartoon -c` (transparent) or
-//! denies it with a "re-run wrapped" suggestion. Fail-open everywhere: any
-//! parse problem or non-match emits nothing and the agent proceeds
-//! unchanged. `install`/`uninstall`/`status` manage the config entry.
+//! `cartoon hook` — Claude Code PreToolUse integration. `rewrite` reads the
+//! hook JSON on stdin and, when the shell command is a known noisy dev-loop
+//! tool, rewrites it to run under `cartoon -c` (transparent, via
+//! `updatedInput`). A command that only matches a project-declared
+//! `wrap_scripts` entry is denied with a "re-run wrapped" suggestion
+//! instead, because a project script is never auto-approved. Fail-open
+//! everywhere: any parse problem or non-match emits nothing and the agent
+//! proceeds unchanged. `install`/`uninstall`/`status` manage the config
+//! entry.
 //!
-//! Three agent surfaces share one `rewrite` command, auto-detected from the
-//! event shape:
-//!   - Claude Code      — `tool_name:"Bash"`, `tool_input.command`; rewrite
-//!     via `updatedInput`.
-//!   - Copilot CLI      — `toolName:"bash"`, `toolArgs` (a JSON *string*);
-//!     rewrite via `updatedInput` (v1.0.24+).
-//!   - VS Code Copilot Chat — `tool_name:"run_in_terminal"`,
-//!     `tool_input.command`; no documented rewrite field, so we fall back to
-//!     deny-with-suggestion automatically.
+//! Only Claude Code's event shape (`tool_name:"Bash"`, `tool_input.command`)
+//! is understood. Other shapes (the Copilot CLI's `toolName`/`toolArgs`,
+//! VS Code's `run_in_terminal`, supported before 0.8.0) emit nothing.
 //!
 //! SECURITY: emitting `updatedInput` with `permissionDecision: "allow"`
 //! bypasses the normal permission prompt for that call. The allowlist below
@@ -45,8 +42,7 @@
 //!     agent already has write access to the repo. Bare `make` (the default
 //!     goal) stays allowed; a named target must look like build/test/check
 //!     (`all`, `test`, `lint`, `test-unit`, ...) and name no side effect.
-//!     Install with `--deny` to turn every rewrite into a suggestion
-//!     instead. `pre-commit` is limited to `run` (not `install`,
+//!     `pre-commit` is limited to `run` (not `install`,
 //!     `autoupdate`, `try-repo <url>`, ...).
 //!   - Principle: an auto-approved command may run *project* code, never code
 //!     from outside the project, and must have no outbound side effect
@@ -231,48 +227,43 @@ const STATE_BUILTINS: &[&str] = &[
 
 pub fn run(args: &[String]) -> Result<i32> {
     match args.first().map(String::as_str) {
-        Some("rewrite") => rewrite_from_stdin(args.iter().any(|a| a == "--deny-mode")),
-        Some("install") => install::install(install::target(args)?),
-        Some("uninstall") => install::uninstall(install::target(args)?),
+        Some("rewrite") => {
+            reject_rewrite_flags(&args[1..])?;
+            rewrite_from_stdin()
+        }
+        Some("install") => install::install(install::install_target(args)?),
+        Some("uninstall") => install::uninstall(install::uninstall_target(args)?),
         Some("status") => install::status(),
         _ => bail!(
-            "usage: cartoon hook (rewrite [--deny-mode] | install [--copilot|--vscode] [--project] [--deny] [--instructions] | uninstall [--copilot|--vscode] [--project] [--instructions] | status)"
+            "usage: cartoon hook (rewrite | install [--project] [--instructions] | uninstall [--project] [--copilot] [--instructions] | status)"
         ),
+    }
+}
+
+/// `hook rewrite` takes no flags. An error here is safe: the installed hook
+/// command ends in `|| exit 0`, so a stale entry (`--deny-mode`, written
+/// before 0.8.0) lets commands through unwrapped instead of blocking them.
+fn reject_rewrite_flags(flags: &[String]) -> Result<()> {
+    match flags.first().map(String::as_str) {
+        None => Ok(()),
+        Some("--deny-mode") => bail!(
+            "--deny-mode was removed in 0.8.0 (deny mode is gone); `cartoon hook rewrite` takes no flags. Re-run `cartoon hook install` to refresh the installed entry"
+        ),
+        Some(other) => bail!("unknown argument {other}; `cartoon hook rewrite` takes no flags"),
     }
 }
 
 // ---------- rewrite ----------
 
-/// The agent surface a hook event came from. Determines whether we can
-/// rewrite the command transparently or must fall back to deny.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Surface {
-    /// Claude Code Bash tool — honors `updatedInput`.
-    Claude,
-    /// Copilot CLI bash tool — honors `updatedInput` (v1.0.24+).
-    CopilotCli,
-    /// VS Code Copilot Chat run_in_terminal — no documented rewrite field.
-    VsCode,
-}
-
-impl Surface {
-    /// True where the agent honors `updatedInput` to rewrite the command.
-    /// VS Code Copilot Chat has no documented rewrite field, so we fall back
-    /// to deny-with-suggestion there.
-    fn supports_rewrite(self) -> bool {
-        !matches!(self, Surface::VsCode)
-    }
-}
-
 /// Session kill-switch: any non-empty `CARTOON_NO_WRAP` in the hook's
 /// environment disables auto-wrap (the hook emits nothing, so commands run
-/// unchanged). Mirrors the shims' `CARTOON_NO_SHIM`. Read here, not in the
+/// unchanged). Read here, not in the
 /// pure `rewrite_decision`, so the decision stays deterministic for tests.
 fn wrap_disabled() -> bool {
     std::env::var_os("CARTOON_NO_WRAP").is_some_and(|v| !v.is_empty())
 }
 
-fn rewrite_from_stdin(deny: bool) -> Result<i32> {
+fn rewrite_from_stdin() -> Result<i32> {
     if wrap_disabled() {
         return Ok(0);
     }
@@ -292,7 +283,7 @@ fn rewrite_from_stdin(deny: bool) -> Result<i32> {
     let Some(rules) = user_rules_for(&input, cwd.as_deref()) else {
         return Ok(0);
     };
-    if let Some(out) = rewrite_decision_in(&input, deny, &wrap_scripts, cwd.as_deref(), &rules) {
+    if let Some(out) = rewrite_decision_in(&input, &wrap_scripts, cwd.as_deref(), &rules) {
         println!("{out}");
     }
     Ok(0)
@@ -339,56 +330,29 @@ fn event_cwd(v: &Value) -> Option<&Path> {
         .filter(|p| p.is_absolute())
 }
 
-/// Pull the shell command, the tool-input object to preserve, and the agent
-/// surface out of a hook event. Returns None for any non-shell tool or
-/// shape we don't recognize (fail-open).
-fn extract(v: &Value) -> Option<(String, Value, Surface)> {
-    // Claude Code / VS Code Copilot Chat: { tool_name, tool_input:{command} }
-    if let Some(name) = v.get("tool_name").and_then(Value::as_str) {
-        let surface = match name {
-            "Bash" => Surface::Claude,
-            "run_in_terminal" => Surface::VsCode,
-            _ => return None,
-        };
-        let input = v.get("tool_input")?;
-        let cmd = input.get("command")?.as_str()?.to_string();
-        return Some((cmd, input.clone(), surface));
+/// Pull the shell command and the tool-input object to preserve out of a
+/// Claude Code hook event. Returns None for any non-Bash tool or shape we
+/// don't recognize (fail-open): the Copilot CLI and VS Code shapes included.
+fn extract(v: &Value) -> Option<(String, Value)> {
+    if v.get("tool_name").and_then(Value::as_str)? != "Bash" {
+        return None;
     }
-    // Copilot CLI: { toolName:"bash", toolArgs:... }. toolArgs is normally
-    // double-encoded (a JSON string that itself contains the args object),
-    // but tolerate a plain object too in case a version sends it un-encoded.
-    if let Some(name) = v.get("toolName").and_then(Value::as_str) {
-        if !name.eq_ignore_ascii_case("bash") && !name.eq_ignore_ascii_case("shell") {
-            return None;
-        }
-        let args = match v.get("toolArgs")? {
-            Value::String(s) => serde_json::from_str(s).ok()?,
-            obj @ Value::Object(_) => obj.clone(),
-            _ => return None,
-        };
-        let cmd = args.get("command")?.as_str()?.to_string();
-        return Some((cmd, args, Surface::CopilotCli));
-    }
-    None
+    let input = v.get("tool_input")?;
+    let cmd = input.get("command")?.as_str()?.to_string();
+    Some((cmd, input.clone()))
 }
 
 /// Pure decision: full hook stdin JSON -> hook stdout JSON (or None).
-/// `deny` forces deny-with-suggestion even where rewrite is supported.
-pub fn rewrite_decision(input: &str, deny: bool) -> Option<String> {
-    rewrite_decision_with_scripts(input, deny, &[])
+pub fn rewrite_decision(input: &str) -> Option<String> {
+    rewrite_decision_with_scripts(input, &[])
 }
 
 /// Like `rewrite_decision`, but a command may additionally match a
 /// project-declared `wrap_scripts` entry. Such a match always emits deny
 /// output (see `wrap_command_with_policy`'s doc comment) — a project script
-/// is never eligible for the transparent `allow` rewrite, regardless of
-/// `deny` or what the agent surface supports.
-pub fn rewrite_decision_with_scripts(
-    input: &str,
-    deny: bool,
-    wrap_scripts: &[String],
-) -> Option<String> {
-    rewrite_decision_in(input, deny, wrap_scripts, None, &UserRules::default())
+/// is never eligible for the transparent `allow` rewrite.
+pub fn rewrite_decision_with_scripts(input: &str, wrap_scripts: &[String]) -> Option<String> {
+    rewrite_decision_in(input, wrap_scripts, None, &UserRules::default())
 }
 
 /// The project root absolute path arguments must stay under: the event's
@@ -400,20 +364,19 @@ pub fn rewrite_decision_with_scripts(
 /// one of the user's Bash `ask`/`deny` `rules` could match the command.
 fn rewrite_decision_in(
     input: &str,
-    deny: bool,
     wrap_scripts: &[String],
     fallback: Option<&Path>,
     rules: &UserRules,
 ) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
-    let (cmd, tool_input, surface) = extract(&v)?;
+    let (cmd, tool_input) = extract(&v)?;
     let root = event_cwd(&v).or(fallback);
     let (wrapped, force_deny) = wrap_command_in(&cmd, wrap_scripts, root)?;
     let plan_mode = v.get("permission_mode").and_then(Value::as_str) == Some("plan");
     if plan_mode || permissions::is_guarded(&cmd, rules) {
         return None;
     }
-    let out = if deny || force_deny || !surface.supports_rewrite() {
+    let out = if force_deny {
         deny_output(&wrapped)
     } else {
         allow_output(&wrapped, &tool_input)
@@ -437,16 +400,16 @@ fn allow_output(wrapped: &str, tool_input: &Value) -> Value {
 }
 
 /// Deny-with-suggestion: block the raw command and tell the agent to re-run
-/// it wrapped. Used where the surface can't rewrite (VS Code Copilot Chat)
-/// or when the user installs with `--deny`.
+/// it wrapped. Used for `wrap_scripts` matches: a project script is never
+/// auto-approved, so the agent re-runs it wrapped through the normal
+/// permission flow.
 fn deny_output(wrapped: &str) -> Value {
     json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": format!(
-                "cartoon: re-run this wrapped to cut output tokens ~70% \
-                 (exit code mirrored, raw log archived): {wrapped}"
+                "cartoon: re-run this wrapped (exit code mirrored, raw log archived): {wrapped}"
             ),
         }
     })
@@ -470,7 +433,7 @@ pub fn wrap_command(cmd: &str) -> Option<String> {
 /// NEVER be auto-approved: a project script is arbitrary user code (it can
 /// install to a physical device, push model weights, etc.), unlike the
 /// built-in allowlist's vetted, read-mostly tools. Callers must force `deny`
-/// output when this is true, regardless of what the agent surface supports.
+/// output when this is true.
 pub fn wrap_command_with_policy(cmd: &str, wrap_scripts: &[String]) -> Option<(String, bool)> {
     wrap_command_in(cmd, wrap_scripts, None)
 }
@@ -835,10 +798,9 @@ mod tests {
     fn plan_mode_never_rewrites() {
         let input =
             r#"{"tool_name":"Bash","permission_mode":"plan","tool_input":{"command":"pytest"}}"#;
-        assert!(rewrite_decision(input, false).is_none());
-        assert!(rewrite_decision(input, true).is_none());
+        assert!(rewrite_decision(input).is_none());
         let other = r#"{"tool_name":"Bash","permission_mode":"acceptEdits","tool_input":{"command":"pytest"}}"#;
-        assert!(rewrite_decision(other, false).is_some());
+        assert!(rewrite_decision(other).is_some());
     }
 
     #[test]
@@ -846,11 +808,10 @@ mod tests {
         let input = r#"{"tool_name":"Bash","tool_input":{"command":"pytest -q && ./build.sh"}}"#;
         let scripts = ["./build.sh".to_string()];
         // Unguarded, the script match forces deny-with-suggestion.
-        assert!(rewrite_decision_in(input, false, &scripts, None, &UserRules::default()).is_some());
+        assert!(rewrite_decision_in(input, &scripts, None, &UserRules::default()).is_some());
         // Guarded, nothing at all: the suggested re-run would dodge the rule.
         let rules = guard(&["Bash(pytest:*)"]);
-        assert!(rewrite_decision_in(input, false, &scripts, None, &rules).is_none());
-        assert!(rewrite_decision_in(input, true, &scripts, None, &rules).is_none());
+        assert!(rewrite_decision_in(input, &scripts, None, &rules).is_none());
     }
 
     #[test]
@@ -1034,14 +995,31 @@ mod tests {
     }
 
     #[test]
-    fn copilot_accepts_toolargs_object() {
-        // Tolerate toolArgs delivered as an object, not only as a JSON string.
-        let input = r#"{"toolName":"bash","toolArgs":{"command":"pytest -q"}}"#;
-        let out = rewrite_decision(input, false).unwrap();
+    fn non_claude_event_shapes_emit_nothing() {
+        // Copilot CLI shape (toolArgs as a JSON string, and as an object).
+        let cli = r#"{"toolName":"bash","toolArgs":"{\"command\":\"pytest -q\"}"}"#;
+        assert!(rewrite_decision(cli).is_none());
+        let cli_obj = r#"{"toolName":"bash","toolArgs":{"command":"pytest -q"}}"#;
+        assert!(rewrite_decision(cli_obj).is_none());
+        // VS Code Copilot Chat shape.
+        let vscode = r#"{"tool_name":"run_in_terminal","tool_input":{"command":"pytest -q"}}"#;
+        assert!(rewrite_decision(vscode).is_none());
+        // The Claude shape for the same command still rewrites.
+        let claude = r#"{"tool_name":"Bash","tool_input":{"command":"pytest -q"}}"#;
+        assert!(rewrite_decision(claude).is_some());
+    }
+
+    #[test]
+    fn script_match_deny_reason_is_plain_and_names_the_wrapped_command() {
+        let input = r#"{"tool_name":"Bash","tool_input":{"command":"./build.sh"}}"#;
+        let out = rewrite_decision_with_scripts(input, &["./build.sh".to_string()]).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
+        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap();
         assert_eq!(
-            v["hookSpecificOutput"]["updatedInput"]["command"],
-            "cartoon --merge-streams -c 'pytest -q'"
+            reason,
+            "cartoon: re-run this wrapped (exit code mirrored, raw log archived): cartoon --merge-streams -c './build.sh'"
         );
     }
 
@@ -1127,13 +1105,13 @@ mod tests {
     #[test]
     fn decision_ignores_non_shell_tools() {
         let input = r#"{"tool_name":"Read","tool_input":{"file_path":"/x"}}"#;
-        assert!(rewrite_decision(input, false).is_none());
+        assert!(rewrite_decision(input).is_none());
     }
 
     #[test]
     fn decision_rewrites_bash_command_preserving_other_fields() {
         let input = r#"{"tool_name":"Bash","tool_input":{"command":"pytest -q","timeout":5000}}"#;
-        let out = rewrite_decision(input, false).unwrap();
+        let out = rewrite_decision(input).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["hookEventName"], "PreToolUse");
@@ -1146,12 +1124,12 @@ mod tests {
     }
 
     #[test]
-    fn decision_with_scripts_denies_project_script_even_on_claude_surface() {
+    fn decision_with_scripts_denies_project_script() {
         // Claude Code normally gets the transparent `allow` rewrite; a
         // project-declared script must still be denied-with-suggestion.
         let input = r#"{"tool_name":"Bash","tool_input":{"command":"./build.sh -d"}}"#;
         let wrap_scripts = vec!["./build.sh".to_string()];
-        let out = rewrite_decision_with_scripts(input, false, &wrap_scripts).unwrap();
+        let out = rewrite_decision_with_scripts(input, &wrap_scripts).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         let hso = &v["hookSpecificOutput"];
         assert_eq!(hso["permissionDecision"], "deny");
@@ -1165,74 +1143,20 @@ mod tests {
     fn decision_with_scripts_undeclared_script_passes_through() {
         let input = r#"{"tool_name":"Bash","tool_input":{"command":"./deploy.sh"}}"#;
         let wrap_scripts = vec!["./build.sh".to_string()];
-        assert!(rewrite_decision_with_scripts(input, false, &wrap_scripts).is_none());
+        assert!(rewrite_decision_with_scripts(input, &wrap_scripts).is_none());
     }
 
     #[test]
     fn decision_passes_through_quiet_command() {
         let input = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        assert!(rewrite_decision(input, false).is_none());
+        assert!(rewrite_decision(input).is_none());
     }
 
     #[test]
     fn decision_fail_open_on_garbage() {
-        assert!(rewrite_decision("not json", false).is_none());
-        assert!(rewrite_decision("{}", false).is_none());
+        assert!(rewrite_decision("not json").is_none());
+        assert!(rewrite_decision("{}").is_none());
     }
-
-    // ---- Copilot CLI surface (toolName/toolArgs → transparent rewrite) ----
-
-    #[test]
-    fn decision_handles_copilot_cli_shape() {
-        // toolArgs is a JSON *string*, not an object.
-        let input = r#"{"toolName":"bash","toolArgs":"{\"command\":\"pytest -q\",\"description\":\"tests\"}"}"#;
-        let out = rewrite_decision(input, false).unwrap();
-        let v: Value = serde_json::from_str(&out).unwrap();
-        let hso = &v["hookSpecificOutput"];
-        assert_eq!(hso["permissionDecision"], "allow");
-        assert_eq!(
-            hso["updatedInput"]["command"],
-            "cartoon --merge-streams -c 'pytest -q'"
-        );
-        // unrelated fields preserved
-        assert_eq!(hso["updatedInput"]["description"], "tests");
-    }
-
-    #[test]
-    fn decision_copilot_passes_through_quiet() {
-        let input = r#"{"toolName":"bash","toolArgs":"{\"command\":\"ls\"}"}"#;
-        assert!(rewrite_decision(input, false).is_none());
-    }
-
-    #[test]
-    fn decision_copilot_fail_open_on_bad_toolargs() {
-        // toolArgs not valid JSON → no rewrite, no panic.
-        let input = r#"{"toolName":"bash","toolArgs":"not json"}"#;
-        assert!(rewrite_decision(input, false).is_none());
-    }
-
-    // ---- VS Code Copilot Chat surface (run_in_terminal → deny) ----
-
-    #[test]
-    fn decision_vscode_denies_with_suggestion() {
-        let input = r#"{"tool_name":"run_in_terminal","tool_input":{"command":"pytest -q"}}"#;
-        let out = rewrite_decision(input, false).unwrap();
-        let v: Value = serde_json::from_str(&out).unwrap();
-        let hso = &v["hookSpecificOutput"];
-        assert_eq!(hso["permissionDecision"], "deny");
-        assert!(hso["permissionDecisionReason"]
-            .as_str()
-            .unwrap()
-            .contains("cartoon --merge-streams -c 'pytest -q'"));
-    }
-
-    #[test]
-    fn decision_vscode_passes_through_quiet() {
-        let input = r#"{"tool_name":"run_in_terminal","tool_input":{"command":"ls"}}"#;
-        assert!(rewrite_decision(input, false).is_none());
-    }
-
-    // ---- deny-mode override ----
 
     #[test]
     fn no_wrap_env_disables_then_restores() {
@@ -1251,8 +1175,7 @@ mod tests {
         // Deliberate: both are the canonical dev-loop entry points and the
         // agent already holds write access to the repo. Bare `make` runs the
         // default goal; named targets must look like build/test/check
-        // (`policy::side_effect_free_target`). Users who disagree install
-        // with --deny. See the module doc.
+        // (`policy::side_effect_free_target`). See the module doc.
         assert!(wrap_command("make -j4").is_some());
         assert!(wrap_command("make deploy").is_none());
         assert!(wrap_command("pre-commit run --all-files").is_some());
@@ -1295,14 +1218,6 @@ mod tests {
         assert!(wrap_command("uv run --python 3.12 pytest").is_none());
         // Unknown flag → fail closed (no auto-wrap), runs through normal prompt.
         assert!(wrap_command("uv run --brand-new-flag pytest").is_none());
-    }
-
-    #[test]
-    fn deny_mode_forces_deny_even_for_claude() {
-        let input = r#"{"tool_name":"Bash","tool_input":{"command":"pytest -q"}}"#;
-        let out = rewrite_decision(input, true).unwrap();
-        let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
     }
 
     // ---- install entry shapes ----
@@ -1557,10 +1472,10 @@ mod tests {
     fn decision_uses_event_cwd_as_project_root() {
         let input =
             r#"{"tool_name":"Bash","cwd":"/proj","tool_input":{"command":"pytest /proj/t.py"}}"#;
-        assert!(rewrite_decision(input, false).is_some());
+        assert!(rewrite_decision(input).is_some());
         let input =
             r#"{"tool_name":"Bash","cwd":"/proj","tool_input":{"command":"pytest /tmp/t.py"}}"#;
-        assert!(rewrite_decision(input, false).is_none());
+        assert!(rewrite_decision(input).is_none());
     }
 
     #[test]

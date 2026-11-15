@@ -197,7 +197,7 @@ fn run_failing_pytest_gets_the_adapter_report_then_grep_the_raw_log() {
 
     let r = s.call(2, "logs_list", json!({}));
     let t = text(&r);
-    assert!(t.contains("runs[1]{id,ts,cmd,mode,exit,tags}:"), "{t}");
+    assert!(t.contains("runs[1]{id,ts,cmd,mode,exit}:"), "{t}");
     assert!(t.contains("pytest,1"), "{t}");
 
     let r = s.call(
@@ -292,7 +292,7 @@ fn a_running_call_does_not_block_ping_and_can_be_cancelled() {
     loop {
         let t = text(&s.call(id, "logs_list", json!({})));
         if t.contains("touch") {
-            assert!(t.contains(",143,"), "{t}");
+            assert!(t.contains(",143"), "{t}");
             break;
         }
         assert!(

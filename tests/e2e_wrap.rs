@@ -48,11 +48,12 @@ fn missing_command_exits_127() {
 }
 
 #[test]
-fn heuristic_flag_compresses_repeats() {
+fn compress_aggressive_collapses_repeats() {
     // 200 repeats so the dedupe + raw_log footer clears the savings guard.
     cartoon()
         .args([
-            "--heuristic",
+            "--compress",
+            "aggressive",
             "sh",
             "-c",
             "i=0; while [ $i -lt 200 ]; do echo tick tock tick; i=$((i+1)); done",

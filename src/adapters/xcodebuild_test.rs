@@ -379,7 +379,7 @@ mod tests {
         let r = parse_summary_json(json).unwrap();
         assert!(!r.duration_s.is_finite(), "precondition: diff overflowed");
         // report::render must clamp it rather than panic on a non-finite f64.
-        let out = super::super::report::render(&r, 5, None);
+        let out = super::super::report::render(&r, 5);
         assert!(out.contains("duration_s: 0"));
     }
 

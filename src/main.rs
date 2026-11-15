@@ -22,10 +22,7 @@ fn main() {
         Ok(cartoon::cli::Mode::Wrap {
             argv,
             compress,
-            heuristic,
             raw,
-            tags,
-            fast,
             junit,
             max_tokens,
             dropped_filter,
@@ -35,13 +32,11 @@ fn main() {
             // Ceiling precedence: flag > CARTOON_MAX_TOKENS > config.
             cfg.max_tokens = max_tokens.or_else(env_max_tokens).or(cfg.max_tokens);
             let junit = junit.or_else(|| cfg.command.get(&argv[0]).and_then(|c| c.junit.clone()));
-            match cartoon::config::resolve_level(compress.as_deref(), heuristic, &argv[0], &cfg) {
+            match cartoon::config::resolve_level(compress.as_deref(), &argv[0], &cfg) {
                 Ok(level) => {
                     let opts = cartoon::app::WrapOpts {
                         level,
                         raw,
-                        tags,
-                        fast,
                         junit: junit.map(std::path::PathBuf::from),
                         dropped_filter,
                         merge_streams: cartoon::config::resolve_merge_streams(
@@ -101,10 +96,6 @@ fn main() {
             eprintln!("cartoon: {e}");
             2
         }),
-        Ok(cartoon::cli::Mode::Shim { args }) => cartoon::shim::run(&args).unwrap_or_else(|e| {
-            eprintln!("cartoon: {e}");
-            2
-        }),
         Ok(cartoon::cli::Mode::Instructions { args }) => cartoon::instructions::run(&args)
             .unwrap_or_else(|e| {
                 eprintln!("cartoon: {e}");
@@ -117,18 +108,15 @@ fn main() {
         Ok(cartoon::cli::Mode::Ingest {
             source,
             compress,
-            tags,
             max_tokens,
         }) => {
             let mut cfg = cartoon::config::load_for_cwd();
             cfg.max_tokens = max_tokens.or_else(env_max_tokens).or(cfg.max_tokens);
-            match cartoon::config::resolve_level(compress.as_deref(), false, "ingest", &cfg) {
-                Ok(level) => {
-                    cartoon::app::run_ingest(&source, level, &tags, &cfg).unwrap_or_else(|e| {
-                        eprintln!("cartoon: {e}");
-                        2
-                    })
-                }
+            match cartoon::config::resolve_level(compress.as_deref(), "ingest", &cfg) {
+                Ok(level) => cartoon::app::run_ingest(&source, level, &cfg).unwrap_or_else(|e| {
+                    eprintln!("cartoon: {e}");
+                    2
+                }),
                 Err(e) => {
                     eprintln!("cartoon: {e}");
                     2
