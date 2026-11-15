@@ -78,8 +78,10 @@
 //!          string, so the Bash tool's cwd tracking still sees it; paths in
 //!          the rest are still judged against the root. Residual: a `CDPATH`
 //!          in the user's shell can send a bare `cd App` elsewhere.
-//!   - A command is already wrapped when a segment's command word has
-//!     basename `cartoon` (a file named `test_cartoon.py` doesn't count).
+//!   - A command is already wrapped when the tool a segment launches has
+//!     basename `cartoon`, looking past `NAME=value`, `xcrun`, the JS
+//!     runners, `uv run`/`uvx` and `python -m` (a file named
+//!     `test_cartoon.py` doesn't count).
 //!   - Lexing fails closed (`lex`), on what is left after the shapes above.
 //!     Outside quotes only `[A-Za-z0-9]`, space, `_-./=:@,+%` and the `&&`
 //!     connector are accepted; `;`, `|`, `||`, a lone `&`, `$`, backtick,
