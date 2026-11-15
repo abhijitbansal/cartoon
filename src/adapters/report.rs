@@ -37,17 +37,52 @@ pub fn merge(reports: Vec<TestReport>) -> Option<TestReport> {
     Some(acc)
 }
 
+/// One space per nesting level: the report is read by a model, not decoded,
+/// and each trace line sits two levels deep, so a wider indent costs tokens
+/// on every line of a traceback.
+const REPORT_INDENT: usize = 1;
+
 /// Asymmetric rendering: passes cost one summary block; failures keep
-/// id/loc/msg rows plus budgeted traces. `fast_note` discloses injected
-/// acceleration args (e.g. "-n auto") right after the runner line. Paths
-/// under the working directory are printed relative to it.
-pub fn render(report: &TestReport, trace_lines: usize, fast_note: Option<&str>) -> String {
+/// id/loc/msg rows plus budgeted traces. Paths under the working directory
+/// are printed relative to it.
+pub fn render(report: &TestReport, trace_lines: usize) -> String {
+    let opts = crate::toon::Options {
+        list_scalar_arrays: true,
+        indent_size: REPORT_INDENT,
+        ..Default::default()
+    };
+    crate::toon::encode_with(&report_value(report, trace_lines), &opts)
+}
+
+/// A non-test report (diagnostics, lint counts): cwd-relative paths and the
+/// same one-space indent as `render`.
+pub fn render_value(value: &Value) -> String {
+    let mut v = value.clone();
+    relativize_value(&mut v);
+    let opts = crate::toon::Options {
+        indent_size: REPORT_INDENT,
+        ..Default::default()
+    };
+    crate::toon::encode_with(&v, &opts)
+}
+
+/// Seconds to the millisecond: a float sum such as `6.111999988555908`
+/// costs tokens and says nothing more. Non-finite values (an absurd
+/// timestamp in untrusted runner output) would serialize to null; clamp
+/// them to 0.
+fn round_duration(d: f64) -> f64 {
+    if d.is_finite() {
+        (d * 1000.0).round() / 1000.0
+    } else {
+        0.0
+    }
+}
+
+/// The report as a JSON value, before TOON encoding.
+fn report_value(report: &TestReport, trace_lines: usize) -> Value {
     let rel = |s: &str| relativize(s);
     let mut root = Map::new();
     root.insert("runner".into(), json!(report.runner));
-    if let Some(f) = fast_note {
-        root.insert("fast".into(), json!(f));
-    }
     root.insert(
         "summary".into(),
         json!({
@@ -55,9 +90,7 @@ pub fn render(report: &TestReport, trace_lines: usize, fast_note: Option<&str>) 
             "passed": report.passed,
             "failed": report.failed,
             "skipped": report.skipped,
-            // Non-finite durations (e.g. an absurd timestamp in untrusted
-            // runner output) would serialize to null/panic; clamp to 0.
-            "duration_s": if report.duration_s.is_finite() { report.duration_s } else { 0.0 },
+            "duration_s": round_duration(report.duration_s),
         }),
     );
     if !report.failures.is_empty() {
@@ -86,7 +119,7 @@ pub fn render(report: &TestReport, trace_lines: usize, fast_note: Option<&str>) 
             root.insert("traces".into(), Value::Object(traces));
         }
     }
-    crate::toon::encode(&Value::Object(root))
+    Value::Object(root)
 }
 
 /// One unique `traces` key per failure, so two failures sharing an id (the
@@ -342,6 +375,117 @@ mod tests {
     }
 
     #[test]
+    fn traces_render_one_line_each() {
+        let out = render(&sample(), 20);
+        let t = out.split("traces:").nth(1).unwrap();
+        assert!(
+            t.lines()
+                .filter(|l| l.trim_start().starts_with("- "))
+                .count()
+                >= 2,
+            "got:\n{out}"
+        );
+        assert!(!t.contains("\",expected"), "got:\n{out}");
+        assert!(t.contains("[2]:\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn trace_lines_quote_only_where_toon_requires() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "plain line no punctuation".into(),
+            "key: value".into(),
+            " leading space".into(),
+        ];
+        let out = render(&r, 20);
+        assert!(out.contains("- plain line no punctuation\n"), "got:\n{out}");
+        assert!(out.contains("- \"key: value\""), "got:\n{out}");
+        assert!(out.contains("- \" leading space\""), "got:\n{out}");
+    }
+
+    #[test]
+    fn trace_lines_keep_commas_brackets_and_inner_quotes_plain() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "assert x == y, 'msg'".into(),
+            "print(\"a\", file=sys.stderr)".into(),
+            "items[0] = {1, 2}".into(),
+            "[stdout] hello".into(),
+            "a\\b".into(),
+        ];
+        let out = render(&r, 20);
+        assert!(out.contains("- assert x == y, 'msg'\n"), "got:\n{out}");
+        assert!(
+            out.contains("- print(\"a\", file=sys.stderr)\n"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("- items[0] = {1, 2}\n"), "got:\n{out}");
+        assert!(out.contains("- [stdout] hello\n"), "got:\n{out}");
+        assert!(out.contains("- a\\b"), "got:\n{out}");
+    }
+
+    #[test]
+    fn trace_lines_that_could_parse_as_structure_stay_quoted() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "def f():".into(),
+            "a.py:42: in f".into(),
+            "- not a marker".into(),
+            "\"already quoted\" text".into(),
+            "true".into(),
+            "42".into(),
+            "".into(),
+        ];
+        let out = render(&r, 20);
+        for want in [
+            "- \"def f():\"",
+            "- \"a.py:42: in f\"",
+            "- \"- not a marker\"",
+            "- \"\\\"already quoted\\\" text\"",
+            "- \"true\"",
+            "- \"42\"",
+            "- \"\"",
+        ] {
+            assert!(out.contains(want), "missing {want}; got:\n{out}");
+        }
+    }
+
+    /// One trace line per output line costs a hyphen where the old inline row
+    /// had a comma. Items need no delimiter quoting and the report indents one
+    /// space per level, so the whole report (o200k tokens) stays within 5% of
+    /// the old inline row across the pytest fixtures that carry a traceback.
+    /// Measured: mixed 137/132, captured-output 172/163, collect-syntax-error
+    /// 152/150 (new/old).
+    #[test]
+    fn trace_rendering_cost_stays_flat() {
+        let tok = |s: &str| crate::stats::estimate_tokens(s, "o200k");
+        let (mut new_total, mut old_total) = (0, 0);
+        for name in ["mixed", "captured-output", "collect-syntax-error"] {
+            let xml = std::fs::read_to_string(format!("tests/fixtures/pytest/{name}.xml")).unwrap();
+            let report = crate::adapters::pytest::parse_junit(&xml).unwrap();
+            assert!(
+                report.failures.iter().any(|f| f.trace.len() >= 2),
+                "{name}: fixture needs a multi-line trace"
+            );
+            let new = render(&report, 20);
+            let old = crate::toon::encode(&report_value(&report, 20));
+            // No single fixture may drift far past the aggregate bound.
+            assert!(
+                tok(&new) * 100 <= tok(&old) * 107,
+                "{name}: new {} vs old {} tokens\nnew:\n{new}\nold:\n{old}",
+                tok(&new),
+                tok(&old)
+            );
+            new_total += tok(&new);
+            old_total += tok(&old);
+        }
+        assert!(
+            new_total * 100 <= old_total * 105,
+            "new {new_total} vs old {old_total} tokens over the trace fixtures"
+        );
+    }
+
+    #[test]
     fn merge_sums_reports() {
         let a = TestReport {
             runner: "junit",
@@ -369,7 +513,7 @@ mod tests {
 
     #[test]
     fn renders_summary_and_failures() {
-        let out = render(&sample(), 20, None);
+        let out = render(&sample(), 20);
         assert!(out.contains("runner: pytest"), "got:\n{out}");
         assert!(out.contains("total: 48"));
         assert!(out.contains("failed: 2"));
@@ -378,8 +522,25 @@ mod tests {
     }
 
     #[test]
+    fn duration_is_rounded_to_milliseconds() {
+        // Final review M23: `duration_s: 6.111999988555908` in a real report.
+        let mut r = sample();
+        r.duration_s = 6.111999988555908;
+        let out = render(&r, 20);
+        assert!(out.contains("duration_s: 6.112\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn value_reports_use_the_test_report_indent() {
+        let v = json!({"runner": "swift-build", "summary": {"errors": 1, "warnings": 0}});
+        let out = super::super::AdapterReport::Value(v).render(5);
+        assert!(out.contains("\n errors: 1"), "got:\n{out}");
+        assert!(!out.contains("\n  errors"), "got:\n{out}");
+    }
+
+    #[test]
     fn empty_trace_gets_no_traces_entry() {
-        let out = render(&sample(), 20, None);
+        let out = render(&sample(), 20);
         // traces section exists (first failure has a trace) but only one key
         let traces_idx = out.find("traces:").expect("traces section");
         let tail = &out[traces_idx..];
@@ -393,7 +554,7 @@ mod tests {
         r.failures.clear();
         r.failed = 0;
         r.passed = 47;
-        let out = render(&r, 20, None);
+        let out = render(&r, 20);
         assert!(!out.contains("failures"));
         assert!(!out.contains("traces"));
     }
@@ -402,7 +563,7 @@ mod tests {
     fn trace_capped_at_limit() {
         let mut r = sample();
         r.failures[0].trace = (0..50).map(|i| format!("line {i}")).collect();
-        let out = render(&r, 5, None);
+        let out = render(&r, 5);
         // No key lines: the tail survives, the head is disclosed as omitted.
         assert!(out.contains("line 49"), "got:\n{out}");
         assert!(!out.contains("line 0"), "got:\n{out}");
@@ -442,7 +603,7 @@ mod tests {
         let mut r = sample();
         r.failures[1].id = r.failures[0].id.clone();
         r.failures[1].trace = vec!["second trace line".into()];
-        let out = render(&r, 20, None);
+        let out = render(&r, 20);
         assert!(out.contains("assert token.exp < now()"), "got:\n{out}");
         assert!(out.contains("second trace line"), "got:\n{out}");
         assert!(
@@ -498,10 +659,10 @@ mod tests {
         let mut r = sample();
         r.failures[0].loc = format!("{cwd}/tests/test_auth.py:42");
         r.failures[0].trace = vec![format!("File \"{cwd}/tests/test_auth.py\", line 42")];
-        let out = render(&r, 20, None);
+        let out = render(&r, 20);
         assert!(!out.contains(&cwd), "got:\n{out}");
         assert!(
-            out.contains("File \\\"tests/test_auth.py\\\", line 42"),
+            out.contains("- File \"tests/test_auth.py\", line 42"),
             "got:\n{out}"
         );
     }
@@ -527,7 +688,7 @@ mod tests {
 
     #[test]
     fn zero_trace_lines_omits_traces_section() {
-        let out = render(&sample(), 0, None);
+        let out = render(&sample(), 0);
         assert!(!out.contains("traces"));
     }
 
@@ -565,25 +726,5 @@ mod tests {
         let t = trim_trace(raw).join("\n");
         assert!(t.contains("auth.test.js"));
         assert!(!t.contains("node:internal"));
-    }
-
-    #[test]
-    fn fast_note_renders_after_runner() {
-        let out = render(&sample(), 20, Some("-n auto"));
-        let runner_idx = out.find("runner: pytest").unwrap();
-        // TOON quotes strings starting with '-' to avoid ambiguity, so the
-        // value "-n auto" is rendered as: fast: "-n auto"
-        let fast_idx = out.find("fast: \"-n auto\"").expect("fast line present");
-        let summary_idx = out.find("summary:").unwrap();
-        assert!(
-            runner_idx < fast_idx && fast_idx < summary_idx,
-            "got:\n{out}"
-        );
-    }
-
-    #[test]
-    fn no_fast_note_no_fast_line() {
-        let out = render(&sample(), 20, None);
-        assert!(!out.contains("fast:"), "got:\n{out}");
     }
 }

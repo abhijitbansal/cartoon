@@ -1,0 +1,7 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -scheme App
+
+Testing failed:
+	The test runner could not be launched.
+
+** TEST FAILED **

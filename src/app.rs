@@ -1,5 +1,6 @@
 use crate::adapters::{self, AdapterReport, ParseOutcome};
 use crate::ladder::CompressLevel;
+use crate::linecut::LineCut;
 use crate::runner::{RunOpts, RunOutput};
 use crate::stats::Counter;
 use crate::{archive, budget, config::Config, fallback, runner, sniff, stats, toon};
@@ -13,8 +14,6 @@ use std::path::{Path, PathBuf};
 pub struct WrapOpts {
     pub level: CompressLevel,
     pub raw: bool,
-    pub tags: Vec<String>,
-    pub fast: bool,
     /// JUnit XML file or directory to render as a test report after the run.
     pub junit: Option<PathBuf>,
     /// A pure output filter dropped from a `-c` pipeline (disclosed).
@@ -44,7 +43,7 @@ pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
             Err(e) => return not_found_or_err(e, argv),
         };
         let code = runner::exit_code(&run.captured.status);
-        archive_record(argv, "raw", &run, code, &opts.tags, cfg);
+        archive_record(argv, "raw", &run, code, cfg);
         return Ok(code);
     }
     let run = match runner::run_with(argv, &RunOpts::buffered()) {
@@ -61,7 +60,6 @@ pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
                 code,
                 candidate,
                 opts.level,
-                &opts.tags,
                 cfg,
                 None,
                 opts.merge_streams,
@@ -73,7 +71,6 @@ pub fn run_wrap(argv: &[String], opts: &WrapOpts, cfg: &Config) -> Result<i32> {
         &run,
         code,
         opts.level,
-        &opts.tags,
         cfg,
         opts.merge_streams,
     ))
@@ -142,7 +139,7 @@ fn harvest_junit(
         })
         .collect();
     let merged = adapters::report::merge(reports)?;
-    Some(adapters::report::render(&merged, cfg.trace_lines, None))
+    Some(adapters::report::render(&merged, cfg.trace_lines))
 }
 
 /// Shared tail of the non-adapter flow: content-sniff or transform under the
@@ -152,7 +149,6 @@ fn transform_emit_record(
     run: &RunOutput,
     code: i32,
     level: CompressLevel,
-    tags: &[String],
     cfg: &Config,
     merge: bool,
 ) -> i32 {
@@ -160,7 +156,7 @@ fn transform_emit_record(
     // xcodebuild, JUnit XML on stdout) still gets a structured rendering.
     let c = &run.captured;
     let candidate = sniff::sniff(&c.stdout, &c.stderr, code);
-    emit_generic(argv, run, code, candidate, level, tags, cfg, None, merge)
+    emit_generic(argv, run, code, candidate, level, cfg, None, merge)
 }
 
 /// Archive a run under `mode`. archive.rs stores the text view; when the
@@ -171,10 +167,9 @@ fn archive_record(
     mode: &str,
     run: &RunOutput,
     code: i32,
-    tags: &[String],
     cfg: &Config,
 ) -> Option<archive::RunRef> {
-    let r = archive::record(argv, mode, &run.captured, code, tags, cfg)?;
+    let r = archive::record(argv, mode, &run.captured, code, cfg)?;
     restore_raw_bytes(&r, run);
     Some(r)
 }
@@ -222,13 +217,12 @@ fn emit_generic(
     code: i32,
     candidate: Option<(String, &'static str)>,
     level: CompressLevel,
-    tags: &[String],
     cfg: &Config,
     archived: Option<Option<archive::RunRef>>,
     merge: bool,
 ) -> i32 {
     if merge && !run.captured.stderr.is_empty() {
-        return emit_merged(argv, run, code, candidate, level, tags, cfg, archived);
+        return emit_merged(argv, run, code, candidate, level, cfg, archived);
     }
     let c = &run.captured;
     let counter = Counter::new(
@@ -277,7 +271,7 @@ fn emit_generic(
         }
     }
 
-    let run_ref = slot.finish(argv, mode, run, code, tags, cfg);
+    let run_ref = slot.finish(argv, mode, run, code, cfg);
     if mode != "passthrough" && !lossy_allowed(run_ref.as_ref(), cfg) {
         // The raw log the footer points at does not exist: emit the original.
         out_part = Part::Raw;
@@ -338,14 +332,12 @@ impl ArchiveSlot {
         mode: &str,
         run: &RunOutput,
         code: i32,
-        tags: &[String],
         cfg: &Config,
     ) -> Option<archive::RunRef> {
         match (self.done, self.reserved) {
             (Some(done), _) => done,
             (None, Some(r)) => {
-                let written =
-                    archive::write_reserved(r, argv, mode, &run.captured, code, tags, cfg);
+                let written = archive::write_reserved(r, argv, mode, &run.captured, code, cfg);
                 if let Some(w) = &written {
                     restore_raw_bytes(w, run);
                 }
@@ -371,7 +363,6 @@ fn emit_merged(
     code: i32,
     candidate: Option<(String, &'static str)>,
     level: CompressLevel,
-    tags: &[String],
     cfg: &Config,
     archived: Option<Option<archive::RunRef>>,
 ) -> i32 {
@@ -409,7 +400,7 @@ fn emit_merged(
             mode = tmode;
         }
     }
-    let run_ref = slot.finish(argv, mode, run, code, tags, cfg);
+    let run_ref = slot.finish(argv, mode, run, code, cfg);
     if mode != "passthrough" && !lossy_allowed(run_ref.as_ref(), cfg) {
         out_part = Part::Raw;
         mode = "passthrough";
@@ -589,12 +580,7 @@ fn deliver(
 /// raw-log archive → stats. Exit code is 0 (nothing executed) unless the
 /// source can't be read. Non-UTF-8 input is accepted (lossy for the
 /// transforms; passthrough emits the original bytes).
-pub fn run_ingest(
-    source: &str,
-    level: CompressLevel,
-    tags: &[String],
-    cfg: &Config,
-) -> Result<i32> {
+pub fn run_ingest(source: &str, level: CompressLevel, cfg: &Config) -> Result<i32> {
     let content = if source == "-" {
         use std::io::Read;
         let mut buf = Vec::new();
@@ -607,9 +593,7 @@ pub fn run_ingest(
     };
     let argv = vec!["ingest".to_string(), source.to_string()];
     let run = RunOutput::from_bytes(content);
-    Ok(transform_emit_record(
-        &argv, &run, 0, level, tags, cfg, false,
-    ))
+    Ok(transform_emit_record(&argv, &run, 0, level, cfg, false))
 }
 
 /// True when the report itself explains a failed run: at least one failing
@@ -627,42 +611,35 @@ fn run_with_adapter(
     opts: &WrapOpts,
     cfg: &Config,
 ) -> Result<i32> {
-    let tags = &opts.tags;
-    let fast = opts.fast;
     let prepared = adapter.prepare(argv.to_vec());
-    let fast_args = if fast {
-        adapter.fast_args()
-    } else {
-        Vec::new()
-    };
-    let mut argv_run = prepared.argv.clone();
-    argv_run.extend(fast_args.iter().cloned());
-    let mut fast_note = (!fast_args.is_empty()).then(|| fast_args.join(" "));
-    let mut run = match runner::run_with(&argv_run, &RunOpts::buffered()) {
+    let run = match runner::run_with(&prepared.argv, &RunOpts::buffered()) {
         Ok(r) => r,
         Err(e) => return not_found_or_err(e, argv),
     };
-    let mut code = runner::exit_code(&run.captured.status);
-    // Bounded fallback: pytest exits 4 (usage error) when xdist is missing.
-    // Nothing executed, so one serial retry is safe. Only on the exact
-    // signature naming an arg WE injected in the unrecognized-arguments
-    // list — a user's own typo'd args won't match and pass through.
-    if fast_note.is_some()
-        && code == 4
-        && run.interrupted.is_none()
-        && fast_args_rejected(&run.captured.stderr, &fast_args)
-    {
-        eprintln!("cartoon: --fast unavailable (pytest-xdist not installed?); reran serially");
-        fast_note = None;
-        run = match runner::run_with(&prepared.argv, &RunOpts::buffered()) {
-            Ok(r) => r,
-            Err(e) => return not_found_or_err(e, argv),
-        };
-        code = runner::exit_code(&run.captured.status);
-    }
-    let archived = archive_record(argv, adapter.name(), &run, code, tags, cfg);
+    let code = runner::exit_code(&run.captured.status);
+    let archived = archive_record(argv, adapter.name(), &run, code, cfg);
     let captured = &run.captured;
     let run_id = archived.as_ref().map(|r| r.id.as_str());
+    // A dropped `| head -n N` / `| tail -n N`: applied in process whenever no
+    // report replaces it, so the output never outgrows what was asked for.
+    // Only when the raw log keeps every line (or archiving is off), and only
+    // when the cut drops a line: otherwise the passthrough stays silent and
+    // byte-identical.
+    let parsed_cut = opts
+        .dropped_filter
+        .as_deref()
+        .and_then(|f| LineCut::parse(f).map(|c| (c, f)));
+    let cut_is_noop = parsed_cut.is_some_and(|(c, _)| !run.line_cut_removes(c, opts.merge_streams));
+    let cut = parsed_cut.filter(|_| !cut_is_noop && lossy_allowed(archived.as_ref(), cfg));
+    // A cut that would drop lines but has no raw log to keep them: the full
+    // output is printed, and the note says the filter was not applied.
+    let cut_blocked = parsed_cut.filter(|_| !cut_is_noop && cut.is_none());
+    let note_blocked = || {
+        if let Some((_, f)) = cut_blocked {
+            eprintln!("cartoon: pipe filter `{f}` was not applied (no raw log could be written)");
+        }
+    };
+    let raw_log = archived.as_ref().map(|r| r.dir.as_path());
     match adapter.parse(captured, &prepared) {
         Ok(ParseOutcome {
             report,
@@ -676,10 +653,21 @@ fn run_with_adapter(
             );
             let in_out = counter.count(&captured.stdout);
             let in_err = counter.count(&captured.stderr);
+            let passthrough = |in_out, in_err, run_id| {
+                let em = passthrough_emission(in_out, in_err);
+                match cut {
+                    Some((c, f)) => {
+                        cut_passthrough(argv, &run, code, (c, f, raw_log), opts, cfg, run_id, em)
+                    }
+                    None => {
+                        note_blocked();
+                        deliver(argv, &run, code, em, cfg, run_id)
+                    }
+                }
+            };
             if !lossy_allowed(archived.as_ref(), cfg) {
                 // No raw log to point at: the report would be the only copy.
-                let em = passthrough_emission(in_out, in_err);
-                return Ok(deliver(argv, &run, code, em, cfg, None));
+                return Ok(passthrough(in_out, in_err, None));
             }
             // Central exit-code rule: a failed run whose report shows no
             // failure (pytest.exit, --cov-fail-under, a suite-level error,
@@ -687,7 +675,7 @@ fn run_with_adapter(
             // the reason is never lost. The exit code is always shown when
             // non-zero.
             let unexplained = code != 0 && !report_shows_failure(&report);
-            let mut out = report.render(cfg.trace_lines, fast_note.as_deref());
+            let mut out = report.render(cfg.trace_lines);
             // `cartoon last` / `cartoon diff`: store the report beside the
             // raw log; compare with the previous run of this command.
             let vs_previous = archived
@@ -770,9 +758,41 @@ fn run_with_adapter(
             if let Some(native) = adapter.native_stdout(argv, captured) {
                 let native_n = counter.exact(&native);
                 if !pays_for_itself(out_n + err_n, native_n + in_err) {
+                    let usable_cut = parsed_cut.filter(|_| lossy_allowed(archived.as_ref(), cfg));
+                    let (native, err_part) = match usable_cut {
+                        // `2>&1 | tail -N`: the cut applies to both streams.
+                        // The native stdout is reconstructed, so its arrival
+                        // order against stderr is lost: stdout, then stderr.
+                        Some((c, f)) if opts.merge_streams && !captured.stderr.is_empty() => {
+                            let sep = if native.is_empty() || native.ends_with('\n') {
+                                ""
+                            } else {
+                                "\n"
+                            };
+                            let merged = format!("{native}{sep}{}", captured.stderr);
+                            let kept = c.apply(merged.as_bytes());
+                            if kept.len() < merged.len() {
+                                disclose_cut(f, raw_log);
+                                let kept = String::from_utf8_lossy(kept).into_owned();
+                                (kept, Part::Text(Cow::Borrowed(""), 0))
+                            } else {
+                                (native, Part::Raw)
+                            }
+                        }
+                        Some((c, f)) if c.apply(native.as_bytes()).len() < native.len() => {
+                            disclose_cut(f, raw_log);
+                            let kept = String::from_utf8_lossy(c.apply(native.as_bytes()));
+                            (kept.into_owned(), Part::Raw)
+                        }
+                        _ => {
+                            note_blocked();
+                            (native, Part::Raw)
+                        }
+                    };
+                    let native_n = counter.count(&native);
                     let em = Emission {
                         out: Part::Text(Cow::Owned(native), native_n),
-                        err: Part::Raw,
+                        err: err_part,
                         in_out: native_n,
                         in_err,
                         mode: "passthrough",
@@ -786,8 +806,7 @@ fn run_with_adapter(
             // costs more tokens than the raw output (tiny suites, `-q` runs)
             // is replaced by the original streams, byte-identical.
             if !pays_for_itself(out_n + err_n, in_out + in_err) {
-                let em = passthrough_emission(in_out, in_err);
-                return Ok(deliver(argv, &run, code, em, cfg, run_id));
+                return Ok(passthrough(in_out, in_err, run_id));
             }
             Ok(deliver(
                 argv,
@@ -817,18 +836,25 @@ fn run_with_adapter(
                     adapter.name()
                 );
             }
-            if let Some(f) = &opts.dropped_filter {
-                // The report would have replaced the filter; the generic
-                // output does not, so say it was not applied.
-                eprintln!("cartoon: pipe filter `{f}` was not applied (adapter output unparsed)");
+            // The report would have replaced the filter; the generic output
+            // does not, so apply a line cut here, or say it was not applied.
+            let cut_run = cut.map(|(c, f)| {
+                disclose_cut(f, raw_log);
+                run.with_line_cut(c, opts.merge_streams)
+            });
+            if cut.is_none() && !cut_is_noop {
+                if let Some(f) = &opts.dropped_filter {
+                    eprintln!(
+                        "cartoon: pipe filter `{f}` was not applied (adapter output unparsed)"
+                    );
+                }
             }
             Ok(emit_generic(
                 argv,
-                &run,
+                cut_run.as_ref().unwrap_or(&run),
                 code,
                 None,
                 opts.level,
-                tags,
                 cfg,
                 Some(archived),
                 opts.merge_streams,
@@ -837,20 +863,43 @@ fn run_with_adapter(
     }
 }
 
-/// True when the runner's usage error names one of the args WE injected.
-/// pytest prints `unrecognized arguments: <tok> [<tok>...]` but may list only
-/// the first offending token (e.g. `-n` without `auto`), so match exact
-/// whitespace-separated tokens, not the joined string.
-fn fast_args_rejected(stderr: &str, fast_args: &[String]) -> bool {
-    stderr.lines().any(|line| {
-        line.split("unrecognized arguments:")
-            .nth(1)
-            .map(|rest| {
-                rest.split_whitespace()
-                    .any(|tok| fast_args.iter().any(|a| a == tok))
-            })
-            .unwrap_or(false)
-    })
+/// Say on stderr that a dropped filter's line cut was applied in process,
+/// and where the full output is (no raw log only when archiving is off).
+fn disclose_cut(filter: &str, raw_log: Option<&Path>) {
+    match raw_log {
+        Some(dir) => eprintln!(
+            "cartoon: no report replaced `{filter}`, so it was applied to the output; raw_log: {}",
+            dir.display()
+        ),
+        None => {
+            eprintln!("cartoon: no report replaced `{filter}`, so it was applied to the output")
+        }
+    }
+}
+
+/// A passthrough `em` of `run` with the dropped filter's line cut applied
+/// and disclosed. The ledger still counts the full output as the input.
+#[allow(clippy::too_many_arguments)]
+fn cut_passthrough(
+    argv: &[String],
+    run: &RunOutput,
+    code: i32,
+    (cut, filter, raw_log): (LineCut, &str, Option<&Path>),
+    opts: &WrapOpts,
+    cfg: &Config,
+    run_id: Option<&str>,
+    em: Emission,
+) -> i32 {
+    disclose_cut(filter, raw_log);
+    let shown = run.with_line_cut(cut, opts.merge_streams);
+    let n = |t: &str| stats::estimate_tokens(t, &cfg.tokenizer);
+    let (o, e) = (&shown.captured.stdout, &shown.captured.stderr);
+    let em = Emission {
+        out: Part::Text(Cow::Borrowed(o), n(o)),
+        err: Part::Text(Cow::Borrowed(e), n(e)),
+        ..em
+    };
+    deliver(argv, &shown, code, em, cfg, run_id)
 }
 
 fn not_found_or_err(e: anyhow::Error, argv: &[String]) -> Result<i32> {
@@ -1003,37 +1052,6 @@ mod tests {
         assert!(view.contains("error: linker failed in module zeta"));
         assert!(view.contains("lines (") && view.contains("omitted"));
         assert!(window_large("small\n").is_none());
-    }
-
-    fn args(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn rejected_when_only_first_token_listed() {
-        let stderr = "ERROR: usage: pytest [options]\npytest: error: unrecognized arguments: -n\n  inifile: /x/pyproject.toml\n";
-        assert!(fast_args_rejected(stderr, &args(&["-n", "auto"])));
-    }
-
-    #[test]
-    fn rejected_when_both_tokens_listed() {
-        let stderr = "pytest: error: unrecognized arguments: -n auto\n";
-        assert!(fast_args_rejected(stderr, &args(&["-n", "auto"])));
-    }
-
-    #[test]
-    fn not_rejected_by_dash_n_inside_a_path() {
-        let stderr =
-            "pytest: error: unrecognized arguments: --bogus\nhint: see tests/test-n-gram.py\n";
-        assert!(!fast_args_rejected(stderr, &args(&["-n", "auto"])));
-    }
-
-    #[test]
-    fn not_rejected_without_marker() {
-        assert!(!fast_args_rejected(
-            "some other exit-4 error",
-            &args(&["-n", "auto"])
-        ));
     }
 
     #[test]

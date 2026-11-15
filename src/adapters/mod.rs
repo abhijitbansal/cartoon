@@ -26,6 +26,7 @@ pub mod vitest;
 pub mod xcodebuild;
 pub mod xcodebuild_build;
 pub mod xcodebuild_test;
+pub mod xctest_log;
 
 use crate::runner::Captured;
 use anyhow::Result;
@@ -72,15 +73,11 @@ pub enum AdapterReport {
 }
 
 impl AdapterReport {
-    pub fn render(&self, trace_lines: usize, fast_note: Option<&str>) -> String {
+    pub fn render(&self, trace_lines: usize) -> String {
         match self {
-            AdapterReport::Tests(r) => report::render(r, trace_lines, fast_note),
-            AdapterReport::Value(v) => {
-                // Same cwd-relative paths as test reports (report::render).
-                let mut v = v.clone();
-                report::relativize_value(&mut v);
-                crate::toon::encode(&v)
-            }
+            AdapterReport::Tests(r) => report::render(r, trace_lines),
+            // Same cwd-relative paths and indent as test reports.
+            AdapterReport::Value(v) => report::render_value(v),
         }
     }
 }
@@ -101,11 +98,6 @@ pub trait Adapter {
     /// Append machine-output flags. Must never remove or reorder user args.
     fn prepare(&self, argv: Vec<String>) -> Prepared;
     fn parse(&self, captured: &Captured, prepared: &Prepared) -> Result<ParseOutcome>;
-    /// Extra args that accelerate this runner, appended after prepare()'s
-    /// injection when --fast is active. Default: none (silent no-op).
-    fn fast_args(&self) -> Vec<String> {
-        Vec::new()
-    }
     /// What the tool would have printed on stdout for the user's own argv,
     /// had `prepare()` not injected a machine format (plain `go test` vs
     /// `go test -json`, which is far larger). When present, the net-savings
@@ -547,27 +539,5 @@ mod tests {
             find_adapter(&argv(&["npx", "./node_modules/.bin/jest"])).map(|a| a.name()),
             Some("jest")
         );
-    }
-
-    #[test]
-    fn pytest_fast_args_inject_xdist() {
-        let pytest = registry()
-            .into_iter()
-            .find(|a| a.name() == "pytest")
-            .unwrap();
-        assert_eq!(
-            pytest.fast_args(),
-            vec!["-n".to_string(), "auto".to_string()]
-        );
-    }
-
-    #[test]
-    fn other_adapters_have_no_fast_args() {
-        let fast: Vec<&str> = registry()
-            .iter()
-            .filter(|a| !a.fast_args().is_empty())
-            .map(|a| a.name())
-            .collect();
-        assert_eq!(fast, vec!["pytest"]);
     }
 }

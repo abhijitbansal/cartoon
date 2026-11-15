@@ -99,11 +99,10 @@ pub fn definitions() -> Value {
         {
             "name": "logs_list",
             "title": "List recent runs",
-            "description": "List recent archived runs, newest first: id, time, command, adapter (mode), exit code and tags (like `cartoon logs`). Use an id with logs_grep.",
+            "description": "List recent archived runs, newest first: id, time, command, adapter (mode), exit code (like `cartoon logs`). Use an id with logs_grep.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "tag": { "type": "string", "description": "Only runs carrying this tag." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Most runs to list (default 20)." }
                 },
                 "additionalProperties": false
@@ -211,9 +210,8 @@ pub fn call(name: &str, args: &Value, exe: &Path, cancel: &AtomicBool) -> Result
             })
         }
         "logs_list" => {
-            let tag = opt_str(args, "tag")?;
             let limit = opt_u64(args, "limit")?.unwrap_or(DEFAULT_LIST_LIMIT).max(1) as usize;
-            Ok(text_result(logs_list(tag, limit), false))
+            Ok(text_result(logs_list(limit), false))
         }
         "last" => {
             let cmd = opt_str(args, "cmd")?;
@@ -335,8 +333,8 @@ fn logs_grep(pattern: &str, run_id: Option<&str>, context: usize) -> anyhow::Res
     ))
 }
 
-fn logs_list(tag: Option<&str>, limit: usize) -> String {
-    let metas = crate::archive::list(tag);
+fn logs_list(limit: usize) -> String {
+    let metas = crate::archive::list();
     let shown = metas.len().min(limit);
     let mut out = crate::logs_cmd::render_list(&metas[..shown]);
     if shown < metas.len() {

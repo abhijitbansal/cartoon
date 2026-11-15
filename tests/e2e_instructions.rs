@@ -28,8 +28,8 @@ fn install_creates_agents_md_with_the_directive() {
 
     let body = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
     assert!(body.contains("BEGIN cartoon instructions"));
-    assert!(body.contains("NEVER pipe"));
-    assert!(body.contains("cartoon logs grep <pattern> --last"));
+    assert!(body.contains("Never pipe"));
+    assert!(body.contains("cartoon logs grep \"<pattern>\" --last"));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn print_emits_the_block_without_writing() {
         .assert()
         .success()
         .stdout(contains("BEGIN cartoon instructions"))
-        .stdout(contains("NEVER pipe"));
+        .stdout(contains("Never pipe"));
     assert!(!tmp.path().join("AGENTS.md").exists());
 }
 
@@ -260,38 +260,6 @@ fn hook_install_instructions_prefers_claude_md_when_present() {
 }
 
 #[test]
-fn hook_install_copilot_instructions_targets_copilot_file() {
-    let tmp = tempfile::tempdir().unwrap();
-    cartoon()
-        .current_dir(tmp.path())
-        .args([
-            "hook",
-            "install",
-            "--copilot",
-            "--project",
-            "--instructions",
-        ])
-        .assert()
-        .success();
-    assert!(tmp.path().join(".github/copilot-instructions.md").exists());
-}
-
-#[test]
-fn hook_install_copilot_hint_carries_the_copilot_flag() {
-    // Regression: the piped-gap hint for a Copilot install must suggest
-    // `cartoon instructions install --copilot` (not the bare command, which
-    // auto-detects to AGENTS.md — a file Copilot never reads).
-    let tmp = tempfile::tempdir().unwrap();
-    cartoon()
-        .current_dir(tmp.path())
-        .args(["hook", "install", "--copilot", "--project"])
-        .assert()
-        .success()
-        .stdout(contains("cartoon instructions install --copilot"))
-        .stdout(contains("cartoon hook install --copilot --instructions"));
-}
-
-#[test]
 fn hook_install_instructions_refreshes_a_stale_body() {
     // Regression: `hook install --instructions` must refresh a stale directive
     // body in place (like standalone `instructions install`), not short-circuit
@@ -317,7 +285,7 @@ fn hook_install_instructions_refreshes_a_stale_body() {
         "stale body not removed"
     );
     assert!(
-        body.contains("NEVER pipe"),
+        body.contains("Never pipe"),
         "current directive body not written"
     );
 }

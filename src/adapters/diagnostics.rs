@@ -15,8 +15,11 @@ fn diagnostic_regex() -> &'static Regex {
     })
 }
 
-/// Parsed diagnostics plus error/warning counts for one text stream.
+/// Parsed diagnostics plus error/warning counts for one text stream. ANSI
+/// colour is stripped first: Swift 6.4 and clang colour diagnostics even on
+/// a pipe (`File.swift:2:18: ESC[1;31merror: ESC[1;39m...`).
 pub fn collect(text: &str) -> (Vec<Value>, u64, u64) {
+    let text = crate::ladder::strip_ansi(text);
     let mut errors: u64 = 0;
     let mut warnings: u64 = 0;
     let mut diagnostics: Vec<Value> = Vec::new();
@@ -51,7 +54,8 @@ pub fn collect(text: &str) -> (Vec<Value>, u64, u64) {
 /// `path:line:col: error:` diagnostic: the linker (`ld: symbol(s) not
 /// found ...`, `clang: error: linker command failed ...`), code signing and
 /// other driver-level `error: ...` lines. Deduplicated, in order; `ld:
-/// warning:` lines are not errors and are skipped.
+/// warning:` lines are not errors and are skipped. ANSI colour is stripped
+/// first, as in `collect`.
 pub fn collect_tool_errors(text: &str) -> Vec<Value> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -60,6 +64,7 @@ pub fn collect_tool_errors(text: &str) -> Vec<Value> {
         )
         .unwrap()
     });
+    let text = crate::ladder::strip_ansi(text);
     let mut seen: Vec<String> = Vec::new();
     for line in text.lines() {
         let line = line.trim_end();
@@ -151,6 +156,43 @@ mod tests {
             "/Users/dev/proj/Sources/App/Auth.swift:12:5"
         );
         assert_eq!(diags[0]["msg"], "cannot find 'foo' in scope");
+    }
+
+    #[test]
+    fn coloured_diagnostics_are_collected_without_their_escapes() {
+        // Final review I7: Swift 6.4.2 and clang colour on a pipe.
+        let text =
+            "/p/A.swift:2:18: \x1b[1;31merror: \x1b[1;39mcannot find 'bar' in scope\x1b[0m\n\
+                    \x1b[1;31merror: \x1b[1;39mlinker command failed\x1b[0m\n";
+        let (diags, errors, _) = collect(text);
+        assert_eq!(errors, 1);
+        assert_eq!(diags[0]["loc"], "/p/A.swift:2:18");
+        assert_eq!(diags[0]["msg"], "cannot find 'bar' in scope");
+        let tool = collect_tool_errors(text);
+        assert_eq!(tool.len(), 1, "{tool:?}");
+        assert_eq!(tool[0]["msg"], "error: linker command failed");
+    }
+
+    #[test]
+    fn coloured_build_log_parses_through_the_shared_stream_parse() {
+        use std::os::unix::process::ExitStatusExt;
+        let log = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/swift-test/compile-failure-color.log",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let cap = Captured {
+            stdout: log,
+            stderr: String::new(),
+            status: std::process::ExitStatus::from_raw(1 << 8),
+        };
+        let out = parse_build_streams("xcodebuild-build", &cap);
+        let AdapterReport::Value(v) = out.report else {
+            panic!("value report");
+        };
+        assert_eq!(v["summary"]["errors"], 2);
+        assert_eq!(v["summary"]["warnings"], 1);
+        assert!(out.passthrough_stdout.is_none());
     }
 
     #[test]

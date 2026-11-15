@@ -10,11 +10,16 @@
 use serde_json::{Map, Value};
 
 /// Encoder options (spec §13). `delimiter` is the document delimiter:
-/// `,` (default), `\t` or `|`.
+/// `,` (default), `\t` or `|`. `list_scalar_arrays` emits a primitive array
+/// as a `key[N]:` list with one `- item` per line instead of one inline row;
+/// used for tracebacks, where each line is a sentence. Its item quoting
+/// (`list_scalar`) is looser than spec §7.2, so the output is meant for a
+/// model to read, not for a strict TOON decoder.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub delimiter: char,
     pub indent_size: usize,
+    pub list_scalar_arrays: bool,
 }
 
 impl Default for Options {
@@ -22,6 +27,7 @@ impl Default for Options {
         Options {
             delimiter: ',',
             indent_size: 2,
+            list_scalar_arrays: false,
         }
     }
 }
@@ -153,6 +159,14 @@ impl Encoder {
     fn array_lines(&mut self, key: Option<&str>, arr: &[Value], depth: usize, tabular_ok: bool) {
         let prefix = format!("{}{}", self.indent(depth), key.unwrap_or(""));
         let bracket = self.bracket(arr.len(), false);
+        if arr.iter().all(is_scalar) && self.opts.list_scalar_arrays {
+            self.lines.push(format!("{prefix}{bracket}:"));
+            let ind = self.indent(depth + 1);
+            for v in arr {
+                self.lines.push(format!("{ind}- {}", list_scalar(v)));
+            }
+            return;
+        }
         if arr.iter().all(is_scalar) {
             let d = self.opts.delimiter;
             let row = arr
@@ -296,6 +310,34 @@ fn scalar(v: &Value, delim: char) -> String {
         }
         _ => unreachable!("scalar() called on container"),
     }
+}
+
+/// A primitive in a `- item` list line. Deliberately looser than spec §7.2,
+/// which quotes a string holding the delimiter, a bracket, a brace, a
+/// backslash or a quote in any position: a reader never splits a list item
+/// on the delimiter, so only text it could take for structure is quoted here
+/// (see `list_item_needs_quotes`). Not conformant TOON for those items.
+fn list_scalar(v: &Value) -> String {
+    match v {
+        Value::String(s) if list_item_needs_quotes(s) => quote(s),
+        Value::String(s) => s.to_string(),
+        other => scalar(other, ','),
+    }
+}
+
+/// Quote a list-item string when it is empty, has edge whitespace, reads as
+/// a literal (`true`, `42`), contains a `:` (a `key: value` pair, or an
+/// array header such as `[2]: a`), a control character, or starts like
+/// structure (`"`, `-`, `#`). A leading `[` or `{` is plain: with no `:`
+/// it cannot open a header or a pair.
+fn list_item_needs_quotes(s: &str) -> bool {
+    s.is_empty()
+        || s.starts_with([' ', '\t'])
+        || s.ends_with([' ', '\t'])
+        || matches!(s, "true" | "false" | "null")
+        || is_numeric_like(s)
+        || s.starts_with(['"', '-', '#'])
+        || s.chars().any(|c| c == ':' || (c as u32) < 0x20)
 }
 
 /// Canonical number form (spec §2), computed from the number's exact JSON
@@ -485,6 +527,20 @@ mod tests {
     #[test]
     fn primitive_array_inline() {
         assert_eq!(encode(&json!({"tags": ["a", "b", "c"]})), "tags[3]: a,b,c");
+    }
+
+    #[test]
+    fn list_scalar_arrays_option_emits_one_item_per_line() {
+        let opts = Options {
+            list_scalar_arrays: true,
+            ..Options::default()
+        };
+        let v = json!({"k": ["a", "b: c"]});
+        assert_eq!(encode_with(&v, &opts), "k[2]:\n  - a\n  - \"b: c\"");
+        // Not split on the delimiter: commas and brackets stay plain.
+        let w = json!({"k": ["x, y", "f(a[0])"]});
+        assert_eq!(encode_with(&w, &opts), "k[2]:\n  - x, y\n  - f(a[0])");
+        assert_eq!(encode(&v), "k[2]: a,\"b: c\"");
     }
 
     #[test]

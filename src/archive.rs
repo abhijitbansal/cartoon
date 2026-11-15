@@ -18,8 +18,6 @@ pub struct RunMeta {
     pub mode: String,
     pub exit: i32,
     pub cwd: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
     pub stdout_bytes: u64,
     pub stderr_bytes: u64,
 }
@@ -103,11 +101,10 @@ pub fn record(
     mode: &str,
     captured: &Captured,
     exit: i32,
-    tags: &[String],
     cfg: &Config,
 ) -> Option<RunRef> {
     let root = crate::paths::runs_dir()?;
-    record_at(&root, argv, mode, captured, exit, tags, cfg)
+    record_at(&root, argv, mode, captured, exit, cfg)
 }
 
 /// Reserve a run slot (id + empty dir, claimed exclusively) without writing
@@ -129,16 +126,15 @@ pub fn write_reserved(
     mode: &str,
     captured: &Captured,
     exit: i32,
-    tags: &[String],
     cfg: &Config,
 ) -> Option<RunRef> {
     let root = run.dir.parent()?.to_path_buf();
-    write_at(&root, run, argv, mode, captured, exit, tags, cfg)
+    write_at(&root, run, argv, mode, captured, exit, cfg)
 }
 
-pub fn list(tag: Option<&str>) -> Vec<RunMeta> {
+pub fn list() -> Vec<RunMeta> {
     match crate::paths::runs_dir() {
-        Some(root) => list_at(&root, tag),
+        Some(root) => list_at(&root),
         None => Vec::new(),
     }
 }
@@ -150,7 +146,7 @@ pub fn load(id: &str) -> Result<(RunMeta, String, String)> {
 
 /// Newest run id, if any.
 pub fn last_id() -> Option<String> {
-    list(None).into_iter().next().map(|m| m.id)
+    list().into_iter().next().map(|m| m.id)
 }
 
 pub fn record_at(
@@ -159,7 +155,6 @@ pub fn record_at(
     mode: &str,
     captured: &Captured,
     exit: i32,
-    tags: &[String],
     cfg: &Config,
 ) -> Option<RunRef> {
     if cfg.keep_runs == 0 {
@@ -175,7 +170,7 @@ pub fn record_at(
             return None;
         }
     };
-    write_at(root, run, argv, mode, captured, exit, tags, cfg)
+    write_at(root, run, argv, mode, captured, exit, cfg)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -186,7 +181,6 @@ fn write_at(
     mode: &str,
     captured: &Captured,
     exit: i32,
-    tags: &[String],
     cfg: &Config,
 ) -> Option<RunRef> {
     if cfg.keep_runs == 0 {
@@ -203,7 +197,6 @@ fn write_at(
         cwd: std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_default(),
-        tags: tags.to_vec(),
         stdout_bytes: captured.stdout.len() as u64,
         stderr_bytes: captured.stderr.len() as u64,
     };
@@ -233,7 +226,7 @@ fn write_at(
     Some(RunRef { id, dir })
 }
 
-pub fn list_at(root: &Path, tag: Option<&str>) -> Vec<RunMeta> {
+pub fn list_at(root: &Path) -> Vec<RunMeta> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -252,10 +245,6 @@ pub fn list_at(root: &Path, tag: Option<&str>) -> Vec<RunMeta> {
                     None
                 }
             }
-        })
-        .filter(|m| match tag {
-            Some(t) => m.tags.iter().any(|x| x == t),
-            None => true,
         })
         .collect();
     metas.sort_by(|a, b| b.id.cmp(&a.id)); // newest first
@@ -508,15 +497,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let argv = vec!["pytest".to_string(), "-q".to_string()];
         let cap = captured("OUT bytes\n", "ERR bytes\n");
-        let tags = vec!["api".to_string(), "ci".to_string()];
-        let run = record_at(tmp.path(), &argv, "pytest", &cap, 1, &tags, &cfg()).unwrap();
+        let run = record_at(tmp.path(), &argv, "pytest", &cap, 1, &cfg()).unwrap();
 
         let (meta, out, err) = load_at(tmp.path(), &run.id).unwrap();
         assert_eq!(meta.id, run.id);
         assert_eq!(meta.argv, argv);
         assert_eq!(meta.mode, "pytest");
         assert_eq!(meta.exit, 1);
-        assert_eq!(meta.tags, tags);
         assert_eq!(meta.stdout_bytes, 10);
         assert_eq!(meta.stderr_bytes, 10);
         assert_eq!(out, "OUT bytes\n");
@@ -525,37 +512,15 @@ mod tests {
     }
 
     #[test]
-    fn list_is_newest_first_and_tag_filtered() {
+    fn list_is_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
         let cap = captured("x", "");
-        record_at(
-            tmp.path(),
-            &["a".into()],
-            "passthrough",
-            &cap,
-            0,
-            &[],
-            &cfg(),
-        )
-        .unwrap();
-        record_at(
-            tmp.path(),
-            &["b".into()],
-            "json",
-            &cap,
-            0,
-            &["t1".into()],
-            &cfg(),
-        )
-        .unwrap();
+        record_at(tmp.path(), &["a".into()], "passthrough", &cap, 0, &cfg()).unwrap();
+        record_at(tmp.path(), &["b".into()], "json", &cap, 0, &cfg()).unwrap();
 
-        let all = list_at(tmp.path(), None);
+        let all = list_at(tmp.path());
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].argv[0], "b", "newest first");
-
-        let tagged = list_at(tmp.path(), Some("t1"));
-        assert_eq!(tagged.len(), 1);
-        assert_eq!(tagged[0].argv[0], "b");
     }
 
     #[test]
@@ -568,12 +533,27 @@ mod tests {
     fn corrupt_meta_is_skipped_in_list() {
         let tmp = tempfile::tempdir().unwrap();
         let cap = captured("x", "");
-        record_at(tmp.path(), &["ok".into()], "json", &cap, 0, &[], &cfg()).unwrap();
+        record_at(tmp.path(), &["ok".into()], "json", &cap, 0, &cfg()).unwrap();
         let bad = tmp.path().join("20000101-000000-beef");
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::write(bad.join("meta.json"), "not json").unwrap();
-        let all = list_at(tmp.path(), None);
+        let all = list_at(tmp.path());
         assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn meta_written_before_0_8_with_a_tags_field_still_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("20260101-000000-abcd");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(
+            old.join("meta.json"),
+            r#"{"id":"20260101-000000-abcd","ts":"2026-01-01T00:00:00Z","argv":["pytest"],"mode":"pytest","exit":1,"cwd":"/p","tags":["api"],"stdout_bytes":1,"stderr_bytes":0}"#,
+        )
+        .unwrap();
+        let all = list_at(tmp.path());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].argv, vec!["pytest".to_string()]);
     }
 
     #[test]
@@ -659,8 +639,8 @@ mod tests {
         let cap = captured("x", "");
         let mut c = cfg();
         c.keep_runs = 1;
-        let a = record_at(tmp.path(), &["a".into()], "safe", &cap, 0, &[], &c).unwrap();
-        let b = record_at(tmp.path(), &["b".into()], "safe", &cap, 0, &[], &c).unwrap();
+        let a = record_at(tmp.path(), &["a".into()], "safe", &cap, 0, &c).unwrap();
+        let b = record_at(tmp.path(), &["b".into()], "safe", &cap, 0, &c).unwrap();
         assert!(a.dir.exists() && b.dir.exists(), "neither is 60s old yet");
     }
 
@@ -685,7 +665,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("state/cartoon/runs");
         let cap = captured("secret token\n", "err\n");
-        let run = record_at(&root, &["env".into()], "safe", &cap, 0, &[], &cfg()).unwrap();
+        let run = record_at(&root, &["env".into()], "safe", &cap, 0, &cfg()).unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&root), 0o700);
         assert_eq!(mode(&tmp.path().join("state/cartoon")), 0o700);
@@ -701,7 +681,7 @@ mod tests {
         let not_a_dir = tmp.path().join("file");
         std::fs::write(&not_a_dir, "x").unwrap();
         let cap = captured("out", "");
-        assert!(record_at(&not_a_dir, &["a".to_string()], "safe", &cap, 0, &[], &cfg()).is_none());
+        assert!(record_at(&not_a_dir, &["a".to_string()], "safe", &cap, 0, &cfg()).is_none());
     }
 
     #[test]
@@ -710,8 +690,8 @@ mod tests {
         let cap = captured("x", "");
         let mut off = cfg();
         off.keep_runs = 0;
-        assert!(record_at(tmp.path(), &["a".into()], "json", &cap, 0, &[], &off).is_none());
-        assert!(list_at(tmp.path(), None).is_empty());
+        assert!(record_at(tmp.path(), &["a".into()], "json", &cap, 0, &off).is_none());
+        assert!(list_at(tmp.path()).is_empty());
     }
 
     #[test]
@@ -719,7 +699,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cap = captured("x", "");
         let argv = ["pytest".to_string()];
-        let run = record_at(tmp.path(), &argv, "pytest", &cap, 1, &[], &cfg()).unwrap();
+        let run = record_at(tmp.path(), &argv, "pytest", &cap, 1, &cfg()).unwrap();
         assert_eq!(load_report_at(tmp.path(), &run.id), None, "no report yet");
         let report = StoredReport {
             kind: "tests".into(),

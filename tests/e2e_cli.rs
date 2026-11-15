@@ -91,7 +91,7 @@ fn every_reserved_subcommand_prints_its_own_help_and_exits_0() {
         ("adapters", "cartoon adapters"),
         ("hook", "cartoon hook"),
         ("instructions", "cartoon instructions"),
-        ("shim", "cartoon shim"),
+        ("setup", "cartoon setup"),
     ] {
         for flag in ["--help", "-h"] {
             let out = cartoon()
@@ -125,9 +125,9 @@ fn top_level_help_lists_every_reserved_subcommand() {
         "logs",
         "learn",
         "hook",
-        "shim",
         "instructions",
         "ingest",
+        "setup",
     ] {
         assert!(help.contains(&format!("`{sub}`")), "{sub}:\n{help}");
     }
@@ -292,4 +292,162 @@ fn ingest_honors_the_max_tokens_flag() {
         capped.len(),
         full.len()
     );
+}
+
+#[test]
+fn removed_flags_error_with_hint() {
+    for f in ["--fast", "--heuristic", "--tag"] {
+        let o = run(&[f, "true"]);
+        assert_ne!(o.status.code(), Some(0), "{f}");
+        let err = text(&o.stderr);
+        assert!(err.contains("removed in 0.8.0"), "{f}: {err}");
+        // The error names the flags that are still accepted.
+        assert!(err.contains("--compress"), "{f}: {err}");
+        assert!(!err.contains("command not found"), "{f}: {err}");
+    }
+}
+
+#[test]
+fn shim_subcommand_removed() {
+    let o = run(&["shim", "install"]);
+    assert_ne!(o.status.code(), Some(0));
+    let err = text(&o.stderr);
+    assert!(err.contains("removed in 0.8.0"), "{err}");
+    assert!(!err.contains("command not found"), "{err}");
+}
+
+#[test]
+fn logs_tag_filter_removed() {
+    let o = run(&["logs", "--tag", "api"]);
+    assert_ne!(o.status.code(), Some(0));
+    assert!(
+        text(&o.stderr).contains("cartoon logs"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
+#[test]
+fn unknown_flag_error_lists_accepted_flags() {
+    let o = run(&["--nope", "pytest"]);
+    assert_eq!(o.status.code(), Some(2));
+    let err = text(&o.stderr);
+    assert!(err.contains("--nope"), "{err}");
+    assert!(err.contains("accepted flags"), "{err}");
+    assert!(err.contains("--compress"), "{err}");
+    assert!(err.contains("--merge-streams"), "{err}");
+}
+
+#[test]
+fn removed_tag_flag_without_a_value_still_gets_the_hint() {
+    let o = run(&["--tag"]);
+    assert_eq!(o.status.code(), Some(2));
+    let err = text(&o.stderr);
+    assert!(err.contains("removed in 0.8.0"), "{err}");
+    assert!(err.contains("--compress"), "{err}");
+}
+
+const BLOCK_MARKER: &str = "BEGIN cartoon instructions";
+
+/// `cartoon setup` in a temp HOME and a temp project, so the real
+/// `~/.claude/settings.json` is never touched.
+fn setup_in(home: &std::path::Path, project: &std::path::Path, args: &[&str]) -> Output {
+    cartoon()
+        .env("HOME", home)
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+        .current_dir(project)
+        .arg("setup")
+        .args(args)
+        .output()
+        .expect("run cartoon setup")
+}
+
+#[test]
+fn setup_installs_hook_and_block_idempotently() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("CLAUDE.md"), "# My rules\n").unwrap();
+
+    for round in 1..=2 {
+        let out = setup_in(home.path(), project.path(), &[]);
+        let stdout = text(&out.stdout);
+        assert_eq!(out.status.code(), Some(0), "round {round}: {stdout}");
+        // The doctor report is printed last; its first key is the version.
+        assert!(stdout.contains("version:"), "round {round}: {stdout}");
+    }
+
+    let settings = std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap();
+    assert_eq!(settings.matches("cartoon hook rewrite").count(), 1);
+    let doc = std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap();
+    assert_eq!(doc.matches(BLOCK_MARKER).count(), 1);
+    assert!(doc.starts_with("# My rules\n"), "{doc}");
+}
+
+#[test]
+fn setup_no_instructions_leaves_docs_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("CLAUDE.md"), "# My rules\n").unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--no-instructions"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stdout));
+
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap(),
+        "# My rules\n"
+    );
+    assert!(!project.path().join("AGENTS.md").exists());
+    assert!(home.path().join(".claude/settings.json").exists());
+}
+
+#[test]
+fn setup_project_writes_the_hook_into_the_project() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--project"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stdout));
+
+    assert!(project.path().join(".claude/settings.json").exists());
+    assert!(!home.path().join(".claude/settings.json").exists());
+    // No CLAUDE.md here, so the cross-agent AGENTS.md carries the block.
+    let doc = std::fs::read_to_string(project.path().join("AGENTS.md")).unwrap();
+    assert_eq!(doc.matches(BLOCK_MARKER).count(), 1);
+}
+
+#[test]
+fn setup_skips_the_settings_hook_when_the_plugin_is_enabled() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let settings_path = home.path().join(".claude/settings.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    let original = r#"{"enabledPlugins": {"cartoon@cartoon": true}}"#;
+    std::fs::write(&settings_path, original).unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--no-instructions"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+
+    // No duplicate PreToolUse hook: the plugin already provides it.
+    let settings = std::fs::read_to_string(&settings_path).unwrap();
+    assert!(!settings.contains("cartoon hook rewrite"), "{settings}");
+    assert!(!settings.contains("PreToolUse"), "{settings}");
+    assert!(stdout.contains("plugin"), "{stdout}");
+}
+
+#[test]
+fn setup_unknown_flag_errors_and_names_the_accepted_ones() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    let out = setup_in(home.path(), project.path(), &["--bogus"]);
+    assert_eq!(out.status.code(), Some(2));
+    let err = text(&out.stderr);
+    assert!(err.contains("--bogus"), "{err}");
+    assert!(
+        err.contains("--project") && err.contains("--no-instructions"),
+        "{err}"
+    );
+    // Nothing was installed before the error.
+    assert!(!home.path().join(".claude").exists());
 }

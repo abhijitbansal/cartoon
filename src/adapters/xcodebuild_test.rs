@@ -70,19 +70,68 @@ impl Adapter for XcodebuildTest {
             .artifact_path()
             .or_else(|| user_bundle_path(&prepared.argv))
             .context("no xcresult bundle path")?;
+        let failed = !captured.status.success();
         if !bundle.exists() {
-            anyhow::bail!("xcresult bundle missing (build likely failed)");
+            return fall_back_or_bail(
+                failed,
+                captured,
+                "xcresult bundle missing (build likely failed)",
+            );
         }
-        let json = run_xcresulttool(&bundle)?;
-        let (report, result) = parse_summary(&json)?;
-        check_summary(&report, result.as_deref(), captured.status.success())?;
-        Ok(ParseOutcome {
-            report: super::AdapterReport::Tests(report),
-            // xcodebuild's human log was stdout/stderr — replaced by the summary.
-            passthrough_stdout: None,
-            passthrough_stderr: None,
-        })
+        match read_summary(&bundle, !failed) {
+            Ok(report) => Ok(ParseOutcome {
+                report: super::AdapterReport::Tests(with_log_locations(report, captured)),
+                // xcodebuild's human log was stdout/stderr — replaced by the summary.
+                passthrough_stdout: None,
+                passthrough_stderr: None,
+            }),
+            Err(e) => fall_back_or_bail(failed, captured, &e.to_string()),
+        }
     }
+}
+
+/// The xcresult summary carries no `file:line`; XCTest failures get theirs
+/// (and a message, if the summary had none) from the log's
+/// `path:line: error: -[Class test] : message` lines.
+fn with_log_locations(mut report: TestReport, captured: &Captured) -> TestReport {
+    super::xctest_log::fill_from_log(&mut report.failures, &captured.stdout);
+    super::xctest_log::fill_from_log(&mut report.failures, &captured.stderr);
+    report
+}
+
+/// The bundle's summary as a report, or why it may not stand in for the log.
+/// Every error here (xcresulttool failing, unusable JSON, zero tests, a
+/// failure with no failed test) is a bail for the caller to weigh.
+fn read_summary(bundle: &Path, success: bool) -> Result<TestReport> {
+    let json = run_xcresulttool(bundle)?;
+    let (report, result) = parse_summary(&json)?;
+    check_summary(&report, result.as_deref(), success)?;
+    Ok(report)
+}
+
+/// A failed run that bails (no bundle, zero tests, failure with no failed
+/// test) usually died while building: report its compile diagnostics when
+/// the log has any. A passing run, or a log without a single error, keeps
+/// the bail so the raw output passes through untouched.
+fn fall_back_or_bail(failed: bool, captured: &Captured, reason: &str) -> Result<ParseOutcome> {
+    if failed {
+        if let Ok(outcome) = build_fallback("xcodebuild-test", captured) {
+            return Ok(outcome);
+        }
+    }
+    anyhow::bail!("{reason}")
+}
+
+/// Build-diagnostics report for a run that failed before producing test
+/// results. `Err` when the streams hold no error at all.
+fn build_fallback(runner: &str, captured: &Captured) -> Result<ParseOutcome> {
+    let outcome = super::diagnostics::parse_build_streams(runner, captured);
+    let errors = match &outcome.report {
+        super::AdapterReport::Value(v) => v["summary"]["errors"].as_u64().unwrap_or(0),
+        super::AdapterReport::Tests(_) => 0,
+    };
+    anyhow::ensure!(errors > 0, "no build errors found in the xcodebuild log");
+    Ok(outcome)
 }
 
 /// Extract a user-supplied `-resultBundlePath` (space or `=` form).
@@ -327,6 +376,23 @@ mod tests {
     }
 
     #[test]
+    fn xctest_failures_get_their_location_from_the_log() {
+        // Final review I12: the summary path drops the location the log has.
+        use std::os::unix::process::ExitStatusExt;
+        let r = parse_summary_json(&fixture("summary-mixed.json")).unwrap();
+        let cap = Captured {
+            stdout: "/p/SwiftDemoTests.swift:6: error: -[SwiftDemoTests.GreeterXCTests testGreetingExact] : XCTAssertEqual failed\n".into(),
+            stderr: String::new(),
+            status: std::process::ExitStatus::from_raw(65 << 8),
+        };
+        let r = with_log_locations(r, &cap);
+        assert_eq!(r.failures[1].loc, "/p/SwiftDemoTests.swift:6");
+        assert!(!r.failures[1].msg.is_empty());
+        // A Swift Testing failure has no such line: left as it was.
+        assert!(r.failures[0].loc.is_empty());
+    }
+
+    #[test]
     fn parses_all_pass_summary() {
         let r = parse_summary_json(&fixture("summary-all-pass.json")).unwrap();
         assert_eq!((r.total, r.passed, r.failed), (3, 3, 0));
@@ -379,7 +445,7 @@ mod tests {
         let r = parse_summary_json(json).unwrap();
         assert!(!r.duration_s.is_finite(), "precondition: diff overflowed");
         // report::render must clamp it rather than panic on a non-finite f64.
-        let out = super::super::report::render(&r, 5, None);
+        let out = super::super::report::render(&r, 5);
         assert!(out.contains("duration_s: 0"));
     }
 
@@ -394,5 +460,114 @@ mod tests {
             Some(PathBuf::from("b.xcresult"))
         );
         assert_eq!(user_bundle_path(&argv(&["xcodebuild", "test"])), None);
+    }
+
+    fn failed_capture(stderr: &str) -> Captured {
+        use std::os::unix::process::ExitStatusExt;
+        Captured {
+            stdout: String::new(),
+            stderr: stderr.into(),
+            status: std::process::ExitStatus::from_raw(65 << 8),
+        }
+    }
+
+    fn prepared_without_bundle() -> Prepared {
+        // A user bundle path that was never written: the build died first.
+        Prepared {
+            argv: argv(&[
+                "xcodebuild",
+                "test",
+                "-resultBundlePath",
+                "/nonexistent/cartoon/result.xcresult",
+            ]),
+            artifact: None,
+        }
+    }
+
+    #[test]
+    fn test_compile_failure_reports_diagnostics() {
+        let cap = failed_capture(&fixture("compile-failure.log"));
+        let out = XcodebuildTest
+            .parse(&cap, &prepared_without_bundle())
+            .unwrap();
+        let rendered = out.report.render(5);
+        assert!(rendered.contains("App/View.swift"), "got: {rendered}");
+        assert!(
+            rendered.contains("cannot find 'Foo' in scope"),
+            "got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_compile_failure_without_diagnostics_passes_through() {
+        let cap = failed_capture(&fixture("failure-no-diagnostics.log"));
+        assert!(XcodebuildTest
+            .parse(&cap, &prepared_without_bundle())
+            .is_err());
+    }
+
+    fn passed_capture(stderr: &str) -> Captured {
+        use std::os::unix::process::ExitStatusExt;
+        Captured {
+            stdout: String::new(),
+            stderr: stderr.into(),
+            status: std::process::ExitStatus::from_raw(0),
+        }
+    }
+
+    #[test]
+    fn fall_back_or_bail_reports_diagnostics_only_for_a_failed_run() {
+        let log = fixture("compile-failure.log");
+        let out = fall_back_or_bail(true, &failed_capture(&log), "reason").unwrap();
+        assert!(out.report.render(5).contains("App/View.swift"));
+        // Same log, run did not fail: today's behaviour, the bail stands.
+        let err = fall_back_or_bail(false, &passed_capture(&log), "reason")
+            .err()
+            .expect("bail");
+        assert_eq!(err.to_string(), "reason");
+    }
+
+    #[test]
+    fn fall_back_or_bail_keeps_the_bail_when_the_log_has_no_error() {
+        let log = fixture("failure-no-diagnostics.log");
+        let err = fall_back_or_bail(true, &failed_capture(&log), "reason")
+            .err()
+            .expect("bail");
+        assert_eq!(err.to_string(), "reason");
+    }
+
+    #[test]
+    fn passing_run_with_missing_bundle_still_passes_through() {
+        let cap = passed_capture(&fixture("compile-failure.log"));
+        assert!(XcodebuildTest
+            .parse(&cap, &prepared_without_bundle())
+            .is_err());
+    }
+
+    #[test]
+    fn unreadable_bundle_on_a_failed_run_falls_back_to_diagnostics() {
+        // The bundle dir exists but is not a result bundle (a build that
+        // failed can leave one): xcresulttool fails or reports nothing
+        // usable. The compile diagnostics must still be reported.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("result.xcresult");
+        std::fs::create_dir(&bundle).unwrap();
+        let prepared = Prepared {
+            argv: argv(&[
+                "xcodebuild",
+                "test",
+                "-resultBundlePath",
+                &bundle.display().to_string(),
+            ]),
+            artifact: None,
+        };
+        let out = XcodebuildTest
+            .parse(&failed_capture(&fixture("compile-failure.log")), &prepared)
+            .unwrap();
+        assert!(out.report.render(5).contains("App/View.swift"));
+        // A passing run with the same unreadable bundle is not rescued.
+        assert!(XcodebuildTest
+            .parse(&passed_capture(&fixture("compile-failure.log")), &prepared)
+            .is_err());
     }
 }

@@ -63,8 +63,8 @@ const PLUGIN_ID: &str = "cartoon@cartoon";
 /// and project-local.
 fn plugin_settings_paths() -> Vec<std::path::PathBuf> {
     let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        paths.push(home.join(".claude/settings.json"));
+    if let Some(user) = crate::hook::user_settings_path() {
+        paths.push(user);
     }
     paths.push(".claude/settings.json".into());
     paths.push(".claude/settings.local.json".into());
@@ -81,6 +81,12 @@ pub fn plugin_enabled_in(settings: &str) -> bool {
     })
 }
 
+/// Is the cartoon plugin (and so its PreToolUse hook) enabled in any
+/// settings file? `setup` uses this to avoid adding a duplicate hook.
+pub fn plugin_enabled() -> bool {
+    !plugin_rows().is_empty()
+}
+
 /// Settings files that enable the plugin hook.
 fn plugin_rows() -> Vec<String> {
     plugin_settings_paths()
@@ -90,19 +96,58 @@ fn plugin_rows() -> Vec<String> {
         .collect()
 }
 
+/// What the hook locations add up to, for the advice line.
+#[derive(Clone, Copy, Default)]
+struct HookSummary {
+    installed: bool,
+    /// An older entry of ours that still wraps (refresh advised).
+    outdated: bool,
+    stale: bool,
+    legacy: bool,
+}
+
+fn summarize_hooks(rows: &[crate::hook::HookRow]) -> HookSummary {
+    use crate::hook::HookState;
+    let any = |state| rows.iter().any(|r| r.state == state);
+    HookSummary {
+        installed: any(HookState::Installed),
+        outdated: any(HookState::Outdated),
+        stale: any(HookState::Stale),
+        legacy: any(HookState::Legacy),
+    }
+}
+
 /// The trailing advice line, which depends on how the hook is installed:
 /// a plugin user must not be told to `hook install` (that adds a duplicate).
-fn advice(plugin: bool, hook_installed: bool) -> String {
-    let hook = if plugin {
+/// Only a current Claude Code entry counts as installed; a stale one and a
+/// legacy Copilot file get their own warning.
+fn advice(plugin: bool, hook: HookSummary) -> String {
+    let status = if plugin {
         "hook installed via the Claude Code plugin (cartoon@cartoon) — do not also run \
          cartoon hook install, that would add a duplicate hook"
-    } else if hook_installed {
+    } else if hook.installed {
         "hook installed"
+    } else if hook.outdated {
+        "hook installed, older entry (still wraps) → cartoon hook install refreshes it"
+    } else if hook.stale {
+        "hook stale → cartoon hook install"
     } else {
         "hook not installed → cartoon hook install (or enable the cartoon Claude Code plugin)"
     };
+    let mut notes = String::new();
+    if hook.stale && (plugin || hook.installed || hook.outdated) {
+        notes.push_str(" · stale hook entry → cartoon hook install refreshes it");
+    }
+    if hook.outdated && plugin {
+        notes.push_str(
+            " · a settings.json hook entry also wraps (duplicate) → cartoon hook uninstall",
+        );
+    }
+    if hook.legacy {
+        notes.push_str(" · legacy Copilot hook file → cartoon hook uninstall --copilot");
+    }
     format!(
-        "# {hook} · invalid config → fix the file · \
+        "# {status}{notes} · invalid config → fix the file · \
          allowlist_without_adapter → ladder compression only (contribute an adapter) · \
          negative_saved > 0 → upgrade (the guard now covers adapter runs)"
     )
@@ -112,11 +157,19 @@ pub fn report() -> String {
     let cwd = std::env::current_dir().ok();
     let plugin = plugin_rows();
     let status = crate::hook::status_rows();
-    let hook_installed = status.iter().any(|(_, _, installed)| *installed);
+    let hook_summary = summarize_hooks(&status);
     let hook_rows: Vec<Value> = status
         .into_iter()
-        .map(|(path, surface, installed)| {
-            json!({ "path": path, "surface": surface, "installed": installed })
+        .map(|r| {
+            json!({
+                "path": r.path,
+                "surface": r.surface,
+                "installed": matches!(
+                    r.state,
+                    crate::hook::HookState::Installed | crate::hook::HookState::Outdated
+                ),
+                "state": r.state.label(),
+            })
         })
         .collect();
 
@@ -190,7 +243,7 @@ pub fn report() -> String {
     );
     let mut out = crate::toon::encode(&Value::Object(root));
     out.push_str("\n\n");
-    out.push_str(&advice(!plugin.is_empty(), hook_installed));
+    out.push_str(&advice(!plugin.is_empty(), hook_summary));
     out
 }
 
@@ -226,11 +279,35 @@ mod tests {
 
     #[test]
     fn plugin_users_are_not_told_to_hook_install() {
-        let a = advice(true, false);
+        let a = advice(true, HookSummary::default());
         assert!(a.contains("plugin"), "{a}");
         assert!(!a.contains("→ cartoon hook install"), "{a}");
-        assert!(advice(false, false).contains("→ cartoon hook install"));
-        assert!(!advice(false, true).contains("not installed"));
+        assert!(advice(false, HookSummary::default()).contains("→ cartoon hook install"));
+        let installed = HookSummary {
+            installed: true,
+            ..HookSummary::default()
+        };
+        assert!(!advice(false, installed).contains("not installed"));
+    }
+
+    #[test]
+    fn legacy_copilot_file_alone_is_not_an_installed_hook() {
+        use crate::hook::{HookRow, HookState};
+        let row = |state| HookRow {
+            path: "p".into(),
+            surface: "s",
+            state,
+        };
+        let legacy_only = summarize_hooks(&[row(HookState::Missing), row(HookState::Legacy)]);
+        assert!(!legacy_only.installed && legacy_only.legacy);
+        let a = advice(false, legacy_only);
+        assert!(a.contains("# hook not installed"), "{a}");
+        assert!(a.contains("cartoon hook uninstall --copilot"), "{a}");
+        let stale = summarize_hooks(&[row(HookState::Stale)]);
+        assert!(advice(false, stale).contains("# hook stale"));
+        let both = summarize_hooks(&[row(HookState::Installed), row(HookState::Stale)]);
+        let a = advice(false, both);
+        assert!(a.contains("# hook installed") && a.contains("stale"), "{a}");
     }
 
     #[test]

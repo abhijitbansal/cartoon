@@ -20,6 +20,18 @@ pub struct StatRecord {
     pub inner_cmd: Option<String>,
 }
 
+/// Largest output the agent sees whole, in tokens: about 30,000 chars, the
+/// Bash output size Claude Code shows whole (estimate; measured 20.5 KB
+/// shown whole, 102.6 KB replaced by a 2 KB preview, Claude Code 2.1.325).
+/// Savings on input above this are not savings the agent would have felt.
+pub const VISIBLE_CAP_TOKENS: u64 = 7_500;
+
+/// Report label for the capped saving figure.
+const VISIBLE_SAVING_LABEL: &str = "saved vs what the agent would see";
+
+/// Size at which `stats.jsonl` is rotated to `stats.jsonl.1`.
+pub const LEDGER_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
 /// Text is tokenized in line-aligned pieces of about this size, so a huge
 /// log never materializes one token vector for the whole thing.
 const TOKENIZE_CHUNK: usize = 1 << 20;
@@ -133,6 +145,12 @@ pub fn record_counts(
     let Some(path) = crate::paths::stats_file() else {
         return;
     };
+    append_record_at(&path, &rec);
+}
+
+/// Append one record to the ledger at `path`, rotating it first when it has
+/// reached `LEDGER_MAX_BYTES`. Failures are swallowed: stats never break a call.
+fn append_record_at(path: &std::path::Path, rec: &StatRecord) {
     // The ledger records every command line run under cartoon: private to
     // the user, like the raw-log archive (dir 0700, file 0600).
     if let Some(parent) = path.parent() {
@@ -142,21 +160,65 @@ pub fn record_counts(
         std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
         let _ = dir.create(parent);
     }
+    rotate_if_full(path);
     let mut opts = std::fs::OpenOptions::new();
     opts.create(true).append(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let Ok(mut f) = opts.open(&path) else {
+    let Ok(mut f) = opts.open(path) else {
         return;
     };
     // One write_all of record+newline: a single O_APPEND write of a small
     // record is atomic on POSIX, so concurrent cartoon processes can no
     // longer interleave two records into one corrupt line.
-    if let Ok(mut line) = serde_json::to_string(&rec) {
+    if let Ok(mut line) = serde_json::to_string(rec) {
         line.push('\n');
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
     }
+}
+
+fn rotated_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".1");
+    name.into()
+}
+
+/// Move a full ledger to `<ledger>.1`, replacing any older one. Keeps the
+/// ledger bounded at about twice the cap; `read_ledger` reads both files.
+fn rotate_if_full(path: &std::path::Path) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let Ok(opened) = file.metadata() else {
+        return;
+    };
+    if opened.len() >= LEDGER_MAX_BYTES {
+        rotate_if_unchanged(path, &opened);
+    }
+}
+
+/// Rotate only if `path` is still the file this process saw full. Another
+/// cartoon process may have rotated it first and started a fresh live file;
+/// renaming that over `.1` would destroy the history it just preserved.
+/// A few-instruction window remains between the identity check and the
+/// rename; closing it fully would need a lock file, which a best-effort
+/// stats ledger does not warrant.
+fn rotate_if_unchanged(path: &std::path::Path, opened: &std::fs::Metadata) {
+    if is_same_file(path, opened) {
+        let _ = std::fs::rename(path, rotated_path(path));
+    }
+}
+
+#[cfg(unix)]
+fn is_same_file(path: &std::path::Path, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).is_ok_and(|now| now.dev() == opened.dev() && now.ino() == opened.ino())
+}
+
+#[cfg(not(unix))]
+fn is_same_file(path: &std::path::Path, _opened: &std::fs::Metadata) -> bool {
+    std::fs::metadata(path).is_ok_and(|now| now.len() >= LEDGER_MAX_BYTES)
 }
 
 pub fn build_record(
@@ -198,8 +260,11 @@ pub fn parse_since(s: &str) -> Result<Duration> {
 pub fn aggregate(recs: &[StatRecord]) -> Value {
     let mut by_adapter: Map<String, Value> = Map::new();
     let mut total_saved = 0i64;
+    let mut saved_vs_visible = 0u64;
     for r in recs {
         total_saved += r.saved;
+        let seen = (r.tokens_in as u64).min(VISIBLE_CAP_TOKENS);
+        saved_vs_visible += seen.saturating_sub(r.tokens_out as u64);
         let entry = by_adapter
             .entry(r.adapter.clone())
             .or_insert_with(|| json!({"calls": 0, "saved": 0}));
@@ -209,6 +274,7 @@ pub fn aggregate(recs: &[StatRecord]) -> Value {
     json!({
         "calls": recs.len(),
         "tokens_saved": total_saved,
+        "saved_vs_visible": saved_vs_visible,
         "by_adapter": Value::Object(by_adapter),
     })
 }
@@ -238,12 +304,21 @@ pub fn parse_ledger(text: &str) -> (Vec<StatRecord>, usize) {
     (recs, malformed)
 }
 
-/// Whole ledger plus its malformed-line count (for `stats` and `doctor`).
+/// Whole ledger (rotated file first, then the live one) plus its
+/// malformed-line count (for `stats` and `doctor`).
 pub fn read_ledger() -> (Vec<StatRecord>, usize) {
     let Some(path) = crate::paths::stats_file() else {
         return (Vec::new(), 0);
     };
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    read_ledger_at(&path)
+}
+
+fn read_ledger_at(path: &std::path::Path) -> (Vec<StatRecord>, usize) {
+    let mut text = std::fs::read_to_string(rotated_path(path)).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&std::fs::read_to_string(path).unwrap_or_default());
     parse_ledger(&text)
 }
 
@@ -279,8 +354,29 @@ pub fn report(since: Option<&str>) -> Result<String> {
     Ok(render_report(&recs, malformed))
 }
 
+/// Show the capped figure under its plain-words label, in the same position
+/// (right after the raw `tokens_saved`). Rebuilds the map: with serde_json's
+/// `preserve_order`, `Map::remove` is a swap-remove and would move the label
+/// to the end.
+fn relabel_visible_saving(agg: Value) -> Value {
+    let Value::Object(map) = agg else {
+        return agg;
+    };
+    Value::Object(
+        map.into_iter()
+            .map(|(k, v)| {
+                if k == "saved_vs_visible" {
+                    (VISIBLE_SAVING_LABEL.to_string(), v)
+                } else {
+                    (k, v)
+                }
+            })
+            .collect(),
+    )
+}
+
 fn render_report(recs: &[StatRecord], malformed: usize) -> String {
-    let mut agg = aggregate(recs);
+    let mut agg = relabel_visible_saving(aggregate(recs));
     if malformed > 0 {
         agg["malformed_lines"] = json!(malformed);
     }
@@ -426,5 +522,116 @@ mod tests {
         assert_eq!(v["calls"], 2);
         assert_eq!(v["tokens_saved"], 90);
         assert_eq!(v["by_adapter"]["pytest"]["saved"], 90);
+    }
+
+    fn rec(tokens_in: usize, tokens_out: usize) -> StatRecord {
+        StatRecord {
+            tokens_in,
+            tokens_out,
+            saved: tokens_in as i64 - tokens_out as i64,
+            ..sample_record()
+        }
+    }
+
+    #[test]
+    fn visible_saving_caps_large_inputs() {
+        let recs = vec![rec(100_000, 500), rec(2_000, 1_000)];
+        let v = aggregate(&recs);
+        assert_eq!(v["saved_vs_visible"], 8_000);
+        assert_eq!(v["tokens_saved"], 100_000 - 500 + 1_000);
+    }
+
+    #[test]
+    fn visible_saving_never_counts_growth_as_negative() {
+        let v = aggregate(&[rec(10, 500), rec(2_000, 1_000)]);
+        assert_eq!(v["saved_vs_visible"], 1_000);
+    }
+
+    #[test]
+    fn report_prints_visible_saving_with_its_label() {
+        let out = render_report(&[rec(100_000, 500)], 0);
+        assert!(out.contains("saved vs what the agent would see"), "{out}");
+        assert!(out.contains("7000"), "{out}");
+    }
+
+    #[test]
+    fn ledger_rotates_at_cap_and_reads_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("stats.jsonl");
+        let old_line = serde_json::to_string(&rec(100, 10)).unwrap();
+        let mut big = String::new();
+        while (big.len() as u64) < LEDGER_MAX_BYTES {
+            big.push_str(&old_line);
+            big.push('\n');
+        }
+        std::fs::write(&live, &big).unwrap();
+        let old_count = big.lines().count();
+
+        append_record_at(&live, &rec(200, 20));
+
+        let rotated = dir.path().join("stats.jsonl.1");
+        assert!(rotated.exists());
+        assert_eq!(std::fs::read_to_string(&live).unwrap().lines().count(), 1);
+        let (recs, malformed) = read_ledger_at(&live);
+        assert_eq!(malformed, 0);
+        assert_eq!(recs.len(), old_count + 1);
+        assert_eq!(recs.last().unwrap().tokens_in, 200);
+    }
+
+    #[test]
+    fn visible_saving_is_listed_right_after_the_raw_figure() {
+        let out = render_report(&[rec(100_000, 500)], 0);
+        let lines: Vec<&str> = out.lines().collect();
+        let raw = lines
+            .iter()
+            .position(|l| l.contains("tokens_saved"))
+            .unwrap_or_else(|| panic!("no tokens_saved line:\n{out}"));
+        assert!(
+            lines[raw + 1].contains("saved vs what the agent would see"),
+            "label must directly follow tokens_saved:\n{out}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rotation_skips_when_another_process_already_rotated() {
+        // Process B saw the full ledger, but A rotated it and started a fresh
+        // live file before B's rename. B must not rotate A's fresh file over
+        // the history A just preserved in `.1`.
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("stats.jsonl");
+        let rotated = dir.path().join("stats.jsonl.1");
+        std::fs::write(&live, vec![b'x'; LEDGER_MAX_BYTES as usize]).unwrap();
+        let seen_by_b = std::fs::File::open(&live).unwrap().metadata().unwrap();
+
+        // A rotates and appends one record to a fresh live file.
+        std::fs::rename(&live, &rotated).unwrap();
+        append_record_at(&live, &rec(1, 1));
+
+        rotate_if_unchanged(&live, &seen_by_b);
+
+        assert!(std::fs::metadata(&rotated).unwrap().len() >= LEDGER_MAX_BYTES);
+        assert_eq!(std::fs::read_to_string(&live).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn ledger_below_cap_is_not_rotated() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("stats.jsonl");
+        append_record_at(&live, &rec(1, 1));
+        append_record_at(&live, &rec(2, 2));
+        assert!(!dir.path().join("stats.jsonl.1").exists());
+        assert_eq!(read_ledger_at(&live).0.len(), 2);
+    }
+
+    #[test]
+    fn rotation_replaces_an_older_rotated_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("stats.jsonl");
+        let rotated = dir.path().join("stats.jsonl.1");
+        std::fs::write(&rotated, "stale\n").unwrap();
+        std::fs::write(&live, vec![b'x'; LEDGER_MAX_BYTES as usize]).unwrap();
+        append_record_at(&live, &rec(1, 1));
+        assert!(std::fs::metadata(&rotated).unwrap().len() >= LEDGER_MAX_BYTES);
     }
 }

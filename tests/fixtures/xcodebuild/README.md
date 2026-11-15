@@ -1,0 +1,1 @@
+`compile-failure.log` and `failure-no-diagnostics.log` are hand-authored logs (not captured from a real run), modelled on xcodebuild build-failure output, for the build-diagnostics fallback tests in `src/adapters/xcodebuild_test.rs`. The `summary-*.json` files are xcresulttool summaries.

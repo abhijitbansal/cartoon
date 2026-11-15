@@ -6,47 +6,66 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// Which agent's config to install into, and in what mode.
+/// What `hook install|uninstall` was asked to do.
 #[derive(Clone, Copy)]
 pub(super) struct Target {
-    /// Copilot CLI (`~/.copilot/hooks` or `.github/hooks`).
+    /// `uninstall --copilot` only: legacy cleanup of the Copilot CLI hook
+    /// file written before 0.8.0 (the Copilot surface itself is gone).
     copilot: bool,
-    /// VS Code Copilot Chat. Shares Claude Code's `~/.claude/settings.json`
-    /// (the location VS Code documents for hooks); the flag only tailors the
-    /// confirmation message, since one entry already covers both.
-    vscode: bool,
     /// Project scope vs user/home scope.
     project: bool,
-    /// Bake `--deny-mode` into the installed command (block raw commands and
-    /// suggest the wrapped form instead of rewriting transparently).
-    deny: bool,
-    /// Also write the matching `cartoon instructions` directive (the
-    /// piped-command case the hook can't catch). Opt-in on install.
+    /// Also write the matching `cartoon instructions` directive (the pipes
+    /// the hook skips). Opt-in on install.
     instructions: bool,
 }
 
-pub(super) fn target(args: &[String]) -> Result<Target> {
+/// Flags removed in 0.8.0, named so the error can say why they fail.
+const REMOVED_FLAGS: &[&str] = &["--vscode", "--deny"];
+
+fn removed_flag_error(flag: &str, accepted: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{flag} was removed in 0.8.0 (the Copilot CLI / VS Code surfaces and deny mode are gone); accepted flags: {accepted}"
+    )
+}
+
+/// Parse `install` flags: `--project`, `--instructions`.
+pub(super) fn install_target(args: &[String]) -> Result<Target> {
+    const ACCEPTED: &str = "--project, --instructions";
     let mut t = Target {
         copilot: false,
-        vscode: false,
         project: false,
-        deny: false,
         instructions: false,
     };
     for a in &args[1..] {
         match a.as_str() {
-            "--copilot" => t.copilot = true,
-            "--vscode" => t.vscode = true,
             "--project" => t.project = true,
-            "--deny" => t.deny = true,
             "--instructions" => t.instructions = true,
-            other => bail!(
-                "unknown flag {other} (expected --copilot, --vscode, --project, --deny, or --instructions)"
-            ),
+            f if f == "--copilot" || REMOVED_FLAGS.contains(&f) => {
+                return Err(removed_flag_error(f, ACCEPTED))
+            }
+            other => bail!("unknown flag {other} (accepted flags: {ACCEPTED})"),
         }
     }
-    if t.copilot && t.vscode {
-        bail!("--copilot and --vscode are different config files; pick one");
+    Ok(t)
+}
+
+/// Parse `uninstall` flags: `--project`, `--instructions`, and `--copilot`
+/// (legacy cleanup only).
+pub(super) fn uninstall_target(args: &[String]) -> Result<Target> {
+    const ACCEPTED: &str = "--project, --copilot (legacy cleanup), --instructions";
+    let mut t = Target {
+        copilot: false,
+        project: false,
+        instructions: false,
+    };
+    for a in &args[1..] {
+        match a.as_str() {
+            "--project" => t.project = true,
+            "--copilot" => t.copilot = true,
+            "--instructions" => t.instructions = true,
+            f if REMOVED_FLAGS.contains(&f) => return Err(removed_flag_error(f, ACCEPTED)),
+            other => bail!("unknown flag {other} (accepted flags: {ACCEPTED})"),
+        }
     }
     Ok(t)
 }
@@ -59,23 +78,29 @@ pub(super) fn target(args: &[String]) -> Result<Target> {
 const HOOK_MARKER: &str = "cartoon hook rewrite";
 
 /// The shell command an installed hook entry runs. Fail-open if cartoon is
-/// not on PATH. `--deny-mode` switches transparent rewrite to deny.
-fn hook_command(deny: bool) -> String {
-    let mode = if deny { " --deny-mode" } else { "" };
-    format!("command -v cartoon >/dev/null 2>&1 && {HOOK_MARKER}{mode} || exit 0")
+/// not on PATH.
+fn hook_command() -> String {
+    format!("command -v cartoon >/dev/null 2>&1 && {HOOK_MARKER} || exit 0")
 }
 
 pub(super) fn install(t: Target) -> Result<i32> {
-    let code = if t.copilot {
-        install_copilot(t)?
-    } else {
-        install_claude(t)?
-    };
-    // The hook can't rewrite piped commands and VS Code Chat can only deny;
-    // the matching instruction closes that gap. Offer it (or write it with
-    // --instructions) after the hook itself is in place.
+    let code = install_claude(t)?;
+    // The hook rewrites only a trailing `| head|tail -n N` (and the Xcode
+    // beautifiers); the matching instruction covers every other pipe. Offer it (or write it with --instructions) after the hook
+    // itself is in place.
     offer_instructions(t)?;
     Ok(code)
+}
+
+/// Install (or refresh) the Claude Code hook entry and nothing else: no
+/// instruction-file offer, no prompt, safe to call unattended. Used by
+/// `cartoon setup`.
+pub fn install_claude_hook(project: bool) -> Result<i32> {
+    install_claude(Target {
+        copilot: false,
+        project,
+        instructions: false,
+    })
 }
 
 pub(super) fn uninstall(t: Target) -> Result<i32> {
@@ -87,7 +112,7 @@ pub(super) fn uninstall(t: Target) -> Result<i32> {
     // Symmetry: `--instructions` on uninstall also removes the directive we
     // would have written, so the pair leaves nothing behind.
     if t.instructions {
-        let path = crate::instructions::doc_path(instructions_doc(t));
+        let path = crate::instructions::doc_path(uninstall_doc(t));
         if crate::instructions::uninstall_doc(&path)? {
             println!("also removed the cartoon directive from {}", path.display());
         }
@@ -95,38 +120,23 @@ pub(super) fn uninstall(t: Target) -> Result<i32> {
     Ok(code)
 }
 
-/// Which instruction file matches a hook target: the Copilot surfaces read
-/// `.github/copilot-instructions.md`; everything else auto-detects between
-/// `CLAUDE.md` (preferred when present) and `AGENTS.md` (the cross-agent
-/// default that Claude Code also reads), via `instructions::default_agent_doc`.
-fn instructions_doc(t: Target) -> crate::instructions::Doc {
-    if t.copilot || t.vscode {
+/// Which instruction file `uninstall --instructions` cleans: the legacy
+/// Copilot cleanup (`--copilot`) targets the GitHub file an old install may
+/// have written; otherwise `CLAUDE.md` (preferred when present) or
+/// `AGENTS.md`, via `instructions::default_agent_doc`.
+fn uninstall_doc(t: Target) -> crate::instructions::Doc {
+    if t.copilot {
         crate::instructions::Doc::Copilot
     } else {
         crate::instructions::default_agent_doc()
     }
 }
 
-/// The `hook install` surface flag that reproduces this target, for the "fold
-/// it in next time" hint — so a Copilot/VS Code user isn't told to run the
-/// bare command (which installs the Claude hook). `--project` is orthogonal
-/// (it only moves the hook between user/project settings, not the instruction
-/// file the hint is about) and is deliberately omitted.
-fn surface_flag(t: Target) -> &'static str {
-    if t.copilot {
-        " --copilot"
-    } else if t.vscode {
-        " --vscode"
-    } else {
-        ""
-    }
-}
-
-/// After a hook install, surface the piped-command gap and the matching
+/// After a hook install, surface the pipes the hook skips and the matching
 /// directive. With `--instructions`, write it outright; otherwise print the
 /// hint and — only on an interactive terminal — offer to write it now.
 fn offer_instructions(t: Target) -> Result<()> {
-    let doc = instructions_doc(t);
+    let doc = crate::instructions::default_agent_doc();
     let path = crate::instructions::doc_path(doc);
     let present = crate::instructions::is_present(&path);
 
@@ -138,19 +148,16 @@ fn offer_instructions(t: Target) -> Result<()> {
         return Ok(());
     }
 
-    // Suggest surface-correct commands: the instruction-file flag so the
-    // directive lands in the file this hint names (bare resolves to AGENTS.md,
-    // never the Copilot file), and the hook surface flag so "fold it in next
-    // time" reinstalls this same hook.
+    // Suggest the instruction-file flag so the directive lands in the file
+    // this hint names.
     let instr_flag = crate::instructions::doc_flag(doc);
-    let hook_flag = surface_flag(t);
     println!(
-        "\nHeads-up: the hook can't rewrite *piped* commands — `pytest | tail`\n\
-         slips past it (and VS Code Copilot Chat can only deny, not rewrite). A\n\
-         matching instruction closes that gap by telling the agent to wrap and\n\
-         never pipe noisy commands:\n    \
+        "\nHeads-up: the hook only rewrites a trailing `| head -n N` or `| tail -n N`\n\
+         (and `| xcbeautify`, `| xcpretty`); any other pipe, such as `pytest | grep x`,\n\
+         skips cartoon. A matching instruction covers it by telling the agent\n\
+         to wrap and never pipe noisy commands:\n    \
          cartoon instructions install{instr_flag}        # writes the directive to {p}\n    \
-         (or fold it into install next time: cartoon hook install{hook_flag} --instructions)",
+         (or fold it into install next time: cartoon hook install --instructions)",
         p = path.display()
     );
     if present {
@@ -183,39 +190,91 @@ fn prompt_yes(question: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-// --- Claude Code / VS Code Copilot Chat (settings.json) ---
+// --- Claude Code (settings.json) ---
 
 fn claude_settings_path(project: bool) -> Result<PathBuf> {
     if project {
         Ok(PathBuf::from(".claude/settings.json"))
     } else {
-        dirs::home_dir()
-            .map(|h| h.join(".claude/settings.json"))
-            .ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))
+        user_settings_path().ok_or_else(|| anyhow::anyhow!("cannot resolve home directory"))
     }
 }
 
-/// One entry serves both Claude Code (`Bash`) and VS Code Copilot Chat
-/// (`run_in_terminal`), which read the same settings file; the surface is
-/// auto-detected at rewrite time.
-fn claude_entry(deny: bool) -> Value {
+/// The user-scope Claude Code settings file: `$CLAUDE_CONFIG_DIR/settings.json`
+/// when that is set, else `~/.claude/settings.json`, the same file the
+/// hook's rule reader loads. Shared by install, uninstall, status, doctor.
+pub fn user_settings_path() -> Option<PathBuf> {
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    user_settings_path_from(dirs::home_dir().as_deref(), config_dir.as_deref())
+}
+
+fn user_settings_path_from(home: Option<&Path>, config_dir: Option<&Path>) -> Option<PathBuf> {
+    config_dir
+        .map(Path::to_path_buf)
+        .or_else(|| home.map(|h| h.join(".claude")))
+        .map(|d| d.join("settings.json"))
+}
+
+/// The `PreToolUse` entry: Claude Code's `Bash` tool only.
+fn claude_entry() -> Value {
     json!({
-        "matcher": "Bash|run_in_terminal",
-        "hooks": [{ "type": "command", "command": hook_command(deny) }]
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": hook_command() }]
     })
+}
+
+/// A hook object whose command carries `HOOK_MARKER`.
+fn is_our_hook(hook: &Value) -> bool {
+    hook["command"]
+        .as_str()
+        .is_some_and(|c| c.contains(HOOK_MARKER))
 }
 
 fn is_our_entry(entry: &Value) -> bool {
     entry["hooks"]
         .as_array()
-        .map(|hs| {
+        .is_some_and(|hs| hs.iter().any(is_our_hook))
+}
+
+/// How many of our hook objects the whole `PreToolUse` array holds.
+fn our_hook_count(arr: &[Value]) -> usize {
+    arr.iter()
+        .filter_map(|e| e["hooks"].as_array())
+        .flatten()
+        .filter(|h| is_our_hook(h))
+        .count()
+}
+
+/// Is our entry exactly what `claude_entry()` writes today (matcher and
+/// command)? Other hooks in the same entry don't matter.
+fn entry_is_current(entry: &Value) -> bool {
+    let want = claude_entry();
+    entry["matcher"] == want["matcher"]
+        && entry["hooks"].as_array().is_some_and(|hs| {
+            hs.iter()
+                .any(|h| h["command"] == want["hooks"][0]["command"])
+        })
+}
+
+/// Does this entry of ours still wrap under 0.8? A pre-0.8 allow-mode entry
+/// (`Bash|run_in_terminal` matcher, plain command) does; a `--deny-mode`
+/// command (refused by `hook rewrite`) or a matcher that misses `Bash`
+/// does not.
+fn entry_still_wraps(entry: &Value) -> bool {
+    let matcher = entry["matcher"].as_str().unwrap_or("");
+    let matches_bash =
+        matches!(matcher, "" | "*" | ".*") || matcher.split('|').any(|m| m.trim() == "Bash");
+    matches_bash
+        && entry["hooks"].as_array().is_some_and(|hs| {
             hs.iter().any(|h| {
-                h["command"]
-                    .as_str()
-                    .is_some_and(|c| c.contains(HOOK_MARKER))
+                is_our_hook(h)
+                    && h["command"]
+                        .as_str()
+                        .is_some_and(|c| !c.contains("--deny-mode"))
             })
         })
-        .unwrap_or(false)
 }
 
 /// Outcome of inserting our entry into a settings `PreToolUse` array.
@@ -223,32 +282,68 @@ fn is_our_entry(entry: &Value) -> bool {
 enum Upsert {
     Added,
     Unchanged,
-    /// Our entry was present with a different command (other mode, or an
-    /// older shape) and has been replaced in place.
-    ModeUpdated,
+    /// Our hook was present in an older shape (pre-0.8 matcher,
+    /// `--deny-mode`) or more than once, and has been refreshed.
+    Refreshed,
 }
 
-fn upsert_claude_entry(arr: &mut Vec<Value>, deny: bool) -> Upsert {
-    let want = claude_entry(deny);
-    match arr.iter_mut().find(|e| is_our_entry(e)) {
-        None => {
-            arr.push(want);
-            Upsert::Added
+/// Insert or refresh our hook, touching nothing else. Only hook objects
+/// whose command carries `HOOK_MARKER` are ours: other hooks in the same
+/// entry keep their entry and matcher. Every entry of ours is refreshed or
+/// dropped, so exactly one of our hooks remains. An entry holding only our
+/// hook is rewritten in place (matcher `Bash`, current command, other keys
+/// kept); otherwise our hook moves into an entry of its own.
+fn upsert_claude_entry(arr: &mut Vec<Value>) -> Upsert {
+    let ours: Vec<&Value> = arr.iter().filter(|e| is_our_entry(e)).collect();
+    if ours.is_empty() {
+        arr.push(claude_entry());
+        return Upsert::Added;
+    }
+    if ours.len() == 1 && entry_is_current(ours[0]) && our_hook_count(arr) == 1 {
+        return Upsert::Unchanged;
+    }
+    let mut placed = false;
+    let mut out = Vec::with_capacity(arr.len() + 1);
+    for entry in arr.drain(..) {
+        if !is_our_entry(&entry) {
+            out.push(entry);
+            continue;
         }
-        Some(existing) if *existing == want => Upsert::Unchanged,
-        Some(existing) => {
-            *existing = want;
-            Upsert::ModeUpdated
+        let hooks = entry["hooks"].as_array().cloned().unwrap_or_default();
+        let (mine, others): (Vec<Value>, Vec<Value>) = hooks.into_iter().partition(is_our_hook);
+        if !others.is_empty() {
+            let mut kept = entry;
+            kept["hooks"] = Value::Array(others);
+            out.push(kept);
+        } else if !placed {
+            let mut hook = mine.into_iter().next().unwrap_or_else(|| json!({}));
+            hook["type"] = json!("command");
+            hook["command"] = json!(hook_command());
+            let mut refreshed = entry;
+            refreshed["matcher"] = json!("Bash");
+            refreshed["hooks"] = json!([hook]);
+            out.push(refreshed);
+            placed = true;
         }
     }
+    if !placed {
+        out.push(claude_entry());
+    }
+    *arr = out;
+    Upsert::Refreshed
 }
 
-fn mode_label(deny: bool) -> &'static str {
-    if deny {
-        "deny-with-suggestion mode"
-    } else {
-        "transparent rewrite mode"
+/// Remove every hook object of ours, and an entry left with no hooks.
+/// Other hooks keep their entry. True when anything was removed.
+fn remove_claude_hooks(arr: &mut Vec<Value>) -> bool {
+    let before = our_hook_count(arr);
+    for entry in arr.iter_mut() {
+        if let Some(hooks) = entry["hooks"].as_array_mut() {
+            hooks.retain(|h| !is_our_hook(h));
+        }
     }
+    arr.retain(|e| e["hooks"].as_array().is_none_or(|hs| !hs.is_empty()));
+    before > 0
 }
 
 fn install_claude(t: Target) -> Result<i32> {
@@ -271,42 +366,27 @@ fn install_claude(t: Target) -> Result<i32> {
     let arr = pre
         .as_array_mut()
         .ok_or_else(|| anyhow::anyhow!("settings `hooks.PreToolUse` is not an array"))?;
-    let outcome = upsert_claude_entry(arr, t.deny);
+    let outcome = upsert_claude_entry(arr);
     if outcome == Upsert::Unchanged {
         println!("cartoon hook already installed in {}", path.display());
         return Ok(0);
     }
     write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
-    if outcome == Upsert::ModeUpdated {
+    if outcome == Upsert::Refreshed {
         println!(
-            "cartoon hook entry updated in {} — now {}. Restart the agent (or run /hooks) to load it.",
-            path.display(),
-            mode_label(t.deny)
+            "cartoon hook entry refreshed in {} (now the Claude Code `Bash` matcher, transparent rewrite). Restart the agent (or run /hooks) to load it.",
+            path.display()
         );
         return Ok(0);
     }
-    if t.vscode {
-        println!(
-            "cartoon hook installed for VS Code Copilot Chat in {}\n\
-             VS Code reads this Claude-format file (hooks are Preview); the\n\
-             same entry also covers Claude Code. run_in_terminal calls are\n\
-             blocked and re-suggested wrapped (Chat has no rewrite field).\n\
-             Reload the window to load it. Remove with:\n\
-             cartoon hook uninstall --vscode{}",
-            path.display(),
-            if t.project { " --project" } else { "" }
-        );
-    } else {
-        println!(
-            "cartoon hook installed in {}\n\
-             Covers Claude Code and VS Code Copilot Chat (both read this file).\n\
-             Noisy dev commands (test/lint/build) now auto-wrap; matching calls\n\
-             are auto-approved, so the allowlist stays conservative by design.\n\
-             Restart the agent (or run /hooks) to load it.\n\
-             Disable a session: export CARTOON_NO_WRAP=1 · remove: cartoon hook uninstall",
-            path.display()
-        );
-    }
+    println!(
+        "cartoon hook installed in {}\n\
+         Noisy dev commands (test/lint/build) now auto-wrap; matching calls\n\
+         are auto-approved, so the allowlist stays conservative by design.\n\
+         Restart the agent (or run /hooks) to load it.\n\
+         Disable a session: export CARTOON_NO_WRAP=1 · remove: cartoon hook uninstall",
+        path.display()
+    );
     Ok(0)
 }
 
@@ -324,9 +404,7 @@ fn uninstall_claude(t: Target) -> Result<i32> {
         .and_then(|h| h.get_mut("PreToolUse"))
         .and_then(Value::as_array_mut)
     {
-        let before = arr.len();
-        arr.retain(|e| !is_our_entry(e));
-        removed = arr.len() != before;
+        removed = remove_claude_hooks(arr);
     }
     if removed {
         write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
@@ -337,11 +415,11 @@ fn uninstall_claude(t: Target) -> Result<i32> {
     Ok(0)
 }
 
-// --- Copilot CLI (.copilot/hooks or .github/hooks) ---
+// --- Legacy Copilot CLI hook file (cleanup only) ---
 
-/// Copilot CLI reads `~/.copilot/hooks/*.json` (personal) and
-/// `.github/hooks/*.json` (repo-shared; also picked up by the Copilot coding
-/// agent). We own a dedicated `cartoon.json` so install can write it whole.
+/// Where the Copilot CLI hook lived before 0.8.0: `~/.copilot/hooks` or
+/// `.github/hooks`. We own the dedicated `cartoon.json` name, and only ever
+/// remove it (`hook uninstall --copilot`).
 fn copilot_path(project: bool) -> Result<PathBuf> {
     if project {
         Ok(PathBuf::from(".github/hooks/cartoon.json"))
@@ -352,64 +430,15 @@ fn copilot_path(project: bool) -> Result<PathBuf> {
     }
 }
 
-fn copilot_config(deny: bool) -> Value {
-    json!({
-        "version": 1,
-        "hooks": {
-            // Copilot uses camelCase event names and a regex `matcher` on the
-            // tool name (honored v1.0.36+; harmless before).
-            "preToolUse": [{
-                "type": "command",
-                "command": hook_command(deny),
-                "matcher": "bash|shell",
-                "timeout": 10
-            }]
-        }
-    })
-}
-
-fn install_copilot(t: Target) -> Result<i32> {
-    let path = copilot_path(t.project)?;
-    // We own the dedicated `cartoon.json` name; refuse to clobber a file at
-    // that path we didn't write (uninstall is already this careful). Any read
-    // error other than "absent" is fatal: we can't tell whose file it is.
-    match read_settings(&path) {
-        Ok(None) => {}
-        Ok(Some(s)) if s.contains(HOOK_MARKER) => {}
-        Ok(Some(_)) => bail!(
-            "{} exists but is not a cartoon hook; move it aside first",
-            path.display()
-        ),
-        Err(e) => bail!("{e:#}; move it aside first"),
-    }
-    write_atomic(
-        &path,
-        &serde_json::to_string_pretty(&copilot_config(t.deny))?,
-    )?;
-    let mode = if t.deny {
-        "deny-with-suggestion mode (raw command blocked; agent re-runs wrapped)"
-    } else {
-        "transparent rewrite mode (requires Copilot CLI v1.0.24+)"
-    };
-    println!(
-        "cartoon Copilot hook installed in {}\n\
-         Using {mode}.\n\
-         If Copilot prompts for confirmation on every wrapped command\n\
-         (a known v1.0.24 bug), reinstall with: cartoon hook install --copilot --deny\n\
-         Disable a session: export CARTOON_NO_WRAP=1\n\
-         Remove with: cartoon hook uninstall --copilot{}",
-        path.display(),
-        if t.project { " --project" } else { "" }
-    );
-    Ok(0)
-}
-
 fn uninstall_copilot(t: Target) -> Result<i32> {
     let path = copilot_path(t.project)?;
     match std::fs::read(&path) {
         Ok(bytes) if String::from_utf8_lossy(&bytes).contains(HOOK_MARKER) => {
             std::fs::remove_file(&path)?;
-            println!("cartoon Copilot hook removed from {}", path.display());
+            println!(
+                "legacy cartoon Copilot hook removed from {}",
+                path.display()
+            );
         }
         Ok(_) => println!(
             "{} exists but is not a cartoon hook; left untouched",
@@ -456,55 +485,101 @@ fn is_our_copilot_file(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| s.contains(HOOK_MARKER))
 }
 
-/// Is our hook entry present in a Claude-format settings.json?
-fn claude_entry_present(path: &Path) -> bool {
-    std::fs::read_to_string(path)
+/// State of our hook entry in a Claude-format settings.json.
+fn claude_entry_state(path: &Path) -> HookState {
+    let entries = std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v["hooks"]["PreToolUse"].as_array().cloned())
-        .is_some_and(|arr| arr.iter().any(is_our_entry))
+        .unwrap_or_default();
+    let ours: Vec<&Value> = entries.iter().filter(|e| is_our_entry(e)).collect();
+    if ours.is_empty() {
+        HookState::Missing
+    } else if ours.len() == 1 && entry_is_current(ours[0]) && our_hook_count(&entries) == 1 {
+        HookState::Installed
+    } else if ours.iter().any(|e| entry_still_wraps(e)) {
+        HookState::Outdated
+    } else {
+        HookState::Stale
+    }
 }
 
 // --- status across every surface ---
 
-/// (path, surface, installed) for every hook location, user and project
-/// scope. Shared by `hook status` and `cartoon doctor`.
-pub fn status_rows() -> Vec<(String, &'static str, bool)> {
+/// What `hook status` and `cartoon doctor` know about one hook location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookState {
+    /// Our entry is present and current.
+    Installed,
+    /// Our hook is present in an older shape (the pre-0.8 matcher) or more
+    /// than once, and still wraps; `hook install` refreshes it.
+    Outdated,
+    /// Our hook is present only in a pre-0.8 `--deny-mode` shape (or under a
+    /// matcher that misses `Bash`), so it no longer wraps.
+    Stale,
+    Missing,
+    /// A Copilot CLI hook file from before 0.8.0: dead weight, never a
+    /// working hook.
+    Legacy,
+}
+
+impl HookState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Outdated => {
+                "installed, older entry (still wraps): re-run `cartoon hook install` to refresh it"
+            }
+            Self::Stale => {
+                "stale (pre-0.8 `--deny-mode` entry, no longer wraps): re-run `cartoon hook install`"
+            }
+            Self::Missing => "not installed",
+            Self::Legacy => {
+                "legacy, unused since 0.8.0: remove with `cartoon hook uninstall --copilot`"
+            }
+        }
+    }
+}
+
+pub struct HookRow {
+    pub path: String,
+    pub surface: &'static str,
+    pub state: HookState,
+}
+
+/// One row per hook location, user and project scope. Shared by
+/// `hook status` and `cartoon doctor`.
+pub fn status_rows() -> Vec<HookRow> {
     let mut rows = Vec::new();
     for project in [false, true] {
         if let Ok(path) = claude_settings_path(project) {
-            rows.push((
-                path.display().to_string(),
-                "Claude Code / VS Code Copilot Chat",
-                claude_entry_present(&path),
-            ));
+            rows.push(HookRow {
+                state: claude_entry_state(&path),
+                path: path.display().to_string(),
+                surface: "Claude Code",
+            });
         }
     }
+    // A Copilot CLI hook written before 0.8.0: listed only when present.
     for project in [false, true] {
         if let Ok(path) = copilot_path(project) {
-            rows.push((
-                path.display().to_string(),
-                "Copilot CLI",
-                is_our_copilot_file(&path),
-            ));
+            if is_our_copilot_file(&path) {
+                rows.push(HookRow {
+                    path: path.display().to_string(),
+                    surface: "Copilot CLI",
+                    state: HookState::Legacy,
+                });
+            }
         }
     }
     rows
 }
 
 pub(super) fn status() -> Result<i32> {
-    for (path, surface, installed) in status_rows() {
-        println!("{path} ({surface}): {}", yes_no(installed));
+    for row in status_rows() {
+        println!("{} ({}): {}", row.path, row.surface, row.state.label());
     }
     Ok(0)
-}
-
-fn yes_no(installed: bool) -> &'static str {
-    if installed {
-        "installed"
-    } else {
-        "not installed"
-    }
 }
 
 #[cfg(test)]
@@ -512,78 +587,172 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_switches_mode_when_entry_exists_with_other_mode() {
-        let mut arr = vec![claude_entry(false)];
-        assert_eq!(upsert_claude_entry(&mut arr, true), Upsert::ModeUpdated);
-        assert!(arr[0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("--deny-mode"));
-        assert_eq!(upsert_claude_entry(&mut arr, true), Upsert::Unchanged);
+    fn install_refreshes_an_older_entry_in_place() {
+        let old = json!({
+            "matcher": "Bash|run_in_terminal",
+            "hooks": [{ "type": "command", "command": "command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0" }]
+        });
+        let mut arr = vec![old];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        assert_eq!(arr, vec![claude_entry()]);
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Unchanged);
         assert_eq!(arr.len(), 1);
         let mut empty = Vec::new();
-        assert_eq!(upsert_claude_entry(&mut empty, false), Upsert::Added);
+        assert_eq!(upsert_claude_entry(&mut empty), Upsert::Added);
+    }
+
+    fn guard_hook() -> Value {
+        json!({ "type": "command", "command": "~/bin/my-guard.sh" })
+    }
+
+    fn old_cartoon_hook(cmd: &str) -> Value {
+        json!({ "type": "command", "command": format!("command -v cartoon >/dev/null 2>&1 && {cmd} || exit 0") })
+    }
+
+    #[test]
+    fn refresh_keeps_other_hooks_that_share_our_entry() {
+        // Final review I8: refreshing used to replace the whole entry and
+        // delete the user's guard hook.
+        let shared = json!({
+            "matcher": "Bash|run_in_terminal",
+            "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")]
+        });
+        let mut arr = vec![shared];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        assert_eq!(
+            arr,
+            vec![
+                json!({ "matcher": "Bash|run_in_terminal", "hooks": [guard_hook()] }),
+                claude_entry(),
+            ]
+        );
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Unchanged);
+    }
+
+    #[test]
+    fn refresh_changes_the_matcher_only_when_ours_is_the_sole_hook() {
+        let mut hook = old_cartoon_hook("cartoon hook rewrite --deny-mode");
+        hook["timeout"] = json!(5);
+        let mut arr = vec![
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+            json!({ "matcher": "Bash|run_in_terminal", "hooks": [hook] }),
+        ];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(
+            arr[0],
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] })
+        );
+        assert_eq!(arr[1]["matcher"], "Bash");
+        assert_eq!(arr[1]["hooks"][0]["command"], hook_command());
+        assert_eq!(arr[1]["hooks"][0]["timeout"], 5, "extra keys kept");
+    }
+
+    #[test]
+    fn refresh_leaves_exactly_one_cartoon_hook() {
+        // Final review M3: a second (`--deny-mode`) entry survived.
+        let mut arr = vec![
+            claude_entry(),
+            json!({ "matcher": "Bash", "hooks": [old_cartoon_hook("cartoon hook rewrite --deny-mode")] }),
+            json!({ "matcher": "Bash", "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")] }),
+        ];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Refreshed);
+        let doc = Value::Array(arr.clone()).to_string();
+        assert_eq!(doc.matches(HOOK_MARKER).count(), 1, "{doc}");
+        assert_eq!(arr[0], claude_entry());
+        assert_eq!(
+            arr[1],
+            json!({ "matcher": "Bash", "hooks": [guard_hook()] })
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_only_our_hook_objects() {
+        let mut arr = vec![
+            claude_entry(),
+            json!({ "matcher": "Bash", "hooks": [guard_hook(), old_cartoon_hook("cartoon hook rewrite")] }),
+            json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+        ];
+        assert!(remove_claude_hooks(&mut arr));
+        assert_eq!(
+            arr,
+            vec![
+                json!({ "matcher": "Bash", "hooks": [guard_hook()] }),
+                json!({ "matcher": "Edit", "hooks": [guard_hook()] }),
+            ]
+        );
+        assert!(!remove_claude_hooks(&mut arr));
+    }
+
+    #[test]
+    fn user_settings_path_honours_claude_config_dir() {
+        // Final review M12: the rule reader honours it; install did not.
+        let home = Path::new("/h");
+        assert_eq!(
+            user_settings_path_from(Some(home), None),
+            Some(PathBuf::from("/h/.claude/settings.json"))
+        );
+        assert_eq!(
+            user_settings_path_from(Some(home), Some(Path::new("/c"))),
+            Some(PathBuf::from("/c/settings.json"))
+        );
+        assert_eq!(user_settings_path_from(None, None), None);
     }
 
     #[test]
     fn our_entry_detection() {
-        assert!(is_our_entry(&claude_entry(false)));
-        assert!(is_our_entry(&claude_entry(true)));
+        assert!(is_our_entry(&claude_entry()));
         assert!(!is_our_entry(
             &json!({"matcher":"Bash","hooks":[{"type":"command","command":"other"}]})
         ));
     }
 
     #[test]
-    fn claude_entry_covers_both_shell_tools() {
-        assert_eq!(claude_entry(false)["matcher"], "Bash|run_in_terminal");
+    fn claude_entry_matches_bash_only_with_no_flags() {
+        let e = claude_entry();
+        assert_eq!(e["matcher"], "Bash");
+        let cmd = e["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.ends_with("cartoon hook rewrite || exit 0"), "{cmd}");
+    }
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
-    fn deny_flag_bakes_into_command() {
-        let c = claude_entry(true)["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(c.contains("cartoon hook rewrite --deny-mode"));
+    fn install_target_accepts_project_and_instructions_only() {
+        let t = install_target(&args(&["install", "--project", "--instructions"])).unwrap();
+        assert!(t.project && t.instructions && !t.copilot);
+        assert!(!install_target(&args(&["install"])).unwrap().instructions);
+        for removed in ["--copilot", "--vscode", "--deny"] {
+            let e = install_target(&args(&["install", removed])).err().unwrap();
+            let msg = e.to_string();
+            assert!(msg.contains("removed in 0.8.0"), "{removed}: {msg}");
+            assert!(
+                msg.contains("--project, --instructions"),
+                "{removed}: {msg}"
+            );
+        }
+        let e = install_target(&args(&["install", "--nope"])).err().unwrap();
+        assert!(e.to_string().contains("accepted flags"), "{e}");
     }
 
     #[test]
-    fn target_parses_instructions_flag() {
-        let t = target(&["install".into(), "--instructions".into()]).unwrap();
-        assert!(t.instructions);
-        // default off, and it composes with surface flags
-        assert!(!target(&["install".into()]).unwrap().instructions);
-        let c = target(&[
-            "install".into(),
-            "--copilot".into(),
-            "--instructions".into(),
-        ])
-        .unwrap();
-        assert!(c.copilot && c.instructions);
+    fn uninstall_target_keeps_copilot_as_legacy_cleanup() {
+        let t = uninstall_target(&args(&["uninstall", "--copilot", "--project"])).unwrap();
+        assert!(t.copilot && t.project);
+        for removed in ["--vscode", "--deny"] {
+            assert!(uninstall_target(&args(&["uninstall", removed])).is_err());
+        }
     }
 
     #[test]
-    fn instructions_doc_maps_copilot_surfaces_to_copilot_file() {
-        // Copilot + VS Code Copilot Chat → the GitHub file, deterministically.
-        let cop = target(&["install".into(), "--copilot".into()]).unwrap();
-        assert_eq!(instructions_doc(cop), crate::instructions::Doc::Copilot);
-        let vsc = target(&["install".into(), "--vscode".into()]).unwrap();
-        assert_eq!(instructions_doc(vsc), crate::instructions::Doc::Copilot);
-        // The non-Copilot default auto-detects CLAUDE.md vs AGENTS.md from the
+    fn uninstall_instructions_doc_follows_the_legacy_copilot_flag() {
+        let t = uninstall_target(&args(&["uninstall", "--copilot"])).unwrap();
+        assert_eq!(uninstall_doc(t), crate::instructions::Doc::Copilot);
+        // The default auto-detects CLAUDE.md vs AGENTS.md from the
         // filesystem; that resolution is unit-tested in
-        // `instructions::resolve_agent_doc` and exercised end-to-end in
-        // tests/e2e_instructions.rs.
-    }
-
-    #[test]
-    fn target_parses_vscode_and_rejects_combo() {
-        let v = target(&["install".into(), "--vscode".into()]).unwrap();
-        assert!(v.vscode && !v.copilot);
-        // --vscode and --copilot point at different files: reject the combo.
-        assert!(target(&["install".into(), "--vscode".into(), "--copilot".into()]).is_err());
-        // unknown flag still errors.
-        assert!(target(&["install".into(), "--nope".into()]).is_err());
+        // `instructions::resolve_agent_doc`.
     }
 
     #[test]
@@ -628,11 +797,39 @@ mod tests {
     }
 
     #[test]
-    fn copilot_config_uses_camelcase_event_and_version() {
-        let cfg = copilot_config(false);
-        assert_eq!(cfg["version"], 1);
-        let cmd = cfg["hooks"]["preToolUse"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains("cartoon hook rewrite"));
-        assert_eq!(cfg["hooks"]["preToolUse"][0]["matcher"], "bash|shell");
+    fn entry_state_distinguishes_current_stale_and_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert_eq!(claude_entry_state(&path), HookState::Missing);
+        let doc = |e: Value| json!({"hooks": {"PreToolUse": [e]}}).to_string();
+        std::fs::write(&path, doc(claude_entry())).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Installed);
+        let old_cmd = json!({
+            "matcher": "Bash",
+            "hooks": [{ "type": "command", "command": "command -v cartoon >/dev/null 2>&1 && cartoon hook rewrite --deny-mode || exit 0" }]
+        });
+        std::fs::write(&path, doc(old_cmd)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Stale);
+        // Final review M2: a 0.7 allow-mode entry still wraps under 0.8.
+        let old_matcher = json!({
+            "matcher": "Bash|run_in_terminal",
+            "hooks": [{ "type": "command", "command": hook_command() }]
+        });
+        std::fs::write(&path, doc(old_matcher)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Outdated);
+        assert!(HookState::Outdated.label().contains("still wraps"));
+        assert!(HookState::Stale.label().contains("no longer wraps"));
+        let other = json!({"matcher":"Bash","hooks":[{"type":"command","command":"other"}]});
+        std::fs::write(&path, doc(other)).unwrap();
+        assert_eq!(claude_entry_state(&path), HookState::Missing);
+    }
+
+    #[test]
+    fn extra_keys_on_a_current_entry_are_not_stale() {
+        let mut e = claude_entry();
+        e["hooks"][0]["timeout"] = json!(5);
+        assert!(entry_is_current(&e));
+        let mut arr = vec![e];
+        assert_eq!(upsert_claude_entry(&mut arr), Upsert::Unchanged);
     }
 }

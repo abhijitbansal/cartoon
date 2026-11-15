@@ -34,7 +34,7 @@ cartoon 0.6.0, Linux x86_64; 600 tests per suite, 20 failing. Tokens: o200k, std
 How to read it:
 
 - **Against verbose output cartoon saves 81–93%**; that is where the
-  "~70%" headline in the README comes from. It is not a universal number.
+  headline claim in the README comes from. It is not a universal number.
 - **Against the quiet baselines agents usually run** the result depends on
   the runner: `cargo test -q` still saves 72% (its quiet mode keeps every
   panic and backtrace), unittest 15%, while `pytest -q --tb=short` and plain

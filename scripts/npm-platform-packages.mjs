@@ -58,7 +58,7 @@ for (const [target, t] of Object.entries(TARGETS)) {
   );
   fs.writeFileSync(
     path.join(dir, "README.md"),
-    `# ${name}\n\nPrebuilt \`cartoon\` binary for **${t.key}**. Don't install this directly —\ninstall [cartoon-wrap](https://www.npmjs.com/package/cartoon-wrap), which\npicks the right platform package automatically:\n\n\`\`\`bash\nnpm install -g cartoon-wrap\n\`\`\`\n\ncartoon is a token-optimized TOON output wrapper for any CLI, built for\nLLM coding agents. Docs: https://github.com/abhijitbansal/cartoon\n\nMIT\n`
+    `# ${name}\n\nPrebuilt \`cartoon\` binary for **${t.key}**. Don't install this directly —\ninstall [cartoon-wrap](https://www.npmjs.com/package/cartoon-wrap), which\npicks the right platform package automatically:\n\n\`\`\`bash\nnpm install -g cartoon-wrap\n\`\`\`\n\ncartoon turns verbose dev-tool output into compact TOON for\nLLM coding agents. Docs: https://github.com/abhijitbansal/cartoon\n\nMIT\n`
   );
   made++;
 }

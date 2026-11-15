@@ -1,8 +1,8 @@
 [package]
 name = "cartoon"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
-description = "Token-optimized TOON output wrapper for any CLI"
+description = "Compact dev-tool output for coding agents"
 license = "MIT"
 repository = "https://github.com/abhijitbansal/cartoon"
 readme = "README.md"

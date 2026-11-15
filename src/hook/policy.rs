@@ -1,0 +1,1519 @@
+//! Per-tool argument policy for the hook: which arguments may ride along
+//! on an auto-approved rewrite. Every check here fails closed: a hit means
+//! no rewrite, and the command goes through the normal permission prompt.
+use super::{basename, env_assignment_name, RUNNERS};
+
+/// How one tool spells the options that load code, config or a toolchain
+/// from a path (or set properties that can), so `tool_args_ok` catches every
+/// spelling. Any hit ends auto-wrap eligibility: no rewrite, normal prompt.
+struct ArgPolicy {
+    tools: &'static [&'static str],
+    /// Long option names, normalized by `norm` (lowercase, no `-`/`_`):
+    /// `--name`, `--name=v`, `--Name`, `--na-me`.
+    long: &'static [&'static str],
+    /// Like `long`, but denied when the normalized name merely *contains* the
+    /// word (JS runners expose dotted config keys: `--coverage.customProviderModule`).
+    long_contains: &'static [&'static str],
+    /// Long names may be abbreviated to any unique prefix (argparse,
+    /// getopt_long, Ruby OptionParser): `--confi` denies like `--config-file`.
+    abbrev: bool,
+    /// Single-dash options are long options too (Go's flag package,
+    /// xcodebuild): `-exec` == `--exec`.
+    single_dash_long: bool,
+    /// Short options, case-sensitive, matched as a prefix of a single-dash
+    /// token: `-c`, `-cfile`, `-c=file`, `-Dprop=v`, `-Xswiftc`, `-gs`.
+    short: &'static [&'static str],
+    /// Short flags bundle (`-qpfoo` = `-q -p foo`): a one-letter `short`
+    /// anywhere in a single-dash cluster is a hit. Fails closed on a value
+    /// glued to another flag (`-kcopy`), which is acceptable.
+    bundled: bool,
+    /// Exact tokens that are fine although a `short` prefix matches them.
+    allow: &'static [&'static str],
+    /// (hit, value check): a hit on this `long`/`long_contains`/`short`
+    /// entry is fine when its value (glued or the next token) passes.
+    exempt: &'static [(&'static str, ValueCheck)],
+}
+
+/// Whether an otherwise denied option's value is inert.
+type ValueCheck = fn(&str) -> bool;
+
+impl ArgPolicy {
+    const NONE: ArgPolicy = ArgPolicy {
+        tools: &[],
+        long: &[],
+        long_contains: &[],
+        abbrev: false,
+        single_dash_long: false,
+        short: &[],
+        bundled: false,
+        allow: &[],
+        exempt: &[],
+    };
+}
+
+/// The JS runners (and the package-manager `test` scripts that usually run
+/// them) share one policy: jest's yargs and vitest's cac both accept camel
+/// and kebab case, and most config keys are also CLI flags.
+const JS_LONG: &[&str] = &[
+    "env",
+    "envfile",
+    "api",
+    "ui",
+    "open",
+    "prefix",
+    "registry",
+    "call",
+    "scriptshell",
+    "nodeoptions",
+];
+const JS_LONG_CONTAINS: &[&str] = &[
+    "config",
+    "setup",
+    "teardown",
+    "runner",
+    "transform",
+    "resolver",
+    "environment",
+    "reporter",
+    "processor",
+    "plugin",
+    "sequencer",
+    "provider",
+    "preset",
+    "project",
+    "root",
+    "dir",
+    "workspace",
+    "module",
+    "loader",
+    "preload",
+    "require",
+    "import",
+    "define",
+    "tsconfig",
+    "cwd",
+    "inspect",
+    "browser",
+    "prettier",
+    "haste",
+    "pool",
+];
+
+fn js_builtin_reporter(v: &str) -> bool {
+    [
+        "default",
+        "verbose",
+        "dot",
+        "json",
+        "junit",
+        "tap",
+        "tap-flat",
+        "basic",
+        "summary",
+        "tree",
+        "github-actions",
+        "hanging-process",
+    ]
+    .contains(&v)
+}
+
+fn js_builtin_pool(v: &str) -> bool {
+    ["threads", "forks", "vmThreads", "vmForks"].contains(&v)
+}
+
+fn pytest_disable_plugin(v: &str) -> bool {
+    v.starts_with("no:")
+}
+
+/// mvn `-D` properties common in a test loop that select or skip work and
+/// can't point the build at outside code.
+fn mvn_safe_property(v: &str) -> bool {
+    let name = v.split('=').next().unwrap_or(v);
+    [
+        "skipTests",
+        "maven.test.skip",
+        "skipITs",
+        "test",
+        "it.test",
+        "failIfNoTests",
+        "surefire.failIfNoSpecifiedTests",
+        "checkstyle.skip",
+        "spotbugs.skip",
+        "pmd.skip",
+        "jacoco.skip",
+        "enforcer.skip",
+        "spotless.check.skip",
+        "maven.javadoc.skip",
+        "gpg.skip",
+        "style.color",
+    ]
+    .contains(&name)
+}
+
+const ARG_POLICIES: &[ArgPolicy] = &[
+    ArgPolicy {
+        tools: &["go"],
+        single_dash_long: true,
+        long: &[
+            "exec",
+            "toolexec",
+            "overlay",
+            "modfile",
+            "vettool",
+            "ldflags",
+            "gcflags",
+            "asmflags",
+            "gccgoflags",
+            "compiler",
+            "pkgdir",
+        ],
+        short: &["C"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["cargo"],
+        long: &["config", "configfile", "toolconfigfile"],
+        short: &["Z", "C"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["make"],
+        long: &["file", "makefile", "directory", "includedir", "eval"],
+        abbrev: true,
+        short: &["f", "C", "I", "E"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["jest", "vitest", "npm", "pnpm", "yarn", "bun"],
+        long: JS_LONG,
+        long_contains: JS_LONG_CONTAINS,
+        short: &["c", "r", "C"],
+        bundled: true,
+        exempt: &[("reporter", js_builtin_reporter), ("pool", js_builtin_pool)],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["eslint"],
+        long: &[
+            "config",
+            "rulesdir",
+            "resolvepluginsrelativeto",
+            "plugin",
+            "parser",
+            "inspectconfig",
+            "mcp",
+        ],
+        short: &["c"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["mypy"],
+        long: &[
+            "configfile",
+            "pythonexecutable",
+            "installtypes",
+            "customtypesheddir",
+            "shadowfile",
+        ],
+        abbrev: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        // pytest disables argparse abbreviations (`--confcut` is an error).
+        tools: &["pytest"],
+        long: &[
+            "confcutdir",
+            "rootdir",
+            "overrideini",
+            "configfile",
+            "inifile",
+            "basetemp",
+            "pdbcls",
+            "covconfig",
+            "tx",
+            "rsyncdir",
+        ],
+        short: &["p", "c", "o"],
+        bundled: true,
+        exempt: &[("p", pytest_disable_plugin)],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["phpunit"],
+        long: &[
+            "bootstrap",
+            "configuration",
+            "includepath",
+            "extension",
+            "printer",
+            "loader",
+            "generateconfiguration",
+            "migrateconfiguration",
+        ],
+        abbrev: true,
+        short: &["c", "d"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["rspec"],
+        long: &["require", "options", "defaultpath"],
+        abbrev: true,
+        short: &["r", "I", "O"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["gradle", "gradlew"],
+        long: &[
+            "initscript",
+            "settingsfile",
+            "buildfile",
+            "systemprop",
+            "projectprop",
+            "gradleuserhome",
+            "includebuild",
+            "scan",
+        ],
+        short: &["I", "c", "b", "D", "P", "g"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["mvn", "mvnw"],
+        long: &[
+            "settings",
+            "globalsettings",
+            "toolchains",
+            "globaltoolchains",
+            "file",
+            "define",
+            "activateprofiles",
+        ],
+        short: &["s", "gs", "t", "gt", "f", "D", "P"],
+        allow: &["-fae", "-ff", "-fn"],
+        exempt: &[
+            ("D", mvn_safe_property),
+            ("define", mvn_safe_property),
+            ("P", mvn_safe_profile),
+            ("activateprofiles", mvn_safe_profile),
+        ],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["swift"],
+        long: &[
+            "toolchain",
+            "sdk",
+            "swiftsdk",
+            "swiftsdkspath",
+            "destination",
+            "disablesandbox",
+            "packagepath",
+            "scratchpath",
+            "buildpath",
+            "cachepath",
+            "configpath",
+            "securitypath",
+            "pkgconfigpath",
+            "netrcfile",
+        ],
+        short: &["X"],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["xcodebuild"],
+        single_dash_long: true,
+        long: &[
+            "xcconfig",
+            "toolchain",
+            "xctestrun",
+            "skipmacrovalidation",
+            "skippackagepluginvalidation",
+            // Package-trust policy (like `-skipPackageSignatureValidation`)
+            // and prebuilt test products (like `-xctestrun`).
+            "packagefingerprintpolicy",
+            "packagesigningentitypolicy",
+            "testproductspath",
+        ],
+        ..ArgPolicy::NONE
+    },
+    ArgPolicy {
+        tools: &["pre-commit"],
+        long: &["config"],
+        abbrev: true,
+        short: &["c"],
+        bundled: true,
+        ..ArgPolicy::NONE
+    },
+];
+
+/// `npm ci` installs exactly the lockfile; these flags only quiet it down or
+/// narrow it. Anything else (`--registry`, `--prefix`, ...) is not wrapped.
+const NPM_CI_FLAGS: &[&str] = &[
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    "--no-progress",
+    "--silent",
+    "--quiet",
+    "-q",
+    "--prefer-offline",
+    "--offline",
+    "--include=dev",
+    "--omit=dev",
+    "--omit=optional",
+    "--omit=peer",
+    "--loglevel=error",
+    "--loglevel=warn",
+    "--loglevel=silent",
+];
+
+/// dotnet/MSBuild switches (any of `-x`, `--x`, `/x`, value after `:` or
+/// `=`) that set properties, load loggers/adapters/settings, or change the
+/// package source or environment.
+const DOTNET_DENY: &[&str] = &[
+    "p",
+    "property",
+    "rp",
+    "restoreproperty",
+    "l",
+    "logger",
+    "dl",
+    "distributedlogger",
+    "s",
+    "settings",
+    "a",
+    "testadapterpath",
+    "e",
+    "environment",
+    "source",
+    "configfile",
+    "collect",
+];
+
+/// Xcode build settings safe to pass on the command line (`NAME=value`);
+/// any other upper-case setting (`CC=`, `SWIFT_EXEC=`, `OTHER_LDFLAGS=`)
+/// can swap the compiler or linker.
+const XCODE_SAFE_SETTINGS: &[&str] = &[
+    "CODE_SIGNING_ALLOWED",
+    "CODE_SIGNING_REQUIRED",
+    "CODE_SIGN_IDENTITY",
+    "ONLY_ACTIVE_ARCH",
+    "ENABLE_TESTABILITY",
+    "COMPILER_INDEX_STORE_ENABLE",
+    "SWIFT_TREAT_WARNINGS_AS_ERRORS",
+    "GCC_TREAT_WARNINGS_AS_ERRORS",
+];
+
+/// Gradle tasks (the last `:`-separated segment) that only compile, test or
+/// check. Any task starting with `test` or `compile`, or ending with `Test`,
+/// qualifies too, unless it is an instrumented device test
+/// (`android_device_test`). Gradle also expands abbreviations and matches
+/// case-insensitively, and only the typed word is judged: `tDUT` and
+/// `conAndTest` are not wrapped, but an all-lowercase abbreviation such as
+/// `deviceandTest` ends in `Test`, names no side-effect word, and wraps.
+/// That residual is pinned by a test.
+const GRADLE_TASKS: &[&str] = &[
+    "test",
+    "build",
+    "check",
+    "assemble",
+    "clean",
+    "lint",
+    "compileJava",
+    "compileKotlin",
+    "compileTestJava",
+    "compileTestKotlin",
+    "classes",
+    "testClasses",
+];
+
+/// Words that name an outbound side effect (publishing, deploying,
+/// installing onto a device, pushing an image, signing). A gradle task or
+/// make target containing one, in any case, is never wrapped.
+const SIDE_EFFECT_WORDS: &[&str] = &[
+    "publish",
+    "deploy",
+    "upload",
+    "install",
+    "release",
+    "push",
+    "connected",
+    "docker",
+    "sign",
+    "bintray",
+    "sonatype",
+    "notarize",
+    "ship",
+    "flight",
+    "distribute",
+    "submit",
+];
+
+/// gradle options whose next token is a value (a test filter, an excluded
+/// task, a console mode), not a task to run.
+const GRADLE_VALUE_FLAGS: &[&str] = &[
+    "--tests",
+    "-x",
+    "--exclude-task",
+    "--console",
+    "--warning-mode",
+    "--max-workers",
+];
+
+/// Maven lifecycle phases up to `verify`. `install` and `deploy` come after
+/// it and copy artifacts out of the project; `site` is not a test loop.
+const MVN_PHASES: &[&str] = &[
+    "clean",
+    "validate",
+    "compile",
+    "test-compile",
+    "test",
+    "package",
+    "verify",
+];
+
+/// mvn options whose next token is a value (a module list, a thread count,
+/// a profile, a `-D` property), not a phase. A spaced `-D name=v` property
+/// is still judged by `mvn_safe_property`. A profile value is judged by `mvn_safe_profile`
+/// instead (in the mvn `ArgPolicy`, every spelling): `-P ci` wraps,
+/// `-P release` does not.
+const MVN_VALUE_FLAGS: &[&str] = &[
+    "-P",
+    "--activate-profiles",
+    "-pl",
+    "--projects",
+    "-rf",
+    "--resume-from",
+    "-T",
+    "--threads",
+    "-D",
+    "--define",
+];
+
+/// make targets that build, test or check. `test-*`/`test_*` (and the same
+/// for `check`, `lint`, `build`) qualify too. Bare `make` runs the default
+/// goal and stays allowed (see the module doc).
+const MAKE_TARGETS: &[&str] = &[
+    "all",
+    "build",
+    "test",
+    "tests",
+    "check",
+    "lint",
+    "ci",
+    "unit",
+    "typecheck",
+    "verify",
+    "compile",
+    "debug",
+];
+const MAKE_TARGET_PREFIXES: &[&str] = &["test", "check", "lint", "build"];
+
+/// make options that may take a number as the next token (`-j 4`,
+/// `-l 2.5`). Any other bare word after a flag is a target.
+const MAKE_NUMERIC_FLAGS: &[&str] = &["-j", "--jobs", "-l", "--load-average", "--max-load"];
+
+/// Resolve the tool a noisy command actually runs (`npx jest` → jest,
+/// `python -m pytest` → pytest, uv's `-m pytest` → pytest) and check its
+/// arguments against `tool_args_ok`.
+pub(super) fn args_ok(base: &str, rest: &[&str]) -> bool {
+    if RUNNERS.contains(&base) {
+        return rest
+            .split_first()
+            .is_some_and(|(t, r)| tool_args_ok(basename(t), r));
+    }
+    let module = if base.starts_with("python") {
+        rest.get(1..) // past `-m`
+    } else if base == "-m" || base == "--module" {
+        Some(rest)
+    } else {
+        return tool_args_ok(base, rest);
+    };
+    module
+        .and_then(|m| m.split_first())
+        .is_some_and(|(m, r)| tool_args_ok(m, r))
+}
+
+/// Per-tool argument policy: the `ARG_POLICIES` deny-lists plus the
+/// allowlists that need more than a flag name.
+pub(super) fn tool_args_ok(tool: &str, args: &[&str]) -> bool {
+    let first_positional = || args.iter().copied().find(|a| !a.starts_with('-'));
+    let special = match tool {
+        // Only a toolchain chosen by the project, and only nextest's
+        // read-mostly sub-subcommands (`cargo nextest self update` replaces
+        // the binary).
+        "cargo" => {
+            !args.iter().any(|a| a.starts_with('+'))
+                && (args.first() != Some(&"nextest")
+                    || matches!(args.get(1), Some(&"run" | &"r" | &"list")))
+        }
+        // `make CC=/tmp/x` / `SHELL=` / `MAKE=` override the Makefile.
+        "make" => !args.iter().any(|a| env_assignment_name(a).is_some()),
+        // `install`, `autoupdate`, `try-repo <url>`, `gc`, ... are not a
+        // dev-loop run (try-repo runs hooks from an arbitrary repo).
+        "pre-commit" => first_positional().is_none_or(|p| p == "run"),
+        // Without `--ignore-scripts`, `npm ci` runs every dependency's
+        // install scripts: third-party code from the registry.
+        "npm" if args.first() == Some(&"ci") => {
+            args[1..].contains(&"--ignore-scripts")
+                && args[1..].iter().all(|a| NPM_CI_FLAGS.contains(a))
+        }
+        // A goal with `:` (`org.x:plugin:1.0:goal`) downloads and runs an
+        // arbitrary plugin; lifecycle phases have none.
+        "mvn" | "mvnw" => args.iter().all(|a| a.starts_with('-') || !a.contains(':')),
+        "dotnet" => dotnet_args_ok(args),
+        "xcodebuild" => xcodebuild_args_ok(args),
+        _ => true,
+    };
+    special
+        && targets_ok(tool, args)
+        && !watch_mode(tool, args)
+        && ARG_POLICIES
+            .iter()
+            .filter(|p| p.tools.contains(&tool))
+            .all(|p| p.allows(args))
+}
+
+/// Every gradle task, mvn phase or make target in `args` passes
+/// `side_effect_free_target`. The value of a listed option (`--tests X`,
+/// `-pl core`, `make -j 4`) is not a target; any other non-flag token is.
+fn targets_ok(tool: &str, args: &[&str]) -> bool {
+    let (value_flags, value_ok): (&[&str], fn(&str) -> bool) = match tool {
+        "gradle" | "gradlew" => (GRADLE_VALUE_FLAGS, |_| true),
+        "mvn" | "mvnw" => (MVN_VALUE_FLAGS, |_| true),
+        "make" => (MAKE_NUMERIC_FLAGS, |v| {
+            v.chars().all(|c| c.is_ascii_digit() || c == '.')
+        }),
+        _ => return true,
+    };
+    let mut rest = args.iter();
+    while let Some(a) = rest.next() {
+        if !a.starts_with('-') {
+            if !side_effect_free_target(tool, a) {
+                return false;
+            }
+            continue;
+        }
+        let takes_value = value_flags.contains(a)
+            && rest
+                .as_slice()
+                .first()
+                .is_some_and(|v| !v.starts_with('-') && value_ok(v));
+        if takes_value {
+            rest.next();
+        }
+    }
+    true
+}
+
+/// True when `target` (a gradle task path, mvn phase or make target) only
+/// builds, tests or checks, with no outbound side effect such as publishing,
+/// deploying, installing or pushing. Other tools have no target concept.
+pub(super) fn side_effect_free_target(tool: &str, target: &str) -> bool {
+    match tool {
+        "gradle" | "gradlew" => {
+            // `:app:testDebugUnitTest` is judged by its task, not its module.
+            let task = target.rsplit(':').next().unwrap_or(target);
+            // `ends_with("Test")` also covers `...UnitTest`.
+            let known = GRADLE_TASKS.contains(&task)
+                || task.starts_with("test")
+                || task.starts_with("compile")
+                || task.ends_with("Test");
+            known && !names_side_effect(task) && !android_device_test(task)
+        }
+        "mvn" | "mvnw" => MVN_PHASES.contains(&target),
+        "make" => {
+            let known = MAKE_TARGETS.contains(&target)
+                || MAKE_TARGET_PREFIXES.iter().any(|p| {
+                    target
+                        .strip_prefix(p)
+                        .is_some_and(|r| r.starts_with(['-', '_']))
+                });
+            known && !names_side_effect(target)
+        }
+        _ => true,
+    }
+}
+
+/// `t` contains a `SIDE_EFFECT_WORDS` entry, in any case.
+fn names_side_effect(t: &str) -> bool {
+    let lower = t.to_ascii_lowercase();
+    SIDE_EFFECT_WORDS.iter().any(|w| lower.contains(w))
+}
+
+/// A gradle task that runs instrumented tests, which install APKs onto a
+/// device or boot an emulator: `connectedAndroidTest`, `deviceAndroidTest`,
+/// Gradle Managed Device tasks (`pixel2api30DebugAndroidTest`). Matches the
+/// `AndroidTest` suffix in any case, and a camel-case abbreviation of it
+/// (`conAndTest`, `fooDebugATest`). The suffix, not a substring:
+/// `compileDebugAndroidTestKotlin` only compiles.
+fn android_device_test(task: &str) -> bool {
+    if task.to_ascii_lowercase().ends_with("androidtest") {
+        return true;
+    }
+    let Some(stem) = task.strip_suffix("Test") else {
+        return false;
+    };
+    stem.rfind(|c: char| c.is_ascii_uppercase())
+        .is_some_and(|at| "Android".starts_with(&stem[at..]))
+}
+
+/// mvn `-P` values: a profile whose name spells a side effect (`release`,
+/// `deploy`, `sign`, ...) can bind a publishing, signing or deploy plugin
+/// to `package` or `verify`.
+fn mvn_safe_profile(v: &str) -> bool {
+    !names_side_effect(v)
+}
+
+/// Watch and interactive modes never return (or open a browser), so they
+/// are not a one-shot dev-loop run.
+fn watch_mode(tool: &str, args: &[&str]) -> bool {
+    let has_long = |names: &[&str]| args.iter().any(|a| long_named(a, names));
+    // An all-letter short-flag cluster holding `c` (`-qt`, `-tq`, `-qw`).
+    let cluster_has = |c: char| {
+        args.iter().any(|a| {
+            a.strip_prefix('-').is_some_and(|b| {
+                !b.is_empty() && b.chars().all(|x| x.is_ascii_alphabetic()) && b.contains(c)
+            })
+        })
+    };
+    match tool {
+        "jest" => has_long(&["watch", "watchall"]),
+        // `npm|pnpm|yarn|bun test -- --watch` hands the flag to the runner;
+        // `-w`, `watch` and `dev` reach vitest's watch modes too. yarn, pnpm
+        // and bun forward script args without `--`, so `-w` counts anywhere
+        // for them; npm's own `-w` is `--workspace`, so only after `--`. A
+        // positional `watch`/`dev` is refused for all four (doubt).
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            let w_anywhere = tool != "npm";
+            has_long(&["watch", "watchall", "standalone"])
+                || args.iter().any(|a| matches!(*a, "watch" | "dev"))
+                || args
+                    .iter()
+                    .skip_while(|a| !w_anywhere && **a != "--")
+                    .any(|a| *a == "-w")
+        }
+        "vitest" => {
+            has_long(&["watch", "standalone"])
+                || args.iter().any(|a| matches!(*a, "-w" | "watch" | "dev"))
+        }
+        "ruff" => has_long(&["watch"]) || cluster_has('w'),
+        // tsc takes options with one or two dashes, in any case.
+        "tsc" => args.iter().any(|a| {
+            a.starts_with('-')
+                && matches!(
+                    a.trim_start_matches('-').to_ascii_lowercase().as_str(),
+                    "w" | "watch"
+                )
+        }),
+        "pytest" => has_long(&["looponfail"]) || args.iter().any(|a| pytest_loop_on_fail(a)),
+        // `--debug-jvm` waits for a debugger to attach; `-t` may be bundled.
+        "gradle" | "gradlew" => has_long(&["continuous", "debugjvm"]) || cluster_has('t'),
+        "cargo" => args.first() == Some(&"doc") && args.contains(&"--open"),
+        _ => false,
+    }
+}
+
+/// File-rewriting modes a token table can't express: jest/vitest's `-u`
+/// inside a short-flag cluster (`-ub`; yargs and cac both bundle), also when
+/// a package manager hands it on (`npm test -- -ub`). Fails closed on a
+/// value glued to another short flag that contains a `u` (`-tuser`).
+pub(super) fn mutating_mode(tool: &str, args: &[&str]) -> bool {
+    match tool {
+        "jest" | "vitest" | "npm" | "pnpm" | "yarn" | "bun" => args.iter().any(|a| {
+            a.strip_prefix('-').is_some_and(|b| {
+                !b.starts_with('-') && b.chars().all(|c| c.is_ascii_alphabetic()) && b.contains('u')
+            })
+        }),
+        _ => false,
+    }
+}
+
+/// `a` is `--name` or `--name=v` with a `norm`ed name in `names`, unless the
+/// value is `false` (`--watchAll=false` turns watching off).
+fn long_named(a: &str, names: &[&str]) -> bool {
+    let Some(body) = a.strip_prefix("--") else {
+        return false;
+    };
+    let (name, value) = match body.split_once('=') {
+        Some((n, v)) => (n, Some(v)),
+        None => (body, None),
+    };
+    names.contains(&norm(name).as_str()) && value != Some("false")
+}
+
+/// pytest-xdist's `-f` (loop on failure), alone or bundled after boolean
+/// short flags (`-xf`, `-vvf`). `-rf...` is not it: `-r` takes the rest of
+/// the cluster as report characters.
+fn pytest_loop_on_fail(a: &str) -> bool {
+    a.strip_prefix('-')
+        .filter(|b| !b.starts_with('-'))
+        .is_some_and(|b| {
+            b.trim_start_matches(['x', 'q', 'v', 's', 'l'])
+                .starts_with('f')
+        })
+}
+
+impl ArgPolicy {
+    /// True when no argument hits this policy (or every hit is exempt).
+    fn allows(&self, args: &[&str]) -> bool {
+        let mut i = 0;
+        while i < args.len() {
+            let a = args[i];
+            i += 1;
+            if self.allow.contains(&a) {
+                continue;
+            }
+            let Some((hit, glued)) = self.hit(a) else {
+                continue;
+            };
+            let Some((_, value_ok)) = self.exempt.iter().find(|(e, _)| *e == hit) else {
+                return false;
+            };
+            let value = match glued {
+                Some(v) => Some(v),
+                None => {
+                    i += 1;
+                    args.get(i - 1).copied()
+                }
+            };
+            if !value.is_some_and(value_ok) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The denied option `a` spells, with its glued value if any.
+    fn hit<'a>(&self, a: &'a str) -> Option<(&'static str, Option<&'a str>)> {
+        if let Some(body) = a.strip_prefix("--") {
+            return self.long_hit(body);
+        }
+        let body = a.strip_prefix('-').filter(|b| !b.is_empty())?;
+        if self.single_dash_long {
+            if let Some(h) = self.long_hit(body) {
+                return Some(h);
+            }
+        }
+        let glued = |r: &'a str| Some(r.strip_prefix('=').unwrap_or(r)).filter(|v| !v.is_empty());
+        if let Some(s) = self.short.iter().find(|s| body.starts_with(**s)) {
+            return Some((*s, glued(&body[s.len()..])));
+        }
+        if self.bundled {
+            for (at, c) in body.char_indices() {
+                if let Some(s) = self.short.iter().find(|s| s.len() == 1 && s.starts_with(c)) {
+                    return Some((*s, glued(&body[at + c.len_utf8()..])));
+                }
+            }
+        }
+        None
+    }
+
+    fn long_hit<'a>(&self, body: &'a str) -> Option<(&'static str, Option<&'a str>)> {
+        let (name, value) = match body.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (body, None),
+        };
+        let name = norm(name);
+        if name.is_empty() {
+            return None; // `--`: end of options
+        }
+        let long = self
+            .long
+            .iter()
+            .find(|d| **d == name || (self.abbrev && d.starts_with(&name)));
+        let contains = || self.long_contains.iter().find(|d| name.contains(**d));
+        long.or_else(contains).map(|d| (*d, value))
+    }
+}
+
+/// Option-name normalization: case and `-`/`_` don't distinguish options
+/// for any tool here (yargs/cac accept both camel and kebab case).
+pub(super) fn norm(name: &str) -> String {
+    name.chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// MSBuild targets (`-t:`/`-target:`/`--target`/`/t:`, case-insensitive)
+/// an auto-approved dotnet run may name. Any other target (`Publish`,
+/// `PublishContainer`, `Pack`, `Push`, `Deploy`, ...) can publish or run
+/// whatever the project binds to it.
+const DOTNET_TARGETS: &[&str] = &["build", "rebuild", "clean", "test", "vstest"];
+
+/// dotnet: no MSBuild response files (`@x.rsp`), no inline runsettings
+/// after `--`, none of `DOTNET_DENY` in any `-x`/`--x`/`/x` spelling, and
+/// only `DOTNET_TARGETS` as targets (`-t`, `-target`, and the
+/// `-getTargetResult` / `-getTargetItem` switches that also run them) (every one in a `;`/`,` list, every
+/// repeat of the switch; the value glued after `:`/`=` or the next token).
+fn dotnet_args_ok(args: &[&str]) -> bool {
+    let mut rest = args.iter();
+    while let Some(&a) = rest.next() {
+        if a == "--" || a.starts_with('@') {
+            return false;
+        }
+        let body = a
+            .strip_prefix("--")
+            .or_else(|| a.strip_prefix('-'))
+            .or_else(|| a.strip_prefix('/'));
+        let Some(body) = body else {
+            continue;
+        };
+        let (name, glued) = match body.find([':', '=']) {
+            Some(at) => (&body[..at], Some(&body[at + 1..])),
+            None => (body, None),
+        };
+        let name = norm(name);
+        if DOTNET_DENY.contains(&name.as_str()) {
+            return false;
+        }
+        // `-getTargetResult:X` / `-getTargetItem:X` build target X too.
+        if matches!(
+            name.as_str(),
+            "t" | "target" | "gettargetresult" | "gettargetitem"
+        ) {
+            let Some(value) = glued.or_else(|| rest.next().copied()) else {
+                return false;
+            };
+            if !dotnet_targets_ok(value) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Every target in a `;`/`,` list is in `DOTNET_TARGETS`; an empty list or
+/// entry is refused.
+fn dotnet_targets_ok(value: &str) -> bool {
+    value.split([';', ',']).all(|t| {
+        let t = t.trim().to_ascii_lowercase();
+        DOTNET_TARGETS.contains(&t.as_str())
+    })
+}
+
+/// xcodebuild actions an auto-approved run may name; naming none is a
+/// build. Every other bare word (`archive`, `install`, `installsrc`,
+/// `analyze`, `docbuild`, anything unknown) means no rewrite.
+const XCODE_ACTIONS: &[&str] = &[
+    "test",
+    "test-without-building",
+    "build",
+    "build-for-testing",
+    "clean",
+];
+
+/// The other xcodebuild actions. As a flag's value (`-only-testing
+/// archive`) it is refused too: whether xcodebuild reads it as the value or
+/// as the action was not measured for every flag.
+const XCODE_OTHER_ACTIONS: &[&str] = &["archive", "install", "installsrc", "analyze", "docbuild"];
+
+/// xcodebuild option prefixes (lowercased) that reach the Apple Developer
+/// account: creating certificates and profiles, registering devices,
+/// authenticating with an App Store Connect key.
+const XCODE_ACCOUNT_FLAGS: &[&str] = &["allowprovisioning", "authenticationkey"];
+
+/// xcodebuild switches (no value) an auto-approved build or test may carry.
+/// Any other flag that is not a known value flag means no rewrite, so a mode
+/// Xcode adds later is refused until it is reviewed.
+const XCODE_BOOL_FLAGS: &[&str] = &[
+    "-verbose",
+    "-quiet",
+    "-parallelizeTargets",
+    "-alltargets",
+    "-hideShellScriptEnvironment",
+    "-showBuildTimingSummary",
+    "-skipUnavailableActions",
+    "-retry-tests-on-failure",
+    "-run-tests-until-failure",
+    "-disableAutomaticPackageResolution",
+    "-onlyUsePackageVersionsFromResolvedFile",
+    "-skipPackageUpdates",
+    "-disablePackageRepositoryCache",
+];
+
+/// xcodebuild as an allowlist: only the actions in `XCODE_ACTIONS`, only
+/// the switches in `XCODE_BOOL_FLAGS`, the adapter's value flags (whose value
+/// is never judged as an action: `-archivePath test`, `-enableCodeCoverage
+/// YES`) and `-only-testing:X`/`-skip-testing:X`. On top of that, belt and
+/// braces: no mode switch (`-exportArchive`, `-importLocalizations`,
+/// `-downloadPlatform`, ...), no developer-account flag, no `-Name=value`
+/// user-default override (the spelling of
+/// `-IDESkipMacroFingerprintValidation=YES`), no value that is itself a flag
+/// (`-only-testing -exportArchive`; xcodebuild refuses that too) or another
+/// action (`-only-testing archive`), only `XCODE_SAFE_SETTINGS` build
+/// settings, and only simulator or macOS destinations.
+fn xcodebuild_args_ok(args: &[&str]) -> bool {
+    use crate::adapters::xcodebuild::{is_mode_switch, VALUE_FLAGS};
+    let mut rest = args.iter();
+    while let Some(&a) = rest.next() {
+        if let Some(body) = a.strip_prefix('-') {
+            let lower = body.to_ascii_lowercase();
+            if is_mode_switch(a)
+                || body.contains('=')
+                || XCODE_ACCOUNT_FLAGS.iter().any(|p| lower.starts_with(p))
+            {
+                return false;
+            }
+            if VALUE_FLAGS.contains(&a) {
+                let Some(&value) = rest.next() else {
+                    return false;
+                };
+                if value.starts_with('-')
+                    || XCODE_OTHER_ACTIONS.contains(&value)
+                    || (a == "-destination" && !xcode_destination_ok(value))
+                {
+                    return false;
+                }
+                continue;
+            }
+            let known = XCODE_BOOL_FLAGS.contains(&a)
+                || ["-only-testing:", "-skip-testing:"]
+                    .iter()
+                    .any(|p| a.strip_prefix(p).is_some_and(|id| !id.is_empty()));
+            if !known {
+                return false;
+            }
+            continue;
+        }
+        let ok = if a.contains('=') {
+            xcode_setting_ok(a)
+        } else {
+            XCODE_ACTIONS.contains(&a)
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// A `NAME=value` (or `NAME[sdk=*]=value`) argument to xcodebuild is a
+/// build setting; only `XCODE_SAFE_SETTINGS` may be set. Any other
+/// (`CC=`, `SWIFT_EXEC=`, `OTHER_LDFLAGS=`) can swap the compiler or linker.
+fn xcode_setting_ok(a: &str) -> bool {
+    let Some((lhs, _)) = a.split_once('=') else {
+        return false;
+    };
+    let name = lhs.split('[').next().unwrap_or(lhs);
+    XCODE_SAFE_SETTINGS.contains(&name)
+}
+
+/// A `-destination` value that runs on this Mac: a simulator
+/// (`platform=iOS Simulator,...`, `generic/platform=iOS Simulator`) or
+/// macOS. A physical device (`platform=iOS,id=...`, `generic/platform=iOS`)
+/// or a destination without a platform (`id=<udid>`, which may be a device)
+/// is refused, as `connectedAndroidTest` is for gradle.
+/// Every `platform` key must pass (`platform=macOS,platform=iOS` is refused).
+fn xcode_destination_ok(value: &str) -> bool {
+    let platforms: Vec<&str> = value
+        .split(',')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            let k = k.trim();
+            (k == "platform" || k == "generic/platform").then_some(v.trim())
+        })
+        .collect();
+    !platforms.is_empty()
+        && platforms
+            .iter()
+            .all(|p| p.ends_with(" Simulator") || matches!(*p, "macOS" | "OS X"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::wrap_command_in;
+    use std::path::Path;
+
+    fn wrap(cmd: &str) -> Option<String> {
+        let root = Path::new("/proj");
+        wrap_command_in(cmd, &[], Some(root)).map(|(w, _)| w)
+    }
+
+    #[test]
+    fn gradle_publish_not_wrapped() {
+        for c in [
+            "gradle build publish",
+            "gradle test publishToMavenCentral",
+            "./gradlew assembleRelease uploadArchives",
+            "gradle test --continuous",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_test_tasks_wrapped() {
+        for c in [
+            "gradle test",
+            "gradle clean build",
+            "./gradlew testDebugUnitTest",
+            "gradle :app:test check",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_module_paths_judged_by_last_segment() {
+        assert!(wrap("gradle :lib:testDebugUnitTest").is_some());
+        assert!(wrap("gradle :app:publish").is_none());
+        assert!(wrap("gradle connectedAndroidTest").is_none());
+    }
+
+    #[test]
+    fn gradle_continuous_and_side_effect_words_rejected() {
+        for c in [
+            "gradle test -t",
+            "gradle test --continuous",
+            "gradle installDebug",
+            "gradle testReleaseSigning",
+            "gradle dockerBuildImage",
+            "gradle assembleDebug",
+            "gradle compileJava jibDockerBuild",
+            "gradle test --tests Foo publish",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_flag_values_are_not_tasks() {
+        for c in [
+            "./gradlew test --tests 'com.x.FooTest'",
+            "./gradlew test --tests '*Foo*'",
+            "gradle test -x lint",
+            "gradle test --console plain --warning-mode all",
+            "gradle test --continue",
+            "./gradlew build --offline",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn mvn_deploy_install_not_wrapped() {
+        for c in ["mvn test deploy", "mvn package install", "mvnw verify site"] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        assert!(wrap("mvn clean verify").is_some());
+    }
+
+    #[test]
+    fn mvn_lifecycle_phases_and_module_selection_wrapped() {
+        for c in [
+            "mvn validate",
+            "mvn clean test-compile",
+            "mvn test -pl core -am",
+            "mvn verify -T 4",
+            "mvn test -P ci",
+            "mvn test -Pci",
+            "mvn test --activate-profiles ci",
+            "mvn package -B -ntp -fae",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in ["mvn site", "mvn release:prepare"] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn mvn_side_effect_profiles_not_wrapped() {
+        // A profile can bind a publishing, signing or deploy plugin to
+        // `package` or `verify`; its name is judged in every spelling.
+        for c in [
+            "mvn package -P release",
+            "mvn test -P deploy",
+            "mvn test -Prelease",
+            "mvn test -P=release",
+            "mvn test --activate-profiles release",
+            "mvn test --activate-profiles=release",
+            "mvn test --activateProfiles=sign-artifacts",
+            "mvn test -P ci,release",
+            "mvn verify -P Publish",
+            "mvn test -P",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "mvn test -P ci",
+            "mvn test -Pci",
+            "mvn test --activate-profiles=ci,fast",
+            "mvn test -pl core -P ci",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_android_device_tests_not_wrapped() {
+        // Instrumented tests install APKs onto a device or boot an emulator,
+        // like `connectedAndroidTest`, whatever the task's prefix.
+        for c in [
+            "gradle deviceAndroidTest",
+            "./gradlew pixel2api30DebugAndroidTest",
+            "gradle :app:allDevicesDebugAndroidTest",
+            "gradle deviceandroidtest",
+            "gradle deviceANDROIDTest",
+            "gradle conAndTest",
+            "gradle pixel2api30DebugATest",
+            "gradle deviceAnTest",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "gradle compileDebugAndroidTestKotlin",
+            "gradle testDebugUnitTest",
+            "gradle integrationTest",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn gradle_abbreviations_are_a_known_residual() {
+        // Gradle expands abbreviations (`tDUT`, `conAndTest`) and also
+        // matches case-insensitively. The name rule only sees the typed
+        // word: a camel-case abbreviation of `...AndroidTest` is refused,
+        // but an all-lowercase one that gradle may still resolve
+        // (`deviceandTest` for `deviceAndroidTest`) ends in `Test`, spells
+        // no side-effect word, and wraps. Pinned here so a fix shows up as
+        // a test change.
+        assert!(wrap("gradle deviceandTest").is_some());
+        assert!(wrap("gradle tDUT").is_none());
+    }
+
+    #[test]
+    fn make_side_effect_targets_not_wrapped() {
+        for c in [
+            "make deploy",
+            "make release",
+            "make install",
+            "make test && make deploy",
+            "make push-image",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "make",
+            "make test",
+            "make -j4 build",
+            "make lint check",
+            "make test-unit",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn make_flags_unchanged_and_prefixed_targets_still_screened() {
+        for c in [
+            "make -j 4 test",
+            "make -k -j8 check",
+            "make -s -n build",
+            "make --jobs 2 ci",
+            "make check_all typecheck",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in [
+            "make build-and-deploy",
+            "make test-publish",
+            "make testing",
+            "make docs",
+            "make -j deploy",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn side_effect_segment_poisons_the_whole_command() {
+        assert!(wrap("pytest && make deploy").is_none());
+        assert!(wrap("pytest tests && gradle publish").is_none());
+    }
+
+    #[test]
+    fn npm_ci_needs_ignore_scripts() {
+        assert!(wrap("npm ci").is_none());
+        assert!(wrap("npm ci --ignore-scripts").is_some());
+        assert!(wrap("npm ci --no-audit --ignore-scripts --no-fund").is_some());
+        assert!(wrap("npm ci --no-audit --no-fund").is_none());
+    }
+
+    #[test]
+    fn watch_modes_not_wrapped() {
+        for c in [
+            "jest --watchAll",
+            "jest --watch",
+            "vitest --watch",
+            "vitest watch",
+            "tsc -w",
+            "npm test -- --watch",
+            "pytest -f",
+            "cargo doc --open",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn watch_mode_spellings_not_wrapped() {
+        for c in [
+            "npx jest --watch-all",
+            "vitest -w",
+            "vitest dev",
+            "npx vitest --watch=true",
+            "tsc --watch",
+            "tsc -b --watch",
+            "tsc -watch",
+            "tsc -W",
+            "tsc --WATCH",
+            "pnpm test -- --watchAll",
+            "yarn test --watch",
+            "npm run test -- --watch",
+            "bun test --watch",
+            "pytest --looponfail",
+            "pytest -xf",
+            "python -m pytest -vf",
+            "cargo doc --no-deps --open",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_mode_switches_never_wrapped() {
+        // A stray `test` word (or a flag value spelled `test`) once made any
+        // xcodebuild mode look like a test run (final review C1).
+        for c in [
+            "xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/export test",
+            "xcodebuild test -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist ExportOptions.plist",
+            "xcodebuild -exportNotarizedApp -archivePath a test",
+            "xcodebuild -importLocalizations -localizationPath x test",
+            "xcodebuild -exportLocalizations -localizationPath x test",
+            "xcodebuild -downloadAllPlatforms test",
+            "xcodebuild -downloadPlatform iOS test",
+            "xcodebuild -runFirstLaunch test",
+            "xcodebuild -resolvePackageDependencies test",
+            "xcodebuild -create-xcframework -output x test",
+            "xcodebuild -exportSomethingNew test",
+            "xcodebuild test archive -scheme A",
+            "xcodebuild build install -scheme A",
+            "xcodebuild build installsrc -scheme A",
+            "xcodebuild build analyze -scheme A",
+            "xcodebuild build docbuild -scheme A",
+            "xcodebuild archive -scheme App -archivePath test",
+            "xcodebuild -exportArchive -archivePath App.xcarchive -exportPath test -exportOptionsPlist E.plist",
+            "xcrun xcodebuild -exportArchive -archivePath a -exportPath b test",
+            "xcodebuild test -scheme A whatever",
+            // A value flag must not swallow a mode switch or an action.
+            "xcodebuild test -scheme A -only-testing -exportArchive -archivePath a -exportOptionsPlist E.plist",
+            "xcodebuild test -scheme A -only-testing archive",
+            "xcodebuild test -scheme A -skip-testing -exportArchive",
+            "xcodebuild test -scheme A -deleteComponent metaltoolchain",
+            "xcodebuild test -scheme A -convert-project x",
+            "xcodebuild test -scheme A -prepareDeviceSupport",
+            "xcodebuild test -scheme A -someFutureMode",
+            "xcodebuild test -scheme A -skipPackageSignatureValidation",
+            "xcodebuild test -scheme A -defaultPackageRegistryURL https://r.example",
+            "xcodebuild test -scheme A -only-testing:",
+            "xcodebuild test -scheme",
+            // Residuals round: package-trust policy and prebuilt products.
+            "xcodebuild test -scheme A -packageFingerprintPolicy warn",
+            "xcodebuild test -scheme A -packageSigningEntityPolicy warn",
+            "xcodebuild test-without-building -scheme A -testProductsPath build/x.xctestproducts",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_flag_values_are_not_actions() {
+        for c in [
+            "xcodebuild test -scheme A -enableCodeCoverage YES",
+            "xcodebuild test -scheme A -test-iterations 3",
+            "xcodebuild test -scheme A -parallel-testing-enabled NO",
+            "xcodebuild test -scheme A -only-testing:ATests/Foo",
+            "xcodebuild test -scheme A -skip-testing ATests/Slow",
+            "xcodebuild test -scheme A -destination 'platform=macOS'",
+            "xcodebuild build -project A.xcodeproj -configuration Debug -sdk iphonesimulator",
+            "xcodebuild test -workspace A.xcworkspace -scheme A -derivedDataPath build/dd",
+            "xcodebuild test -scheme A -resultBundlePath build/r.xcresult -testPlan Unit",
+            "xcodebuild build -scheme A -arch arm64 -jobs 8",
+            "xcodebuild test-without-building -scheme A",
+            "xcodebuild build-for-testing -scheme A",
+            "xcodebuild clean build -scheme A",
+            "xcodebuild -scheme A clean test",
+            "xcodebuild test -scheme A -quiet -retry-tests-on-failure -test-iterations 2",
+            "xcodebuild test -scheme A -resultBundleVersion 3 -skipPackageUpdates",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn xcodebuild_account_and_validation_overrides_not_wrapped() {
+        // Final review I2: developer-portal access, `-Name=value` user
+        // defaults (the spelling of `-skipMacroValidation`), physical devices.
+        for c in [
+            "xcodebuild build -allowProvisioningUpdates -scheme A",
+            "xcodebuild build -allowProvisioningDeviceRegistration -scheme A",
+            "xcodebuild test -scheme A -authenticationKeyPath key.p8 -authenticationKeyID X -authenticationKeyIssuerID Y",
+            "xcodebuild build -IDESkipMacroFingerprintValidation=YES -scheme A",
+            "xcodebuild build -IDESkipPackagePluginFingerprintValidatation=YES -scheme A",
+            "xcodebuild build -resultBundlePath=r -scheme A",
+            "xcodebuild test -scheme A -destination 'platform=iOS,id=00008110-000A1B2C3D4E'",
+            "xcodebuild test -scheme A -destination 'platform=iOS'",
+            "xcodebuild test -scheme A -destination 'platform=watchOS,name=My Watch'",
+            "xcodebuild test -scheme A -destination 'platform=tvOS,id=x'",
+            "xcodebuild test -scheme A -destination 'platform=visionOS,id=x'",
+            "xcodebuild build -scheme A -destination 'generic/platform=iOS'",
+            "xcodebuild test -scheme A -destination 'id=00008110-000A1B2C3D4E'",
+            "xcodebuild test -scheme A -destination 'platform=iOS Simulator,name=iPhone 15' -destination 'platform=iOS,id=x'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,platform=iOS,id=x'",
+            "xcodebuild build -scheme A lowercase=x",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "xcodebuild test -scheme A -destination 'platform=iOS Simulator,name=iPhone 15'",
+            "xcodebuild test -scheme A -destination 'platform=watchOS Simulator,name=Apple Watch'",
+            "xcodebuild build -scheme A -destination 'generic/platform=iOS Simulator'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,arch=arm64'",
+            "xcodebuild test -scheme A -destination 'platform=macOS,variant=Mac Catalyst'",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn dotnet_targets_other_than_build_and_test_not_wrapped() {
+        // Final review I1: `-t:PublishContainer` pushes an image, `-t:Push`
+        // and `-t:Deploy` run whatever the project binds to them.
+        for c in [
+            "dotnet build -t:PublishContainer",
+            "dotnet build -t:Deploy",
+            "dotnet build -restore -t:Push",
+            "dotnet build -c Release -t:Pack",
+            "dotnet test -t:Publish",
+            "dotnet build -target:Publish",
+            "dotnet build --target Publish",
+            "dotnet build --target:Publish",
+            "dotnet build /t:Publish",
+            "dotnet build -T:publish",
+            "dotnet build '-t:Build;Publish'",
+            "dotnet build -t:Build,Publish",
+            "dotnet build -t:Build -t:Publish",
+            "dotnet build -t:",
+            "dotnet build --target",
+            "dotnet build -t:Build=x",
+            // Residuals round: these run the named targets too.
+            "dotnet build -getTargetResult:Publish",
+            "dotnet build --getTargetResult:Publish",
+            "dotnet build -getTargetResult Publish",
+            "dotnet build -getTargetItem:Pack",
+            "dotnet build --getTargetItem Pack",
+            "dotnet build -getTargetResult:Build;Publish",
+            "dotnet build -getTargetResult",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in [
+            "dotnet build -t:Build",
+            "dotnet build -t:rebuild",
+            "dotnet build '-t:Clean;Build'",
+            "dotnet test -t:VSTest",
+            "dotnet build --target Test",
+            // `/t:` forms are refused earlier as absolute paths.
+            "dotnet build -t:Clean,Build",
+            "dotnet build -getTargetResult:Build",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn more_watch_and_hang_modes_not_wrapped() {
+        // Final review M6: each of these never returns or waits for a
+        // debugger, so the run buffers until the Bash timeout.
+        for c in [
+            "ruff check --watch",
+            "ruff check -w",
+            "ruff check -qw",
+            "npm test -- -w",
+            "npm test -- --watch",
+            "pnpm test -- watch",
+            "yarn test -- dev",
+            "bun test -- -w",
+            "gradle test --debug-jvm",
+            "gradle test -tq",
+            "gradle test -qt",
+            "vitest --standalone",
+            "npm test -- --standalone",
+            // Residuals round: yarn/pnpm/bun forward script args directly.
+            "yarn test watch",
+            "yarn test -w",
+            "yarn test dev",
+            "pnpm test watch",
+            "pnpm test dev",
+            "npm test watch",
+            "npm test dev",
+            "bun test -w",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+        for c in ["ruff check -q", "gradle test -q", "npm test -- --ci"] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+
+    #[test]
+    fn more_side_effect_words_not_wrapped() {
+        // Final review M7: names that ship a build without a listed word.
+        for c in [
+            "gradle testflight",
+            "gradle compileAndShip",
+            "gradle testDistribute",
+            "make submit-build",
+            "make test-flight",
+        ] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn mvn_spaced_define_is_a_value_not_a_phase() {
+        // Final review M24: `-D test=Foo` is a property, judged by its name.
+        for c in [
+            "mvn test -D test=Foo",
+            "mvn test --define skipITs",
+            "mvn verify -D skipTests",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+        for c in ["mvn test -D evil=x", "mvn test --define maven.repo.local=x"] {
+            assert!(wrap(c).is_none(), "{c}");
+        }
+    }
+
+    #[test]
+    fn one_shot_runs_with_watch_like_flags_still_wrapped() {
+        for c in [
+            "yarn test --watchAll=false",
+            "jest --watchman",
+            "jest -w 4",
+            "pytest -rfE",
+            "pytest --lf",
+            "vitest run",
+            "tsc --noEmit",
+            "cargo doc --no-deps",
+        ] {
+            assert!(wrap(c).is_some(), "{c}");
+        }
+    }
+}

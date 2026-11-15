@@ -1,9 +1,9 @@
 # cartoon
 
-**Token-optimized output for any CLI.** Prefix `cartoon` onto a command and
+**Compact dev-tool output for coding agents.** Prefix `cartoon` onto a command and
 its output becomes [TOON](https://github.com/toon-format/toon) — a compact
 structured format built for LLM agents. Same exit codes, same behavior,
-~70% fewer tokens on verbose test runs (an estimate; see the
+far fewer tokens on verbose test runs (see the
 [benchmark](https://github.com/abhijitbansal/cartoon/blob/main/benchmarks/README.md)).
 
 This package installs the `cartoon` binary (prebuilt per platform via the
@@ -23,12 +23,12 @@ cartoon pytest                 # asymmetric test report in TOON
 cartoon npx jest src/          # same for jest
 cartoon python -m unittest     # same for unittest
 cartoon aws ec2 describe-instances --output json   # any JSON CLI → TOON
-cartoon --fast pytest          # opt-in: parallel via pytest-xdist
+cartoon swift test             # failing tests, not the build log
 cartoon stats --since 7d       # how many tokens you've saved
 cartoon logs --last --stdout   # full raw output of the newest run
 ```
 
-Failing test run, before (~4800 tokens) vs after (~300 tokens):
+Failing test run, after cartoon:
 
 ```
 runner: pytest
@@ -57,7 +57,7 @@ failures[2]{id,loc,msg}:
 
 Teach Claude Code, Codex, Cursor & co. to wrap commands automatically —
 skills and a Claude Code plugin ship in the repo:
-[github.com/abhijitbansal/cartoon](https://github.com/abhijitbansal/cartoon#for-agents-claude-code-codex-copilot-cursor-).
+[docs/agents.md](https://github.com/abhijitbansal/cartoon/blob/main/docs/agents.md).
 
 Full documentation: [github.com/abhijitbansal/cartoon](https://github.com/abhijitbansal/cartoon)
 

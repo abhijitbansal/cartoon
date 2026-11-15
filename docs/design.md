@@ -1,9 +1,10 @@
-# cartoon — TOON wrapper for any CLI (design)
+# cartoon — TOON wrapper for CLI output (design)
 
 > **Frozen v0.1 draft (2026-06-09).** Several items below marked out of scope
 > have since shipped (compression ladder, auto-wrap hook, ingest, learn,
 > raw-log archive, adapters for 19 tools, doctor, content sniffing, `--junit`,
-> `--max-tokens`). The living documents are the roadmap,
+> `--max-tokens`). 0.8.0 later cut the Copilot/VS Code hooks, shell functions
+> and a few flags (see `docs/usage.md`, upgrading from 0.7). The living documents are the roadmap,
 > `superpowers/specs/2026-06-11-cartoon-v02-roadmap.md`, and the 2026-09-05
 > review plan, `superpowers/specs/2026-09-05-cartoon-repo-review-improvement-plan.md`.
 
@@ -20,7 +21,7 @@ needs. TOON (Token-Oriented Object Notation) is a compact structured format
 designed for LLM consumption.
 
 Goal: a plug-and-play wrapper any developer can install (`pip`/`uv`/`npm`/
-`cargo`) and prefix onto any CLI command so its output becomes token-optimized
+`cargo`) and prefix onto a CLI command so its output becomes token-optimized
 TOON where possible — first-class support for test runners.
 
 ## Decisions (made during brainstorming)
@@ -51,7 +52,7 @@ cartoon [flags] <cmd> [args...]
    ├─ toon       TOON encoder written in Rust, verified against the official
    │             TOON conformance fixtures
    ├─ heuristic  optional lossy pass: ANSI strip, blank-line collapse,
-   │             repeated-line dedupe. OFF by default; --heuristic or config
+   │             repeated-line dedupe. OFF by default; opt in via --compress or config
    └─ stats      token estimate before/after (BPE, o200k by default),
                  append JSONL record per call
 ```
@@ -136,7 +137,7 @@ traces:
 
 ```
 cartoon <cmd> [args...]          # wrap mode
-cartoon --heuristic <cmd> ...    # enable lossy fallback for this call
+cartoon --compress=aggressive <cmd> ...   # enable lossy fallback for this call
 cartoon --raw <cmd> ...          # full bypass / escape hatch
 cartoon stats [--since 7d]       # savings report
 cartoon adapters                 # list adapters and what they match
@@ -209,7 +210,7 @@ not billing truth; good enough for the running score.
 ## Out of scope for v1 (explicit)
 
 - Declarative/plugin adapter DSL (Approach B) — revisit on demand.
-- Shell shims/aliases and pipe mode (`cmd | cartoon`) — possible later;
+- Shell aliases and pipe mode (`cmd | cartoon`) — possible later;
   prefix mode covers the agent use case.
 - Streaming TOON for long-running commands — v1 buffers, emits at exit.
 - TOON decode / round-tripping. Encoder only.
@@ -220,6 +221,6 @@ not billing truth; good enough for the running score.
 - `uv tool install cartoon` / `npm i -g cartoon-wrap` / `cargo install
   cartoon` all yield a working `cartoon` binary.
 - `cartoon pytest` on a real failing suite: agent can fix the failure from
-  TOON output alone, with ≥70% token reduction vs raw output on typical suites.
+  TOON output alone, with a measurable token reduction vs raw output (see benchmarks/README.md).
 - `cartoon <unknown-cli>` never corrupts output or exit codes.
 - `cartoon stats` shows cumulative savings.

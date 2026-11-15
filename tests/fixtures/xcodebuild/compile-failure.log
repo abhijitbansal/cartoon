@@ -1,0 +1,16 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -scheme App -destination "platform=iOS Simulator,name=iPhone 16"
+
+CompileSwift normal arm64 /Users/dev/proj/App/View.swift (in target 'App' from project 'App')
+/Users/dev/proj/App/View.swift:12:5: error: cannot find 'Foo' in scope
+    Foo()
+    ^~~
+/Users/dev/proj/App/Model.swift:8:9: warning: variable 'x' was never mutated; consider changing to 'let' constant
+    var x = 1
+    ~~~ ^
+
+** TEST FAILED **
+
+The following build commands failed:
+	SwiftCompile normal arm64 /Users/dev/proj/App/View.swift (in target 'App' from project 'App')
+(1 failure)

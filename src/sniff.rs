@@ -10,16 +10,17 @@ use std::sync::OnceLock;
 /// Rendered TOON plus a mode label for stats, or None when nothing matched.
 pub fn sniff(stdout: &str, stderr: &str, exit: i32) -> Option<(String, &'static str)> {
     if let Some(r) = sniff_xctest(stdout, stderr) {
-        return Some((
-            crate::adapters::report::render(&r, 20, None),
-            "sniff-xctest",
-        ));
+        return Some((crate::adapters::report::render(&r, 20), "sniff-xctest"));
     }
     if let Some(v) = sniff_xcodebuild(stdout, stderr, exit) {
-        return Some((crate::toon::encode(&v), "sniff-xcodebuild"));
+        // Same indent and cwd-relative paths as the adapter reports.
+        return Some((
+            crate::adapters::report::render_value(&v),
+            "sniff-xcodebuild",
+        ));
     }
     if let Some(r) = sniff_junit(stdout) {
-        return Some((crate::adapters::report::render(&r, 20, None), "sniff-junit"));
+        return Some((crate::adapters::report::render(&r, 20), "sniff-junit"));
     }
     None
 }

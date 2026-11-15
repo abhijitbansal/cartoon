@@ -1,0 +1,5 @@
+Building for debugging...
+/Users/dev/proj/Sources/Lib/A.swift:3:1: error: cannot find 'bar' in scope
+bar()
+^~~
+error: fatalError
