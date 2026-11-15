@@ -41,6 +41,15 @@ pub fn merge(reports: Vec<TestReport>) -> Option<TestReport> {
 /// id/loc/msg rows plus budgeted traces. Paths under the working directory
 /// are printed relative to it.
 pub fn render(report: &TestReport, trace_lines: usize) -> String {
+    let opts = crate::toon::Options {
+        list_scalar_arrays: true,
+        ..Default::default()
+    };
+    crate::toon::encode_with(&report_value(report, trace_lines), &opts)
+}
+
+/// The report as a JSON value, before TOON encoding.
+fn report_value(report: &TestReport, trace_lines: usize) -> Value {
     let rel = |s: &str| relativize(s);
     let mut root = Map::new();
     root.insert("runner".into(), json!(report.runner));
@@ -82,7 +91,7 @@ pub fn render(report: &TestReport, trace_lines: usize) -> String {
             root.insert("traces".into(), Value::Object(traces));
         }
     }
-    crate::toon::encode(&Value::Object(root))
+    Value::Object(root)
 }
 
 /// One unique `traces` key per failure, so two failures sharing an id (the
@@ -335,6 +344,62 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn traces_render_one_line_each() {
+        let out = render(&sample(), 20);
+        let t = out.split("traces:").nth(1).unwrap();
+        assert!(
+            t.lines()
+                .filter(|l| l.trim_start().starts_with("- "))
+                .count()
+                >= 2,
+            "got:\n{out}"
+        );
+        assert!(!t.contains("\",expected"), "got:\n{out}");
+        assert!(t.contains("[2]:\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn trace_lines_quote_only_where_toon_requires() {
+        let mut r = sample();
+        r.failures[0].trace = vec![
+            "plain line no punctuation".into(),
+            "key: value".into(),
+            " leading space".into(),
+        ];
+        let out = render(&r, 20);
+        assert!(out.contains("- plain line no punctuation\n"), "got:\n{out}");
+        assert!(out.contains("- \"key: value\""), "got:\n{out}");
+        assert!(out.contains("- \" leading space\""), "got:\n{out}");
+    }
+
+    /// List form costs a few tokens per line (hyphen + indent vs a comma).
+    /// Measured on the pytest fixtures with traces: +8..12% of the whole
+    /// report (o200k). The bound keeps that cost from drifting upward.
+    #[test]
+    fn trace_rendering_cost_stays_flat() {
+        let tok = |s: &str| crate::stats::estimate_tokens(s, "o200k");
+        let mut checked = 0;
+        for name in ["mixed", "captured-output", "collect-syntax-error"] {
+            let xml = std::fs::read_to_string(format!("tests/fixtures/pytest/{name}.xml")).unwrap();
+            let report = crate::adapters::pytest::parse_junit(&xml).unwrap();
+            assert!(
+                report.failures.iter().any(|f| f.trace.len() >= 2),
+                "{name}: fixture needs a multi-line trace"
+            );
+            let new = render(&report, 20);
+            let old = crate::toon::encode(&report_value(&report, 20));
+            assert!(
+                tok(&new) * 100 <= tok(&old) * 115,
+                "{name}: new {} vs old {} tokens\nnew:\n{new}\nold:\n{old}",
+                tok(&new),
+                tok(&old)
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 3);
     }
 
     #[test]

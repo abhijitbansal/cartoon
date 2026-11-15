@@ -21,11 +21,13 @@ fn stderr(a: &assert_cmd::assert::Assert) -> String {
     String::from_utf8(a.get_output().stderr.clone()).unwrap()
 }
 
-/// A failing test with a traceback long enough that the TOON report beats
-/// pytest's own output (so the adapter report, not passthrough, is shown).
+/// A failing test whose pytest output (traceback plus captured stdout) is
+/// long enough that the TOON report beats it (so the adapter report, not
+/// passthrough, is shown). Traces render one line each, which costs a few
+/// tokens more than the old inline row, so the raw output needs the noise.
 fn failing(name: &str) -> String {
     format!(
-        "def test_{name}():\n    data = {{'k%d' % i: i for i in range(40)}}\n    assert data == {{'k0': 1}}, '{name} is broken'\n\n"
+        "def test_{name}():\n    for i in range(30):\n        print('progress step', i)\n    data = {{'k%d' % i: i for i in range(40)}}\n    assert data == {{'k0': 1}}, '{name} is broken'\n\n"
     )
 }
 

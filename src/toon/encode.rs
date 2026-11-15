@@ -10,11 +10,14 @@
 use serde_json::{Map, Value};
 
 /// Encoder options (spec §13). `delimiter` is the document delimiter:
-/// `,` (default), `\t` or `|`.
+/// `,` (default), `\t` or `|`. `list_scalar_arrays` emits a primitive array
+/// as a `key[N]:` list with one `- item` per line instead of one inline row
+/// (still valid TOON); used for tracebacks, where each line is a sentence.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub delimiter: char,
     pub indent_size: usize,
+    pub list_scalar_arrays: bool,
 }
 
 impl Default for Options {
@@ -22,6 +25,7 @@ impl Default for Options {
         Options {
             delimiter: ',',
             indent_size: 2,
+            list_scalar_arrays: false,
         }
     }
 }
@@ -153,7 +157,7 @@ impl Encoder {
     fn array_lines(&mut self, key: Option<&str>, arr: &[Value], depth: usize, tabular_ok: bool) {
         let prefix = format!("{}{}", self.indent(depth), key.unwrap_or(""));
         let bracket = self.bracket(arr.len(), false);
-        if arr.iter().all(is_scalar) {
+        if arr.iter().all(is_scalar) && !self.opts.list_scalar_arrays {
             let d = self.opts.delimiter;
             let row = arr
                 .iter()
@@ -485,6 +489,17 @@ mod tests {
     #[test]
     fn primitive_array_inline() {
         assert_eq!(encode(&json!({"tags": ["a", "b", "c"]})), "tags[3]: a,b,c");
+    }
+
+    #[test]
+    fn list_scalar_arrays_option_emits_one_item_per_line() {
+        let opts = Options {
+            list_scalar_arrays: true,
+            ..Options::default()
+        };
+        let v = json!({"k": ["a", "b: c"]});
+        assert_eq!(encode_with(&v, &opts), "k[2]:\n  - a\n  - \"b: c\"");
+        assert_eq!(encode(&v), "k[2]: a,\"b: c\"");
     }
 
     #[test]
