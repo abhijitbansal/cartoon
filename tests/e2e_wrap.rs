@@ -379,6 +379,33 @@ printf 'a\nb\nc\n'"#;
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "c\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tail -n 1") && stderr.contains("raw_log"),
+        "{stderr}"
+    );
+}
+
+/// A cut that drops nothing leaves the passthrough silent and
+/// byte-identical: no disclosure line making the output longer.
+#[cfg(unix)]
+#[test]
+fn dropped_tail_that_cuts_nothing_stays_byte_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = r#"for a in "$@"; do case "$a" in --junit-xml=*) f="${a#--junit-xml=}";; esac; done
+printf '<testsuite name="s" tests="1" failures="0" errors="0" skipped="0" time="0.1"><testcase classname="t" name="test_a" time="0.1"/></testsuite>' > "$f"
+printf 'a\nb\nc\n'"#;
+    let path = stub_tool(tmp.path(), "pytest", script);
+    let out = cartoon()
+        .env("XDG_STATE_HOME", tmp.path().join("state"))
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .env("PATH", path)
+        .args(["-c", "pytest | tail -40"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\nc\n");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
 }
 
 /// Final review I15: `cartoon -c '<adapter cmd> 2>&1 | tail -N'` ran through

@@ -622,10 +622,15 @@ fn run_with_adapter(
     let run_id = archived.as_ref().map(|r| r.id.as_str());
     // A dropped `| head -n N` / `| tail -n N`: applied in process whenever no
     // report replaces it, so the output never outgrows what was asked for.
-    let cut = opts
+    // Only when the raw log keeps every line (or archiving is off), and only
+    // when the cut drops a line: otherwise the passthrough stays silent and
+    // byte-identical.
+    let parsed_cut = opts
         .dropped_filter
         .as_deref()
         .and_then(|f| LineCut::parse(f).map(|c| (c, f)));
+    let cut_is_noop = parsed_cut.is_some_and(|(c, _)| !run.line_cut_removes(c, opts.merge_streams));
+    let cut = parsed_cut.filter(|_| !cut_is_noop && lossy_allowed(archived.as_ref(), cfg));
     let raw_log = archived.as_ref().map(|r| r.dir.as_path());
     match adapter.parse(captured, &prepared) {
         Ok(ParseOutcome {
@@ -742,12 +747,13 @@ fn run_with_adapter(
             if let Some(native) = adapter.native_stdout(argv, captured) {
                 let native_n = counter.exact(&native);
                 if !pays_for_itself(out_n + err_n, native_n + in_err) {
-                    let native = match cut {
-                        Some((c, f)) => {
+                    let native = match parsed_cut.filter(|_| lossy_allowed(archived.as_ref(), cfg))
+                    {
+                        Some((c, f)) if c.apply(native.as_bytes()).len() < native.len() => {
                             disclose_cut(f, raw_log);
                             String::from_utf8_lossy(c.apply(native.as_bytes())).into_owned()
                         }
-                        None => native,
+                        _ => native,
                     };
                     let native_n = counter.count(&native);
                     let em = Emission {
@@ -802,7 +808,7 @@ fn run_with_adapter(
                 disclose_cut(f, raw_log);
                 run.with_line_cut(c, opts.merge_streams)
             });
-            if cut.is_none() {
+            if cut.is_none() && !cut_is_noop {
                 if let Some(f) = &opts.dropped_filter {
                     eprintln!(
                         "cartoon: pipe filter `{f}` was not applied (adapter output unparsed)"
@@ -824,7 +830,7 @@ fn run_with_adapter(
 }
 
 /// Say on stderr that a dropped filter's line cut was applied in process,
-/// and where the full output is.
+/// and where the full output is (no raw log only when archiving is off).
 fn disclose_cut(filter: &str, raw_log: Option<&Path>) {
     match raw_log {
         Some(dir) => eprintln!(

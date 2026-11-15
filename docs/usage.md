@@ -496,7 +496,7 @@ still have no adapter.
 |---|---|---|
 | xcodebuild-test | `xcodebuild test` / `test-without-building` | injected `-resultBundlePath`, parsed via `xcresulttool ... test-results summary` (Xcode 16+); a failing run with no readable result falls back to build diagnostics |
 | swift-test | `swift test` | injected `--xunit-output` + `--parallel` (merges XCTest + Swift Testing files); a failing run with no xunit falls back to build diagnostics |
-| xcodebuild-build | `xcodebuild build` / `archive` / `-exportArchive` (no test action) | stdout/stderr diagnostics parse |
+| xcodebuild-build | `xcodebuild build` / `archive` / `-exportArchive` / `-exportNotarizedApp` (archive and export win over a test action) | stdout/stderr diagnostics parse |
 | swift-build | `swift build` | stdout/stderr text parse |
 | pytest | `pytest`, `python -m pytest`, `uv run [-m] pytest`, `uvx pytest`, `poetry`/`pdm`/`hatch`/`pipenv`/`rye run pytest` | injected `--junit-xml` |
 | unittest | `python -m unittest`, `uv run [python] -m unittest` | stderr text parse |

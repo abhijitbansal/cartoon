@@ -123,6 +123,21 @@ impl RunOutput {
         split_utf8(bytes).0
     }
 
+    /// True when `with_line_cut` would drop at least one line.
+    pub fn line_cut_removes(&self, cut: crate::linecut::LineCut, merge: bool) -> bool {
+        if merge {
+            let merged: Vec<u8> = self
+                .segments()
+                .into_iter()
+                .flat_map(|(_, b)| b.to_vec())
+                .collect();
+            cut.apply(&merged).len() < merged.len()
+        } else {
+            let out = self.stdout_bytes();
+            cut.apply(out).len() < out.len()
+        }
+    }
+
     /// This run as a `| head -n N` / `| tail -n N` would have shown it. With
     /// `merge` (the `2>&1 | tail` form) the cut applies to both streams in
     /// arrival order and the result is all stdout; without it only stdout is
