@@ -308,6 +308,12 @@ fn stub_tool(dir: &std::path::Path, name: &str, script: &str) -> std::ffi::OsStr
 /// Final review I6: when no report replaces the dropped `| tail -N`, the
 /// cut is applied in process, so the hook never makes output larger than
 /// the agent asked for. The raw log stays archived.
+///
+/// Merged order is arrival order across two pipes, each read by its own
+/// thread, so writes microseconds apart have no defined order. The stub
+/// pauses before its stderr line so the line really arrives last; without
+/// the pause ubuntu runners recorded it ahead of the stdout tail and the
+/// cut dropped it.
 #[cfg(unix)]
 #[test]
 fn dropped_tail_is_applied_when_the_adapter_output_is_unparsed() {
@@ -315,7 +321,7 @@ fn dropped_tail_is_applied_when_the_adapter_output_is_unparsed() {
     let path = stub_tool(
         tmp.path(),
         "xcodebuild",
-        "i=1; while [ $i -le 400 ]; do echo \"build line $i\"; i=$((i+1)); done; echo 'Testing failed: runner crashed' >&2; exit 65",
+        "i=1; while [ $i -le 400 ]; do echo \"build line $i\"; i=$((i+1)); done; sleep 0.3; echo 'Testing failed: runner crashed' >&2; exit 65",
     );
     let out = cartoon()
         .env("XDG_STATE_HOME", tmp.path().join("state"))
@@ -417,7 +423,8 @@ fn merged_stderr_before_a_dropped_tail_keeps_the_tool_exit_code() {
     let path = stub_tool(
         tmp.path(),
         "pytest",
-        "i=1; while [ $i -le 50 ]; do echo \"out $i\"; i=$((i+1)); done; echo 'boom on stderr' >&2; exit 1",
+        // The pause makes the stderr line arrive last (see the I6 test above).
+        "i=1; while [ $i -le 50 ]; do echo \"out $i\"; i=$((i+1)); done; sleep 0.3; echo 'boom on stderr' >&2; exit 1",
     );
     let out = cartoon()
         .env("XDG_STATE_HOME", tmp.path().join("state"))
